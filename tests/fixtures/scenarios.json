@@ -1,0 +1,389 @@
+[
+ {
+  "env_id": "env_151_rl",
+  "env_class_name": "ClinicalTrialParticipantManagementSystem",
+  "task_id": "env_151_rl-task_7",
+  "init_config": {
+   "participants": {
+    "P001": {
+     "participant_id": "P001",
+     "name": "Alice Chan",
+     "date_of_birth": "1983-07-14",
+     "contact_info": "alice.chan@examplemail.com",
+     "consent_status": "valid"
+    },
+    "P002": {
+     "participant_id": "P002",
+     "name": "Brian Schultz",
+     "date_of_birth": "1971-11-22",
+     "contact_info": "brian.schultz@fakemail.net",
+     "consent_status": "revoked"
+    },
+    "P003": {
+     "participant_id": "P003",
+     "name": "Stephanie Lee",
+     "date_of_birth": "1996-03-05",
+     "contact_info": "steph.lee@nomail.org",
+     "consent_status": "approved"
+    },
+    "P004": {
+     "participant_id": "P004",
+     "name": "Miguel Rivera",
+     "date_of_birth": "1965-04-18",
+     "contact_info": "m.rivera@demo123.com",
+     "consent_status": "pending"
+    },
+    "P005": {
+     "participant_id": "P005",
+     "name": "Marianne Gustavsson",
+     "date_of_birth": "1989-12-03",
+     "contact_info": "marianne.g@domainz.com",
+     "consent_status": "active"
+    }
+   },
+   "clinical_trials": {
+    "CT-101": {
+     "trial_id": "CT-101",
+     "name": "VaxImmune Phase I Study",
+     "description": "A Phase I trial assessing safety and tolerability of VaxImmune vaccine.",
+     "phase": "I",
+     "status": "active",
+     "start_date": "2023-02-01",
+     "end_date": "2024-05-15"
+    },
+    "CT-202": {
+     "trial_id": "CT-202",
+     "name": "NeoCell Therapy-II",
+     "description": "Investigating NeoCell therapy for chronic illnesses in adults.",
+     "phase": "II",
+     "status": "completed",
+     "start_date": "2021-09-10",
+     "end_date": "2023-12-23"
+    },
+    "CT-303": {
+     "trial_id": "CT-303",
+     "name": "CardioMax Efficacy Study",
+     "description": "Randomized study testing CardioMax efficacy in heart failure patients.",
+     "phase": "III",
+     "status": "suspended",
+     "start_date": "2022-01-05",
+     "end_date": "2025-08-28"
+    },
+    "CT-404": {
+     "trial_id": "CT-404",
+     "name": "MetaboReg Pilot Trial",
+     "description": "Pilot trial for evaluating MetaboReg's metabolic impact.",
+     "phase": "I",
+     "status": "active",
+     "start_date": "2024-06-10",
+     "end_date": "2025-02-18"
+    },
+    "CT-550": {
+     "trial_id": "CT-550",
+     "name": "OncoAdvance Study",
+     "description": "Phase II study examining OncoAdvance treatment response.",
+     "phase": "II",
+     "status": "active",
+     "start_date": "2023-07-25",
+     "end_date": "2025-03-11"
+    }
+   },
+   "enrollments": {
+    "e1f02ad0-0e36-482d-aeee-6d170601b657": {
+     "enrollment_id": "e1f02ad0-0e36-482d-aeee-6d170601b657",
+     "participant_id": "P001",
+     "trial_id": "CT-101",
+     "enrollment_date": "2023-02-14",
+     "enrollment_status": "enrolled"
+    },
+    "8fc7e85e-98db-4ebc-ba8f-bc3c26cce0eb": {
+     "enrollment_id": "8fc7e85e-98db-4ebc-ba8f-bc3c26cce0eb",
+     "participant_id": "P003",
+     "trial_id": "CT-550",
+     "enrollment_date": "2023-08-03",
+     "enrollment_status": "completed"
+    },
+    "bfa2d5c1-0444-4bfe-bf9d-b43678e3d332": {
+     "enrollment_id": "bfa2d5c1-0444-4bfe-bf9d-b43678e3d332",
+     "participant_id": "P005",
+     "trial_id": "CT-404",
+     "enrollment_date": "2024-06-16",
+     "enrollment_status": "enrolled"
+    },
+    "526e23cf-64ef-498d-9ea9-8bb70ff10be1": {
+     "enrollment_id": "526e23cf-64ef-498d-9ea9-8bb70ff10be1",
+     "participant_id": "P001",
+     "trial_id": "CT-303",
+     "enrollment_date": "2022-03-11",
+     "enrollment_status": "withdrawn"
+    },
+    "0cc3569c-689c-4961-b957-30765e14a8e7": {
+     "enrollment_id": "0cc3569c-689c-4961-b957-30765e14a8e7",
+     "participant_id": "P003",
+     "trial_id": "CT-202",
+     "enrollment_date": "2022-11-09",
+     "enrollment_status": "enrolled"
+    }
+   },
+   "user_accounts": {
+    "acc-4211a7d1-cf6e-46bc-b781-c34d46e85508": {
+     "account_id": "acc-4211a7d1-cf6e-46bc-b781-c34d46e85508",
+     "participant_id": "P001",
+     "username": "alicechan",
+     "hashed_password": "sha256$4b9602e1...",
+     "account_status": "active"
+    },
+    "acc-12ac0bab-bff6-4b61-b328-96d8761dac88": {
+     "account_id": "acc-12ac0bab-bff6-4b61-b328-96d8761dac88",
+     "participant_id": "P003",
+     "username": "stephlee23",
+     "hashed_password": "sha256$fdf14922...",
+     "account_status": "active"
+    },
+    "acc-cca1be6d-157e-4ed9-884f-ecdafdfbc7d7": {
+     "account_id": "acc-cca1be6d-157e-4ed9-884f-ecdafdfbc7d7",
+     "participant_id": "P005",
+     "username": "gustavsson.m",
+     "hashed_password": "sha256$88ecbb41...",
+     "account_status": "pending"
+    },
+    "acc-c3258277-af4d-413c-ae2c-36a4a23561f8": {
+     "account_id": "acc-c3258277-af4d-413c-ae2c-36a4a23561f8",
+     "participant_id": "P004",
+     "username": "miguel.rivera",
+     "hashed_password": "sha256$b2a94b18...",
+     "account_status": "suspended"
+    }
+   },
+   "init_config": {}
+  },
+  "task": "As the registry administrator, close out study records and align participant statuses:\n\n- Set the clinical trial \u201cVaxImmune Phase I Study\u201d (CT-101) to status \u201ccompleted\u201d since it ended on 2024-05-15 but remains marked \u201cactive.\u201d\n- For Alice Chan (username: alicechan), update her enrollment in CT-101 from \u201cenrolled\u201d to \u201ccompleted.\u201d\n- For Stephanie Lee (username: stephlee23), the trial \u201cNeoCell Therapy-II\u201d (CT-202) is already marked \u201ccompleted,\u201d but her enrollment remains \u201cenrolled.\u201d Update her CT-202 enrollment status to \u201ccompleted.\u201d\n\nMake only these changes and do not modify any other trials or enrollments.",
+  "checklist_with_func": [
+   {
+    "check_item": "Has the status of clinical trial CT-101 been set to \"completed\"?",
+    "check_func": "def check_func(final_state):\n    return final_state.get(\"clinical_trials\", {}).get(\"CT-101\", {}).get(\"status\") == \"completed\""
+   },
+   {
+    "check_item": "Has the enrollment_status of participant alicechan in CT-101 been set to \"completed\"?",
+    "check_func": "def check_func(final_state):\n    # Find the participant_id for username 'alicechan'\n    alice_pid = None\n    for acc in final_state.get(\"user_accounts\", {}).values():\n        if acc.get(\"username\") == \"alicechan\":\n            alice_pid = acc.get(\"participant_id\")\n            break\n    if alice_pid is None:\n        return False\n    \n    # Find the enrollment for participant_id == alice_pid and trial_id == 'CT-101'\n    for enroll in final_state.get(\"enrollments\", {}).values():\n        if (enroll.get(\"participant_id\") == alice_pid and \n            enroll.get(\"trial_id\") == \"CT-101\"):\n            return enroll.get(\"enrollment_status\") == \"completed\"\n    \n    return False"
+   },
+   {
+    "check_item": "Has the enrollment_status of participant stephlee23 in CT-202 been set to \"completed\"?",
+    "check_func": "def check_func(final_state):\n    # Find participant_id for stephlee23\n    steph_participant_id = None\n    for acc_id, acc_data in final_state.get(\"user_accounts\", {}).items():\n        if acc_data[\"username\"] == \"stephlee23\":\n            steph_participant_id = acc_data[\"participant_id\"]\n            break\n    \n    if steph_participant_id is None:\n        return False\n    \n    # Find enrollment for stephlee23 in CT-202 with status \"completed\"\n    for enr_id, enr_data in final_state.get(\"enrollments\", {}).items():\n        if (enr_data[\"participant_id\"] == steph_participant_id and\n            enr_data[\"trial_id\"] == \"CT-202\" and\n            enr_data[\"enrollment_status\"] == \"completed\"):\n            return True\n    \n    return False"
+   }
+  ]
+ },
+ {
+  "env_id": "env_183_rl",
+  "env_class_name": "SupportGroupManagementSystem",
+  "task_id": "env_183_rl-task_29",
+  "init_config": {
+   "meetings": {
+    "fc9bc53d-b56d-4ca7-9049-7b7b53e80501": {
+     "meeting_id": "fc9bc53d-b56d-4ca7-9049-7b7b53e80501",
+     "topic": "Coping Strategies for Anxiety",
+     "schedule": "2024-07-02T18:00:00",
+     "venue": "VEN_CENTRAL",
+     "meeting_code": "ANX12345",
+     "participants_list": [
+      "P001",
+      "P003",
+      "P004"
+     ],
+     "recurrence_pattern": "weekly"
+    },
+    "ea3f5dbc-2b51-487b-8d44-a1fc1a97ec84": {
+     "meeting_id": "ea3f5dbc-2b51-487b-8d44-a1fc1a97ec84",
+     "topic": "Grief Support Circle",
+     "schedule": "2024-07-10T17:30:00",
+     "venue": "VEN_GARDEN",
+     "meeting_code": "GRIEF6789",
+     "participants_list": [
+      "P002",
+      "P005"
+     ],
+     "recurrence_pattern": "biweekly"
+    },
+    "c426544b-e34f-4b3a-90fc-06f79555d6fa": {
+     "meeting_id": "c426544b-e34f-4b3a-90fc-06f79555d6fa",
+     "topic": "Art Therapy Workshop",
+     "schedule": "2024-06-18T15:00:00",
+     "venue": "VEN_LIBERTY",
+     "meeting_code": "ART56800",
+     "participants_list": [
+      "P006",
+      "P003",
+      "P001"
+     ],
+     "recurrence_pattern": "monthly"
+    },
+    "c8d02517-bdaf-49d1-b04c-dfcf23c9a41a": {
+     "meeting_id": "c8d02517-bdaf-49d1-b04c-dfcf23c9a41a",
+     "topic": "Mindfulness Meditation Session",
+     "schedule": "2024-06-20T08:30:00",
+     "venue": "VEN_RIVERSIDE",
+     "meeting_code": "MIND9982",
+     "participants_list": [
+      "P006",
+      "P004"
+     ],
+     "recurrence_pattern": "weekly"
+    }
+   },
+   "participants": {
+    "P001": {
+     "participant_id": "P001",
+     "name": "Alice Chan",
+     "contact_info": "alice.chan@example.com",
+     "registration_status": "registered"
+    },
+    "P002": {
+     "participant_id": "P002",
+     "name": "David Nwosu",
+     "contact_info": "david.nwosu@example.org",
+     "registration_status": "pending"
+    },
+    "P003": {
+     "participant_id": "P003",
+     "name": "Maria Gomez",
+     "contact_info": "maria.gomez@example.net",
+     "registration_status": "registered"
+    },
+    "P004": {
+     "participant_id": "P004",
+     "name": "Ben Carter",
+     "contact_info": "ben.carter@example.com",
+     "registration_status": "deregistered"
+    },
+    "P005": {
+     "participant_id": "P005",
+     "name": "Alice Chan",
+     "contact_info": "alice2.chan@example.com",
+     "registration_status": "registered"
+    },
+    "P006": {
+     "participant_id": "P006",
+     "name": "Felicity King",
+     "contact_info": "felicity.king@example.com",
+     "registration_status": "registered"
+    }
+   },
+   "meeting_participants": {
+    "fc9bc53d-b56d-4ca7-9049-7b7b53e80501": [
+     {
+      "meeting_id": "fc9bc53d-b56d-4ca7-9049-7b7b53e80501",
+      "participant_id": "P001",
+      "join_time": "2024-07-02T17:58:20",
+      "attendance_status": "joined"
+     },
+     {
+      "meeting_id": "fc9bc53d-b56d-4ca7-9049-7b7b53e80501",
+      "participant_id": "P003",
+      "join_time": "2024-07-02T17:59:06",
+      "attendance_status": "joined"
+     },
+     {
+      "meeting_id": "fc9bc53d-b56d-4ca7-9049-7b7b53e80501",
+      "participant_id": "P004",
+      "join_time": "2024-07-02T18:02:10",
+      "attendance_status": "left"
+     }
+    ],
+    "ea3f5dbc-2b51-487b-8d44-a1fc1a97ec84": [
+     {
+      "meeting_id": "ea3f5dbc-2b51-487b-8d44-a1fc1a97ec84",
+      "participant_id": "P002",
+      "join_time": "2024-07-10T17:25:00",
+      "attendance_status": "joined"
+     },
+     {
+      "meeting_id": "ea3f5dbc-2b51-487b-8d44-a1fc1a97ec84",
+      "participant_id": "P005",
+      "join_time": "2024-07-10T17:27:35",
+      "attendance_status": "joined"
+     }
+    ],
+    "c426544b-e34f-4b3a-90fc-06f79555d6fa": [
+     {
+      "meeting_id": "c426544b-e34f-4b3a-90fc-06f79555d6fa",
+      "participant_id": "P006",
+      "join_time": "2024-06-18T14:59:12",
+      "attendance_status": "joined"
+     },
+     {
+      "meeting_id": "c426544b-e34f-4b3a-90fc-06f79555d6fa",
+      "participant_id": "P003",
+      "join_time": "2024-06-18T15:00:21",
+      "attendance_status": "joined"
+     },
+     {
+      "meeting_id": "c426544b-e34f-4b3a-90fc-06f79555d6fa",
+      "participant_id": "P001",
+      "join_time": "2024-06-18T15:01:45",
+      "attendance_status": "left"
+     }
+    ],
+    "c8d02517-bdaf-49d1-b04c-dfcf23c9a41a": [
+     {
+      "meeting_id": "c8d02517-bdaf-49d1-b04c-dfcf23c9a41a",
+      "participant_id": "P006",
+      "join_time": "2024-06-20T08:25:09",
+      "attendance_status": "joined"
+     },
+     {
+      "meeting_id": "c8d02517-bdaf-49d1-b04c-dfcf23c9a41a",
+      "participant_id": "P004",
+      "join_time": "2024-06-20T08:27:10",
+      "attendance_status": "joined"
+     }
+    ]
+   },
+   "venues": {
+    "VEN_CENTRAL": {
+     "venue_id": "VEN_CENTRAL",
+     "address": "123 Central Ave",
+     "room_number": "101A",
+     "capacity": 5
+    },
+    "VEN_GARDEN": {
+     "venue_id": "VEN_GARDEN",
+     "address": "456 Garden Street",
+     "room_number": "Garden Hall",
+     "capacity": 8
+    },
+    "VEN_RIVERSIDE": {
+     "venue_id": "VEN_RIVERSIDE",
+     "address": "789 Riverside Blvd",
+     "room_number": "Conference Room 3",
+     "capacity": 3
+    },
+    "VEN_LIBERTY": {
+     "venue_id": "VEN_LIBERTY",
+     "address": "101 Liberty Rd",
+     "room_number": "Liberty Lounge",
+     "capacity": 6
+    }
+   },
+   "init_config": {}
+  },
+  "task": "Consolidate the duplicate participant records for \u201cAlice Chan\u201d by keeping P001 as the canonical profile. For every meeting where the duplicate \u201cAlice Chan\u201d (P005) is currently listed, add P001 to that meeting using the correct meeting_code and only if capacity allows, then remove P005 from those meetings. After all memberships are migrated, delete participant P005 from the system. Additionally, because Ben Carter (P004) is deregistered, remove him from any meetings where he is currently marked as joined.",
+  "checklist_with_func": [
+   {
+    "check_item": "Has P001 been added to every meeting whose meeting_code currently lists P005, without exceeding capacity?",
+    "check_func": "def check_func(final_state):\n    # Initial meetings where P005 was in participants_list\n    target_meetings = [\n        \"ea3f5dbc-2b51-487b-8d44-a1fc1a97ec84\"  # Grief Support Circle\n    ]\n    \n    for mid in target_meetings:\n        meeting = final_state[\"meetings\"].get(mid)\n        if meeting is None:\n            return False\n        \n        # Ensure P001 is in the participants_list\n        if \"P001\" not in meeting[\"participants_list\"]:\n            return False\n        \n        # Check venue capacity\n        venue_id = meeting[\"venue\"]\n        capacity = final_state[\"venues\"][venue_id][\"capacity\"]\n        current_count = len(meeting[\"participants_list\"])\n        if current_count > capacity:\n            return False\n    \n    return True"
+   },
+   {
+    "check_item": "Has P005 been removed from every meeting whose meeting_code previously listed P005?",
+    "check_func": "def check_func(final_state):\n    # Meetings that originally had P005 in their participants_list\n    original_p005_meetings = {\n        mid for mid, mdata in initial_state[\"meetings\"].items()\n        if \"P005\" in mdata[\"participants_list\"]\n    }\n    \n    for mid in original_p005_meetings:\n        if \"P005\" in final_state[\"meetings\"][mid][\"participants_list\"]:\n            return False\n    return True"
+   },
+   {
+    "check_item": "Has participant record P005 been deleted from the system?",
+    "check_func": "def check_func(final_state):\n    return \"P005\" not in final_state.get(\"participants\", {})"
+   },
+   {
+    "check_item": "Has P004 been removed from every meeting whose meeting_code previously listed P004?",
+    "check_func": "def check_func(final_state):\n    # Meeting codes that initially had P004\n    target_codes = {\"ANX12345\", \"MIND9982\"}\n    \n    for meeting in final_state.get(\"meetings\", {}).values():\n        if meeting[\"meeting_code\"] in target_codes:\n            if \"P004\" in meeting[\"participants_list\"]:\n                return False\n    return True"
+   }
+  ]
+ }
+]

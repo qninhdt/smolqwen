@@ -1,0 +1,38 @@
+# L4 sizing profile -- 24 GB, sm89 (native FP8).
+#
+# Sizing ONLY. A semantic field here fails at load: ProfileConfig is a closed
+# model with extra="forbid", which is the actual guarantee wanted.
+#
+# Every value below is a PLACEHOLDER until the phase that owns it measures it.
+# Each field is owned by exactly one phase (see plan.md "Cross-phase contracts");
+# a later phase must not overwrite an earlier phase's measured value.
+
+# The three budget-seeded fields -- max_seq_length, max_new_tokens_per_step,
+# max_env_steps -- are deliberately ABSENT here. They come from budgets.json,
+# which merges earlier in the chain, so a placeholder written here would override
+# a measured cap with a guess and nothing would report it. A sweep writes one back
+# only once it has measured a value it needs to LOWER to, with the measurement in
+# the comment.
+
+# --- Phase 3, set by the OOM sweep (step 8). Measured peak VRAM goes here as a
+# comment when the sweep runs.
+micro_batch: 1
+grad_accum: 16
+
+# --- Phase 6, set by the pool sweep (step 12), against measured episodes/hour.
+# generation_concurrency is the vLLM batch width INSIDE one rollout_func call.
+# It is not num_generations. Naming them separately is deliberate.
+generation_concurrency: 8
+active_pool_multiplier: 2
+# Lowered first on OOM during generation, before touching concurrency or the step
+# cap. The trainer holds its own allocation alongside vLLM on this card, and
+# weight sync is a full ~4 GB bf16 round trip every step.
+vllm_kv_fraction: 0.25
+
+# --- Phase 7, set by the widening sweep (step 8), one axis at a time.
+num_generations: 4
+
+# --- Phase 4, set by the timeline profile. env_episodes_per_worker sets the crash
+# blast radius explicitly: a worker that dies takes every episode it held with it.
+env_worker_count: 4
+env_episodes_per_worker: 8

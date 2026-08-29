@@ -1,0 +1,6 @@
+[submodule "EnvScaler"]
+	path = third_party/EnvScaler
+	url = https://github.com/RUC-NLPIR/EnvScaler.git
+[submodule "gorilla"]
+	path = third_party/gorilla
+	url = https://github.com/ShishirPatil/gorilla.git

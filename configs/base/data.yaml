@@ -1,0 +1,51 @@
+# Phase 2 semantics: what to convert and how to split it. No sizing here.
+#
+# The model whose chat template + tokenizer produce the rendered samples. Text
+# only -- the checkpoint is multimodal, and the pipeline never loads a processor.
+model_id: Qwen/Qwen3.5-2B
+#
+# Revision shas are mandatory, not decorative. The two metadata files whose
+# contents get exec()ed are the only inputs where a silent content change is
+# invisible downstream -- 191 classes still compile, the suffix split is
+# unchanged, the K counts are unchanged. sha256 is verified at registry build.
+
+sft_trajectories:
+  repo_id: XXHStudyHard/EnvScaler-SFT-Traj-9K
+  filename: envscaler_sft_traj_9k_metadata.json
+  revision: 0279d9ac792a12bfd28f8659de07948b4698df63
+  repo_type: dataset
+  # mask_history_all_traj-9K_apply_qwen3_template.json (4.59 GB) is NOT listed
+  # here and must not be used: it is built with tokenizer_path "Qwen/Qwen3-4B",
+  # inlines reasoning_content into content, regex-round-trips through
+  # <|im_start|> keeping only system|user|assistant (destroying role: "tool"
+  # structure), and emits Qwen3 JSON tool calls instead of Qwen3.5 XML.
+
+rl_scenarios:
+  repo_id: XXHStudyHard/EnvScaler-RL-Scenario
+  filename: envscaler_rl_scenario_metadata.json
+  revision: a14061538b0ffd3e84d44edf40fbe67477f83552
+  repo_type: dataset
+  # sha256 of the vendored EnvScaler copy at commit 87e6673. The Hub file is a
+  # different artifact; whichever is used must match its recorded hash.
+  local_path: third_party/EnvScaler/rl/roll/pipeline/agentic/env/envscaler_env/data/envscaler_rl_scenario_metadata.json
+  sha256: 5977bda0b941a9111b290cbf5ffd6d70678a36ddc499b8f153826fd22999337e
+
+env_metadata:
+  repo_id: XXHStudyHard/EnvScaler-RL-Scenario
+  filename: 191_env_metadata.json
+  revision: a14061538b0ffd3e84d44edf40fbe67477f83552
+  repo_type: dataset
+  local_path: third_party/EnvScaler/rl/roll/pipeline/agentic/env/envscaler_env/data/191_env_metadata.json
+  sha256: d2c0010f16ff77d6d55868ee386353b1d0aadace58beed1eed678e8f7c84c33d
+
+output_dir: artifacts/data
+split_seed: 1234
+val_fraction: 0.02
+
+# Which shape a tool result takes on the way into the chat template. The two
+# render one newline apart on EVERY observation: role "tool" hits the template's
+# :131 branch, which emits <|im_start|>user with no trailing newline before
+# \n<tool_response>; a hand-wrapped user message hits :88 and emits
+# <|im_start|>user\n{content}. Phase 6's rollout must append the same shape this
+# names, or SFT teaches a format inference never produces.
+tool_result_shape: tool_role

@@ -1,0 +1,23 @@
+.claude
+.codegraph
+.mypy_cache
+.pytest_cache
+.ruff_cache
+.venv
+
+__pycache__
+
+# Written by the pipeline, not by hand. `artifacts/data/sft/train.jsonl` alone is
+# ~750 MB, and model/checkpoint directories are pushed to the Hub instead.
+artifacts/
+
+# ...except the measurement artifacts every later stage *reads*. budgets.json is a
+# real config layer, so a fresh checkout must resolve the measured caps without
+# first re-running a multi-minute profile pass over the 701 MB release file.
+!artifacts/
+!artifacts/data/
+artifacts/data/*
+!artifacts/data/profile.json
+!artifacts/data/budgets.json
+!artifacts/data/env_split.json
+!artifacts/data/conversion_report.json

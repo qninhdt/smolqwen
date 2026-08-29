@@ -1,0 +1,52 @@
+# Phase 3 semantics: what SFT trains and with which optimizations. No sizing here
+# -- micro_batch, grad_accum and max_seq_length live in configs/profiles/.
+
+model_id: Qwen/Qwen3.5-2B
+# Pinned so two profiles cannot silently train against two model revisions.
+model_revision: 15852e8c16360a2fea060d615a32b45270f8a8fc
+
+dataset_dir: artifacts/data/sft
+output_dir: artifacts/models/qwen3.5-2b-sft
+merged_dir: artifacts/models/qwen3.5-2b-sft-merged
+
+lora:
+  r: 32
+  lora_alpha: 64
+  lora_dropout: 0.05
+  target_modules: all-linear
+  # bf16, not PEFT's fp32 default: with all-linear targets fp32 adapters force an
+  # upcast/downcast plus an fp32 GEMM at every linear. The fp32 default exists for
+  # low-bit QLoRA bases, which this is not.
+  adapter_dtype: bfloat16
+
+training:
+  learning_rate: 1.0e-4
+  # 1-2 epochs maximum. A 2B model on ~9k trajectories can memorize, and more
+  # epochs is not the fix for the val loss turning up.
+  num_train_epochs: 2.0
+  warmup_ratio: 0.03
+  weight_decay: 0.0
+  lr_scheduler_type: cosine
+  logging_steps: 10
+  save_steps: 100
+  eval_steps: 100
+  seed: 1234
+
+optimization:
+  bf16: true
+  # Without checkpointing, activations at the Phase 2 cap will not fit on L4 even
+  # at batch 1, so this is on for the baseline measurement rather than swept.
+  gradient_checkpointing: true
+  # Load-bearing. Vocab is 248,320 with tied embeddings, so a dense logits tensor
+  # is the dominant activation and the first thing to OOM on 24 GB -- ahead of the
+  # weights. Phase 3 step 5 records the before/after that justifies this.
+  liger_fused_linear_cross_entropy: true
+  attn_implementation: flash_attention_2
+  # Off until Phase 3 step 7 measures it. GDN layers run flash-linear-attention
+  # Triton kernels that upstream marks torch.compiler.disable; compiling through
+  # them raises inductor errors, so the exclusion list is not optional.
+  regional_torch_compile: false
+  compile_exclude_patterns:
+    - linear_attn
+    - mixer
+    - conv1d

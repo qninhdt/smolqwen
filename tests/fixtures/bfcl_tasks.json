@@ -1,0 +1,135 @@
+[
+  {
+    "category": "multi_turn_base",
+    "id": "multi_turn_base_46",
+    "question": [
+      [
+        {
+          "content": "Delete all the files in the 'Drafts' directory including the directory.",
+          "role": "user"
+        }
+      ]
+    ],
+    "initial_config": {
+      "GorillaFileSystem": {
+        "root": {
+          "dylan": {
+            "contents": {
+              "ArchivedProjects": {"contents": {}, "type": "directory"},
+              "Drafts": {
+                "contents": {
+                  "DylanProject.txt": {
+                    "content": "Initial outline of the Dylan project.",
+                    "type": "file"
+                  }
+                },
+                "type": "directory"
+              }
+            },
+            "type": "directory"
+          }
+        }
+      }
+    },
+    "involved_classes": ["MessageAPI", "GorillaFileSystem"],
+    "ground_truth": [
+      [
+        "cd(folder='Drafts')",
+        "rm(file_name='DylanProject.txt')",
+        "cd(folder='..')",
+        "rmdir(dir_name='Drafts')"
+      ]
+    ]
+  },
+  {
+    "category": "multi_turn_miss_func",
+    "id": "multi_turn_miss_func_46",
+    "question": [
+      [
+        {
+          "content": "Delete all the files in the 'Drafts' directory including the directory.",
+          "role": "user"
+        }
+      ],
+      []
+    ],
+    "initial_config": {
+      "GorillaFileSystem": {
+        "root": {
+          "dylan": {
+            "contents": {
+              "ArchivedProjects": {"contents": {}, "type": "directory"},
+              "Drafts": {
+                "contents": {
+                  "DylanProject.txt": {
+                    "content": "Initial outline of the Dylan project.",
+                    "type": "file"
+                  }
+                },
+                "type": "directory"
+              }
+            },
+            "type": "directory"
+          }
+        }
+      }
+    },
+    "involved_classes": ["MessageAPI", "GorillaFileSystem"],
+    "missed_function": {"1": ["rm"]},
+    "ground_truth": [
+      [],
+      [
+        "cd(folder='Drafts')",
+        "rm(file_name='DylanProject.txt')",
+        "cd(folder='..')",
+        "rmdir(dir_name='Drafts')"
+      ]
+    ]
+  },
+  {
+    "category": "multi_turn_miss_param",
+    "id": "multi_turn_miss_param_46",
+    "question": [
+      [
+        {
+          "content": "Delete all the files in a directory including the directory.",
+          "role": "user"
+        }
+      ],
+      [
+        {"content": "The directory has a name of 'Drafts'.", "role": "user"}
+      ]
+    ],
+    "initial_config": {
+      "GorillaFileSystem": {
+        "root": {
+          "dylan": {
+            "contents": {
+              "ArchivedProjects": {"contents": {}, "type": "directory"},
+              "Drafts": {
+                "contents": {
+                  "DylanProject.txt": {
+                    "content": "Initial outline of the Dylan project.",
+                    "type": "file"
+                  }
+                },
+                "type": "directory"
+              }
+            },
+            "type": "directory"
+          }
+        }
+      }
+    },
+    "involved_classes": ["MessageAPI", "GorillaFileSystem"],
+    "ground_truth": [
+      [],
+      [
+        "cd(folder='Drafts')",
+        "rm(file_name='DylanProject.txt')",
+        "cd(folder='..')",
+        "rmdir(dir_name='Drafts')"
+      ]
+    ]
+  }
+]

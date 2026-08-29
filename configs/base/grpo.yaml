@@ -1,0 +1,81 @@
+# Phases 4, 6 and 7 semantics: environment runtime, rollout, GRPO. No sizing here
+# -- generation_concurrency, num_generations, max_env_steps and vllm_kv_fraction
+# live in configs/profiles/.
+
+model_id: artifacts/models/qwen3.5-2b-sft-merged
+output_dir: artifacts/models/qwen3.5-2b-sft-grpo
+merged_dir: artifacts/models/qwen3.5-2b-sft-grpo-merged
+
+lora:
+  r: 32
+  lora_alpha: 64
+  lora_dropout: 0.0
+  target_modules: all-linear
+  adapter_dtype: bfloat16
+
+training:
+  learning_rate: 1.0e-6
+  num_train_epochs: 1.0
+  max_steps: 200
+  warmup_ratio: 0.0
+  lr_scheduler_type: constant
+  logging_steps: 1
+  save_steps: 20
+  eval_steps: 20
+  seed: 1234
+
+optimization:
+  bf16: true
+  gradient_checkpointing: true
+  liger_fused_linear_cross_entropy: true
+  attn_implementation: flash_attention_2
+  regional_torch_compile: false
+
+env:
+  # The vendored EnvScaler copy is authoritative. The Hub ships
+  # 191_env_metadata_processed.json, a different file of a different size, so
+  # which one runs must be named rather than inferred.
+  env_metadata_source: vendored
+  vendored_env_metadata: third_party/EnvScaler/rl/roll/pipeline/agentic/env/envscaler_env/data/191_env_metadata.json
+  vendored_env_metadata_sha256: d2c0010f16ff77d6d55868ee386353b1d0aadace58beed1eed678e8f7c84c33d
+  vendored_rl_scenarios: third_party/EnvScaler/rl/roll/pipeline/agentic/env/envscaler_env/data/envscaler_rl_scenario_metadata.json
+  vendored_rl_scenarios_sha256: 5977bda0b941a9111b290cbf5ffd6d70678a36ddc499b8f153826fd22999337e
+  step_timeout_s: 10.0
+  # K ranges 2 -> 445 with median 14, so the verifier budget cannot assume a
+  # handful of checks. A hanging check_func must not kill an overnight run.
+  verify_timeout_s: 60.0
+  create_timeout_s: 30.0
+  env_split_manifest: artifacts/data/env_split.json
+
+curriculum:
+  # GRPO advantage only carries information where 0 < P(success) < 1. Scenarios
+  # the SFT policy always fails are unreachable; ones it always solves are done.
+  enabled: true
+  profile_rollouts: 4
+  profile_scenario_sample: 128
+  band_weight: 1.0
+  always_zero_weight: 0.1
+  always_one_weight: 0.1
+
+beta: 0.0
+loss_type: dapo
+temperature: 1.0
+top_p: 1.0
+
+# The model advertises 262,144 positions. Inheriting that under colocated vLLM is
+# an instant OOM, so the KV budget is always explicit and never defaulted.
+vllm_max_model_len: 16384
+vllm_enable_prefix_caching: true
+vllm_enable_sleep_mode: false
+
+# vllm_importance_sampling_correction defaults to True, so the logprobs returned
+# by rollout_func feed the IS ratio. Misalignment produces no error -- ratios go
+# to exp(+/-large), get clamped, and training continues. This metric is the only
+# visible symptom, so it carries a stop threshold rather than a warning.
+logp_difference_stop_threshold: 2.0
+
+# "async" is the production path (rollout_func + env_mask, tools=None).
+# "factory_oracle" is the correctness oracle and A/B baseline, and it is a
+# SEPARATELY constructed trainer: env_mask is read only when self.tools is empty,
+# and environment_factory populates tools from every env method.
+rollout_path: async

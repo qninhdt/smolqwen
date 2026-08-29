@@ -1,0 +1,36 @@
+{
+  "converted": 7554,
+  "skipped": 1468,
+  "samples": 40842,
+  "supervised_tokens": 77667198,
+  "by_mode": {
+    "conversation": {
+      "trajectories": 4301,
+      "samples": 37589
+    },
+    "non_conversation": {
+      "trajectories": 3253,
+      "samples": 3253
+    }
+  },
+  "skip_reasons": {
+    "too_long": 1468
+  },
+  "input_shas": {
+    "sft_trajectories": "e920e8ecd43e50abe4308e37fcea8f18b6c338e9526778da92d7349cf2414198",
+    "rl_scenarios": "5977bda0b941a9111b290cbf5ffd6d70678a36ddc499b8f153826fd22999337e",
+    "env_metadata": "d2c0010f16ff77d6d55868ee386353b1d0aadace58beed1eed678e8f7c84c33d"
+  },
+  "input_revisions": {
+    "sft_trajectories": "0279d9ac792a12bfd28f8659de07948b4698df63",
+    "rl_scenarios": "a14061538b0ffd3e84d44edf40fbe67477f83552",
+    "env_metadata": "a14061538b0ffd3e84d44edf40fbe67477f83552"
+  },
+  "rows": {
+    "read": 9022,
+    "parsed": 9022,
+    "malformed": 0,
+    "malformed_reasons": {}
+  },
+  "accounted": true
+}

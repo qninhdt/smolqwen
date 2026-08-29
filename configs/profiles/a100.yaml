@@ -1,0 +1,28 @@
+# A100 sizing profile -- sm80, no native FP8.
+#
+# Sizing ONLY, same closed schema as l4.yaml. Which A100 variant Colab allocates
+# (40 GB vs 80 GB) is an open question resolved by `smolqwen probe`; the values
+# below assume 40 GB and must be revisited against artifacts/probe/a100-*.json.
+# 80 GB is also the one condition under which TRL's AsyncGRPOTrainer becomes worth
+# revisiting, since server + trainer + LoRA cannot share a 24 GB card.
+#
+# Every value below is a PLACEHOLDER until the owning phase measures it.
+
+# The budget-seeded fields (max_seq_length, max_new_tokens_per_step,
+# max_env_steps) are absent by design -- see the note in l4.yaml.
+
+# --- Phase 3, set by the OOM sweep (step 8).
+micro_batch: 2
+grad_accum: 8
+
+# --- Phase 6, set by the pool sweep (step 12).
+generation_concurrency: 16
+active_pool_multiplier: 2
+vllm_kv_fraction: 0.35
+
+# --- Phase 7, set by the widening sweep (step 8).
+num_generations: 8
+
+# --- Phase 4, set by the timeline profile.
+env_worker_count: 8
+env_episodes_per_worker: 8

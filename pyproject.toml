@@ -1,0 +1,105 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "smolqwen"
+version = "0.1.0"
+description = "Agentic post-training and optimized serving for Qwen3.5-2B"
+readme = "README.md"
+requires-python = ">=3.10,<3.15"
+license = { text = "MIT" }
+
+# torch is anchored by vllm 0.28.0's `torch==2.13.0` (exact equality, not a floor).
+# Phase 6 colocates vLLM inside the training process, so vllm, torch and the
+# kernel wheels all share one torch. Kernel wheels are therefore selected for
+# torch 2.13.0 rather than torch being pinned to whatever wheels were on hand.
+dependencies = [
+  "torch==2.13.0",
+  "transformers==5.16.1",
+  "trl==1.12.0",
+  "peft>=0.20.0",
+  "datasets>=4.7.0",
+  "accelerate>=1.4.0",
+  "pydantic>=2.9",
+  "pyyaml>=6.0",
+  "rich>=13.0",
+  "huggingface-hub>=1.0",
+  "wandb>=0.29",
+]
+
+[project.optional-dependencies]
+# vLLM is what anchors torch. Kept out of the base set so CPU-only CI and local
+# dev never pull a multi-GB CUDA wheel chain.
+serve = ["vllm==0.28.0"]
+
+# Kernel wheels for the GDN mixer and the fused loss head. None of these ship a
+# prebuilt binary wheel on PyPI for torch 2.13 -- `flash-linear-attention` is a
+# pure-Python `py3-none-any` wheel, while `flash-attn` and `causal-conv1d` are
+# sdist-only and compile against the installed torch. So they are pinned by
+# version here and `scripts/setup_colab.sh` asserts the resolved torch is 2.13.0
+# *before* invoking their builds. If a hash-pinned prebuilt wheel URL for torch
+# 2.13.0 becomes available, replace the version pin with that URL plus its hash.
+colab = [
+  "vllm==0.28.0",
+  "liger-kernel==0.8.2",
+  "flash-linear-attention==0.5.2",
+  "causal-conv1d==1.7.0",
+  "flash-attn==2.8.3.post1",
+]
+
+[project.scripts]
+smolqwen = "smolqwen.cli:main"
+
+[dependency-groups]
+dev = [
+  "ruff>=0.9",
+  "mypy>=1.14",
+  "pytest>=8.0",
+  "pytest-timeout>=2.3",
+  "types-PyYAML",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/smolqwen"]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+files = ["src", "tests"]
+warn_unreachable = true
+
+# The ML stack ships incomplete or absent type information. Silencing the import
+# error is not the same as silencing type checking of our own call sites.
+[[tool.mypy.overrides]]
+module = [
+  "accelerate.*",
+  "causal_conv1d.*",
+  "datasets.*",
+  "fla.*",
+  "liger_kernel.*",
+  "peft.*",
+  "torch.*",
+  "transformers.*",
+  "trl.*",
+  "vllm.*",
+  "wandb.*",
+]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --strict-markers"
+timeout = 300
+markers = [
+  "gpu: requires a CUDA device; deselected in CPU-only CI",
+  "dataset: requires the downloaded EnvScaler release files",
+  "slow: takes more than a few seconds",
+]

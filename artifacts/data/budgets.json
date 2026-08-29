@@ -1,0 +1,44 @@
+{
+  "candidates": {
+    "max_env_steps": {
+      "12": 0.4876,
+      "16": 0.7692,
+      "24": 0.9754,
+      "32": 0.9998,
+      "48": 1.0,
+      "8": 0.138
+    },
+    "max_seq_length_samples": {
+      "12288": 0.8974,
+      "16384": 0.9654,
+      "24576": 0.9957,
+      "32768": 0.9988,
+      "4096": 0.0071,
+      "8192": 0.5576
+    },
+    "max_seq_length_trajectories": {
+      "12288": 0.5633,
+      "16384": 0.8373,
+      "24576": 0.9796,
+      "32768": 0.9943,
+      "4096": 0.0,
+      "8192": 0.0978
+    }
+  },
+  "consumers": {
+    "max_env_steps": "Phase 7 step cap (widening sweep)",
+    "max_new_tokens_per_step": "Phase 6 per-step generation cap",
+    "max_seq_length": "Phase 3 SFT (may lower via the OOM sweep, never raise)"
+  },
+  "recommended": {
+    "max_env_steps": 16,
+    "max_new_tokens_per_step": 5694,
+    "max_seq_length": 16384
+  },
+  "retention_at_recommended": {
+    "max_env_steps": 0.7692,
+    "max_seq_length_samples": 0.9654,
+    "max_seq_length_trajectories": 0.8373
+  },
+  "retention_floor": 0.7
+}
