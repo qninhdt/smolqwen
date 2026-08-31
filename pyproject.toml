@@ -10,12 +10,14 @@ readme = "README.md"
 requires-python = ">=3.10,<3.15"
 license = { text = "MIT" }
 
-# torch is anchored by vllm 0.28.0's `torch==2.13.0` (exact equality, not a floor).
+# torch is anchored by vllm 0.26.0's `torch==2.11.0` (exact equality, not a floor).
 # Phase 6 colocates vLLM inside the training process, so vllm, torch and the
-# kernel wheels all share one torch. Kernel wheels are therefore selected for
-# torch 2.13.0 rather than torch being pinned to whatever wheels were on hand.
+# kernel wheels all share one torch ABI. 2.11.0 is the newest torch for which
+# prebuilt binary wheels exist for BOTH compiled kernels (flash-attn and
+# causal-conv1d); the newer vllm 0.27/0.28 line pins torch 2.13.0, for which no
+# publisher ships either wheel, forcing a multi-hour nvcc build on every VM.
 dependencies = [
-  "torch==2.13.0",
+  "torch==2.11.0",
   "transformers==5.16.1",
   "trl==1.12.0",
   "peft>=0.20.0",
@@ -31,21 +33,28 @@ dependencies = [
 [project.optional-dependencies]
 # vLLM is what anchors torch. Kept out of the base set so CPU-only CI and local
 # dev never pull a multi-GB CUDA wheel chain.
-serve = ["vllm==0.28.0"]
+serve = ["vllm==0.26.0"]
 
-# Kernel wheels for the GDN mixer and the fused loss head. None of these ship a
-# prebuilt binary wheel on PyPI for torch 2.13 -- `flash-linear-attention` is a
-# pure-Python `py3-none-any` wheel, while `flash-attn` and `causal-conv1d` are
-# sdist-only and compile against the installed torch. So they are pinned by
-# version here and `scripts/setup_colab.sh` asserts the resolved torch is 2.13.0
-# *before* invoking their builds. If a hash-pinned prebuilt wheel URL for torch
-# 2.13.0 becomes available, replace the version pin with that URL plus its hash.
+# Kernel wheels for the GDN mixer and the fused loss head. All three are
+# mandatory on GPU -- there is no sdpa/eager fallback path, because falling back
+# materializes the dense [batch, seq, 248320] logits tensor and the unfused GDN
+# recurrence, which does not fit in 24 GB.
+#
+# Nothing here is ever compiled from source. `liger-kernel` and
+# `flash-linear-attention` are pure-Python `py3-none-any` wheels. `flash-attn`
+# and `causal-conv1d` are sdist-only on PyPI, so both are pinned to prebuilt
+# binary wheel URLs built against exactly torch 2.11 + CUDA 13.0 -- the ABI pair
+# that `torch==2.11.0` resolves to on linux (it depends on nvidia-*-cu13).
+# The cpXXX ABI tag in each filename is why each URL carries a python_version
+# marker; Colab currently runs CPython 3.13.
 colab = [
-  "vllm==0.28.0",
+  "vllm==0.26.0",
   "liger-kernel==0.8.2",
   "flash-linear-attention==0.5.2",
-  "causal-conv1d==1.7.0",
-  "flash-attn==2.8.3.post1",
+  "causal-conv1d @ https://github.com/astral-sh-build/build-causal-conv1d/releases/download/v1.6.2.post1-r2/causal_conv1d-1.6.2.post1%2Bcu.13.0.torch.2.11-cp313-cp313-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl ; python_version == '3.13' and sys_platform == 'linux'",
+  "causal-conv1d @ https://github.com/astral-sh-build/build-causal-conv1d/releases/download/v1.6.2.post1-r2/causal_conv1d-1.6.2.post1%2Bcu.13.0.torch.2.11-cp312-cp312-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl ; python_version == '3.12' and sys_platform == 'linux'",
+  "flash-attn @ https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.9.4/flash_attn-2.8.3%2Bcu130torch2.11-cp313-cp313-linux_x86_64.whl ; python_version == '3.13' and sys_platform == 'linux'",
+  "flash-attn @ https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.9.4/flash_attn-2.8.3%2Bcu130torch2.11-cp312-cp312-linux_x86_64.whl ; python_version == '3.12' and sys_platform == 'linux'",
 ]
 
 [project.scripts]
@@ -62,6 +71,25 @@ dev = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/smolqwen"]
+
+# The `colab` extra pins kernels to prebuilt wheel URLs, which is a PEP 508 direct
+# reference. Hatchling rejects those in metadata unless this is explicit.
+[tool.hatch.metadata]
+allow-direct-references = true
+
+# A build from source for any of these is a pin that drifted, not a slow install.
+# Compiling flash-attn or causal-conv1d against a mismatched torch takes hours of
+# nvcc on a reclaimable VM and then fails at import with `undefined symbol`. This
+# turns that into an unsatisfiable resolution, which is the failure we want.
+# `torch`/`vllm` are listed because a sdist fallback there would rebuild the whole
+# CUDA stack. Not blanket `no-build`: this package itself installs as an editable.
+[tool.uv]
+no-build-package = [
+  "causal-conv1d",
+  "flash-attn",
+  "torch",
+  "vllm",
+]
 
 [tool.ruff]
 line-length = 100
@@ -86,6 +114,9 @@ module = [
   "fla.*",
   "liger_kernel.*",
   "peft.*",
+  # Absent on a CPU-only checkout and untyped where vLLM pulls it in, so neither a
+  # bare ignore nor a single error-code suppression covers both environments.
+  "pynvml.*",
   "torch.*",
   "transformers.*",
   "trl.*",
