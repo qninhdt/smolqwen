@@ -121,7 +121,7 @@ def collator(pad_token_id: int, *, max_length: int | None = None) -> Any:
     return call
 
 
-def padding_free_collator(max_tokens: int) -> Any:
+def padding_free_collator(max_tokens: int, *, max_sequence_length: int | None = None) -> Any:
     """Flatten complete rows and emit boundaries for FA2, GDN, and causal conv."""
 
     def call(features: Sequence[Mapping[str, Any]]) -> Any:
@@ -131,11 +131,21 @@ def padding_free_collator(max_tokens: int) -> Any:
         if not sequences:
             raise CollateError("padding-free collator received an empty batch")
         lengths = [len(input_ids) for input_ids, _ in sequences]
+        if max_sequence_length is not None and max(lengths) > max_sequence_length:
+            raise CollateError(
+                f"trajectory length {max(lengths)} exceeds max_sequence_length "
+                f"{max_sequence_length}; regenerate shards with the matching cap"
+            )
         total = sum(lengths)
         if total > max_tokens:
             raise CollateError(f"batch has {total} tokens, above token budget {max_tokens}")
         input_ids = [token for row, _ in sequences for token in row]
-        labels = [label for _, row in sequences for label in row]
+        # A causal LM shifts one flattened label array globally.  Masking the
+        # first label of every document prevents the first token of document B
+        # from being trained against the last logit of document A.  This is the
+        # same boundary rule as padded execution, where each row is shifted
+        # independently.
+        labels = [label for _, row in sequences for label in ([IGNORE_INDEX, *row[1:]])]
         position_ids = [position for length in lengths for position in range(length)]
         sequence_ids = [index for index, length in enumerate(lengths) for _ in range(length)]
         cumulative = [0]

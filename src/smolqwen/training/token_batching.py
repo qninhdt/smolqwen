@@ -77,7 +77,30 @@ class TokenBudgetBatchSampler:
         self.epoch += 1
 
     def __len__(self) -> int:
-        return len(self.batches()) - self.cursor
+        # BatchSampler's length describes a complete epoch.  The cursor is
+        # state for an in-progress iterator, not a reason for Trainer to infer
+        # a shorter epoch.
+        return len(self.batches())
+
+    @property
+    def sampler(self) -> TokenBudgetBatchSampler:
+        """Expose the epoch hook through Accelerate's skip-batch wrapper."""
+        return self
+
+    def set_epoch(self, epoch: int) -> None:
+        """Select an epoch order while preserving an in-progress same epoch.
+
+        Accelerate's ``DataLoaderShard`` calls this before every iterator.  A
+        resumed Trainer may then wrap that loader in ``skip_first_batches``;
+        resetting only when the epoch changes lets Trainer skip the already
+        completed batches without losing the deterministic order.
+        """
+        epoch = int(epoch)
+        if epoch < 0:
+            raise TokenBatchingError("sampler epoch cannot be negative")
+        if epoch != self.epoch:
+            self.epoch = epoch
+            self.cursor = 0
 
     def state_dict(self) -> dict[str, int]:
         return {"epoch": self.epoch, "cursor": self.cursor}

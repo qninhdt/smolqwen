@@ -41,9 +41,14 @@ SCRIPT = ROOT / "scripts/colab-l4-batch-sweep.py"
 PYTHON = ROOT / ".venv/bin/python"
 MODEL_ID = "Qwen/Qwen3.5-2B"
 MODEL_REVISION = "15852e8c16360a2fea060d615a32b45270f8a8fc"
+# Maximum absolute error accepted for the fused-vs-padded boundary probe.  The
+# tolerance is intentionally tight enough to catch document-state leakage while
+# allowing ordinary bf16 accumulation differences.
+PADDING_FREE_BOUNDARY_TOLERANCE = 5e-2
 
-# The profile currently resolves this cap from artifacts/data/budgets.json.
-SFT_SEQUENCE_LENGTH = 16_384
+# The first padding-free operating point is a 32K token envelope.  The probe
+# measures whether an L4 can actually sustain it; it is not an OOM estimate.
+SFT_SEQUENCE_LENGTH = 32_768
 # Generation needs a finite envelope so the result is reproducible and fast
 # enough to run on a reclaimable VM.  The production vLLM KV sweep remains a
 # separate measurement because its limit also depends on vllm_kv_fraction.
@@ -101,18 +106,26 @@ def _token_ids(tokenizer: Any, length: int, *, offset: int = 1000) -> list[int]:
     return [((start + index) % max(vocab - 1, 1)) for index in range(length)]
 
 
-def _sft_rows(tokenizer: Any, *, count: int, sequence_length: int) -> list[dict[str, Any]]:
-    prompt_length = sequence_length // 2
-    completion_length = sequence_length - prompt_length
+def _sft_rows(tokenizer: Any, *, sequence_lengths: list[int]) -> list[dict[str, Any]]:
+    from smolqwen.data.convert_sft import SFT_SCHEMA_VERSION, SFT_SEMANTICS
+
     rows: list[dict[str, Any]] = []
-    for row_index in range(count):
+    for row_index, sequence_length in enumerate(sequence_lengths):
+        prompt_length = sequence_length // 2
+        completion_length = sequence_length - prompt_length
+        input_ids = _token_ids(tokenizer, prompt_length, offset=1000 + row_index) + _token_ids(
+            tokenizer, completion_length, offset=20_000 + row_index
+        )
         rows.append(
             {
-                "prompt_ids": _token_ids(tokenizer, prompt_length, offset=1000 + row_index),
-                "completion_ids": _token_ids(
-                    tokenizer, completion_length, offset=20_000 + row_index
-                ),
-                "loss_mask": [1] * completion_length,
+                "schema_version": SFT_SCHEMA_VERSION,
+                "semantics": SFT_SEMANTICS,
+                "trajectory_uid": f"benchmark-{row_index}:non_conversation",
+                "task_id": f"benchmark-{row_index}",
+                "input_ids": input_ids,
+                "labels": [-100] * prompt_length + input_ids[prompt_length:],
+                "seq_length": sequence_length,
+                "supervised_tokens": completion_length,
             }
         )
     return rows
@@ -143,6 +156,8 @@ def _child_base(phase: str, batch: int) -> dict[str, Any]:
     try:
         if phase == "sft":
             details = _run_sft(torch, batch)
+        elif phase == "padding_free_equivalence":
+            details = _run_padding_free_equivalence(torch)
         elif phase == "grpo_generation_batch":
             details = _run_grpo_generation_batch(torch, batch)
         elif phase in GRPO_TRAIN_ENVELOPES:
@@ -196,14 +211,22 @@ def _run_sft(torch: Any, batch: int) -> dict[str, Any]:
     from datasets import Dataset
     from peft import LoraConfig
     from transformers import AutoTokenizer
-    from trl import SFTConfig, SFTTrainer  # type: ignore[attr-defined]
+    from trl import SFTConfig  # type: ignore[attr-defined]
 
-    from smolqwen.training.collate import collator
+    from smolqwen.training.collate import padding_free_collator
+    from smolqwen.training.sft import _token_budget_trainer_class
 
     tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, revision=MODEL_REVISION)
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token = tokenizer.eos_token
-    rows = _sft_rows(tokenizer, count=max(batch, 2), sequence_length=SFT_SEQUENCE_LENGTH)
+    sequence_lengths = [SFT_SEQUENCE_LENGTH // batch] * batch
+    sequence_lengths[-1] += SFT_SEQUENCE_LENGTH - sum(sequence_lengths)
+    if batch > 1:
+        # Keep the total envelope fixed while exercising mixed document lengths.
+        shift = max(1, sequence_lengths[0] // 4)
+        sequence_lengths[0] -= shift
+        sequence_lengths[-1] += shift
+    rows = _sft_rows(tokenizer, sequence_lengths=sequence_lengths)
     dataset = Dataset.from_list(rows)
     args = SFTConfig(
         output_dir="/tmp/smolqwen-l4-sft-probe",
@@ -234,10 +257,13 @@ def _run_sft(torch: Any, batch: int) -> dict[str, Any]:
         report_to=[],
         disable_tqdm=True,
     )
-    trainer = SFTTrainer(
+    trainer_class = _token_budget_trainer_class()
+    trainer = trainer_class(
         model=MODEL_ID,
         args=args,
-        data_collator=collator(tokenizer.pad_token_id, max_length=SFT_SEQUENCE_LENGTH),
+        data_collator=padding_free_collator(
+            SFT_SEQUENCE_LENGTH, max_sequence_length=SFT_SEQUENCE_LENGTH
+        ),
         train_dataset=dataset,
         processing_class=tokenizer,
         peft_config=LoraConfig(
@@ -248,6 +274,7 @@ def _run_sft(torch: Any, batch: int) -> dict[str, Any]:
             task_type="CAUSAL_LM",
             bias="none",
         ),
+        max_tokens_per_microbatch=SFT_SEQUENCE_LENGTH,
     )
     cast_count = _cast_trainable_bf16(trainer.model, torch)
     output = trainer.train()
@@ -255,10 +282,180 @@ def _run_sft(torch: Any, batch: int) -> dict[str, Any]:
     if not torch.isfinite(torch.tensor(loss, device="cuda")):
         raise RuntimeError(f"non-finite SFT loss: {loss}")
     return {
-        "sequence_length": SFT_SEQUENCE_LENGTH,
-        "tokens_per_microbatch": SFT_SEQUENCE_LENGTH * batch,
+        "sequence_lengths": sequence_lengths,
+        "trajectories_per_microbatch": batch,
+        "tokens_per_microbatch": sum(sequence_lengths),
         "trainable_cast_tensors": cast_count,
         "training_loss": loss,
+    }
+
+
+def _boundary_records(*, vocab_size: int) -> list[dict[str, Any]]:
+    """Two unequal rows with supervised tails for the fused-kernel boundary probe."""
+    from smolqwen.data.convert_sft import SFT_SCHEMA_VERSION, SFT_SEMANTICS
+
+    records: list[dict[str, Any]] = []
+    for index, length in enumerate((127, 193)):
+        input_ids = [
+            ((1000 + index * 1000 + offset) % (vocab_size - 1)) + 1
+            for offset in range(length)
+        ]
+        prompt_length = length // 2
+        records.append(
+            {
+                "schema_version": SFT_SCHEMA_VERSION,
+                "semantics": SFT_SEMANTICS,
+                "trajectory_uid": f"boundary-{index}:non_conversation",
+                "task_id": f"boundary-{index}",
+                "input_ids": input_ids,
+                "labels": [-100] * prompt_length + input_ids[prompt_length:],
+                "seq_length": length,
+                "supervised_tokens": length - prompt_length,
+            }
+        )
+    return records
+
+
+def _sum_shifted_loss(logits: Any, labels: Any) -> Any:
+    import torch.nn.functional as functional
+
+    shifted_logits = logits[..., :-1, :].float().reshape(-1, logits.shape[-1])
+    shifted_labels = labels[..., 1:].reshape(-1)
+    return functional.cross_entropy(
+        shifted_logits,
+        shifted_labels,
+        ignore_index=-100,
+        reduction="sum",
+    )
+
+
+def _run_padding_free_equivalence(torch: Any) -> dict[str, Any]:
+    """Compare padded and flattened Qwen3.5 on the actual L4 kernel path."""
+    from peft import LoraConfig, get_peft_model
+    from transformers import AutoModelForCausalLM
+
+    from smolqwen.training.collate import collator, padding_free_collator
+    from smolqwen.training.sft import assert_padding_free_runtime
+
+    assert_padding_free_runtime()
+    model = AutoModelForCausalLM.from_pretrained(
+        MODEL_ID,
+        revision=MODEL_REVISION,
+        dtype=torch.bfloat16,
+        attn_implementation="flash_attention_2",
+    ).cuda()
+    model.config.use_cache = False
+    model = get_peft_model(
+        model,
+        LoraConfig(
+            r=4,
+            lora_alpha=8,
+            lora_dropout=0.0,
+            target_modules=["q_proj", "v_proj"],
+            task_type="CAUSAL_LM",
+            bias="none",
+        ),
+    )
+    records = _boundary_records(vocab_size=int(model.config.vocab_size))
+    padded = collator(pad_token_id=0, max_length=max(row["seq_length"] for row in records))(records)
+    flattened = padding_free_collator(
+        sum(row["seq_length"] for row in records),
+        max_sequence_length=max(row["seq_length"] for row in records),
+    )(records)
+    padded = {key: value.cuda() for key, value in padded.items()}
+    flattened = {key: value.cuda() for key, value in flattened.items()}
+    lengths = [int(row["seq_length"]) for row in records]
+
+    model.eval()
+    with torch.no_grad():
+        padded_logits = model(**padded).logits
+        flat_logits = model(**flattened).logits
+    flat_slices = []
+    start = 0
+    for length in lengths:
+        flat_slices.append(flat_logits[:, start : start + length])
+        start += length
+    logit_errors = [
+        float((padded_logits[:, :length].float() - flat_slice.float()).abs().max())
+        for length, flat_slice in zip(lengths, flat_slices, strict=True)
+    ]
+
+    padded_loss = _sum_shifted_loss(padded_logits, padded["labels"])
+    flat_loss = _sum_shifted_loss(flat_logits, flattened["labels"])
+    loss_error = float((padded_loss - flat_loss).abs())
+
+    model.train()
+    model.zero_grad(set_to_none=True)
+    _sum_shifted_loss(model(**padded).logits, padded["labels"]).backward()
+    padded_grads = {
+        name: parameter.grad.detach().float().clone()
+        for name, parameter in model.named_parameters()
+        if parameter.requires_grad and parameter.grad is not None
+    }
+    model.zero_grad(set_to_none=True)
+    _sum_shifted_loss(model(**flattened).logits, flattened["labels"]).backward()
+    gradient_errors = [
+        float((parameter.grad.float() - padded_grads[name]).abs().max())
+        for name, parameter in model.named_parameters()
+        if parameter.requires_grad and parameter.grad is not None
+    ]
+
+    mutated = [dict(row) for row in records]
+    mutated[0] = dict(mutated[0])
+    mutated[0]["input_ids"] = list(mutated[0]["input_ids"])
+    mutated[0]["input_ids"][0] = (
+        (mutated[0]["input_ids"][0] + 17) % (int(model.config.vocab_size) - 1) + 1
+    )
+    mutated[0]["labels"] = list(mutated[0]["labels"])
+    prompt_index = mutated[0]["seq_length"] // 2
+    mutated[0]["labels"][prompt_index] = mutated[0]["input_ids"][prompt_index]
+    mutated_batch = padding_free_collator(
+        sum(row["seq_length"] for row in mutated),
+        max_sequence_length=max(lengths),
+    )(mutated)
+    mutated_batch = {key: value.cuda() for key, value in mutated_batch.items()}
+    model.eval()
+    with torch.no_grad():
+        mutated_logits = model(**mutated_batch).logits
+    second_start = lengths[0]
+    document_b_error = float(
+        (
+            flat_logits[:, second_start : second_start + lengths[1]].float()
+            - mutated_logits[:, second_start : second_start + lengths[1]].float()
+        )
+        .abs()
+        .max()
+    )
+    loss_tolerance = PADDING_FREE_BOUNDARY_TOLERANCE + 0.01 * abs(float(padded_loss))
+    errors = {
+        "logits": max(logit_errors),
+        "loss": loss_error,
+        "gradients": max(gradient_errors, default=0.0),
+        "document_b": document_b_error,
+    }
+    failed = {
+        name: error
+        for name, error in errors.items()
+        if error > PADDING_FREE_BOUNDARY_TOLERANCE
+    }
+    if loss_error > loss_tolerance:
+        failed["loss"] = loss_error
+    if failed:
+        raise RuntimeError(
+            "padding-free boundary equivalence failed: "
+            + ", ".join(f"{name}={error:.6g}" for name, error in sorted(failed.items()))
+        )
+    return {
+        "model": MODEL_ID,
+        "lengths": lengths,
+        "logit_max_abs_error": max(logit_errors),
+        "loss_abs_error": loss_error,
+        "gradient_max_abs_error": max(gradient_errors, default=0.0),
+        "document_b_mutation_max_abs_error": document_b_error,
+        "padded_supervised_tokens": int((padded["labels"][..., 1:] != -100).sum()),
+        "flat_supervised_tokens": int((flattened["labels"][..., 1:] != -100).sum()),
+        "tolerance": PADDING_FREE_BOUNDARY_TOLERANCE,
+        "status": "passed",
     }
 
 
@@ -531,6 +728,7 @@ def _sweep() -> int:
     # for the requested ceiling and are skipped.
     for phase, candidates in (
         ("sft", (1, 2, 4, 8)),
+        ("padding_free_equivalence", (1,)),
         ("grpo_generation_batch", (4, 8, 16, 32, 64, 128)),
         ("grpo_train_microbatch_8k", (1, 2, 4, 8)),
         ("grpo_train_microbatch_4k", (1, 2, 4, 8)),
@@ -545,7 +743,9 @@ def _sweep() -> int:
                 continue
             payload = _run_candidate(phase, batch)
             _record(results, payload)
-            if payload.get("status") not in {"passed"}:
+            # SFT candidates keep total tokens fixed and vary document lengths;
+            # a long-document OOM does not imply shorter mixed documents fail.
+            if payload.get("status") not in {"passed"} and phase != "sft":
                 failed = True
 
     print(f"\nRESULT_FILE={RESULT}", flush=True)
@@ -557,7 +757,12 @@ def main() -> int:
     parser.add_argument("--child", action="store_true")
     parser.add_argument(
         "--phase",
-        choices=("sft", "grpo_generation_batch", *GRPO_TRAIN_ENVELOPES),
+        choices=(
+            "sft",
+            "padding_free_equivalence",
+            "grpo_generation_batch",
+            *GRPO_TRAIN_ENVELOPES,
+        ),
     )
     parser.add_argument("--batch", type=int)
     # ``colab exec -f`` runs the file through IPython, which appends its own

@@ -8,12 +8,15 @@
 #
 # Every value below is a PLACEHOLDER until the owning phase measures it.
 
-# The budget-seeded fields (max_seq_length, max_new_tokens_per_step,
-# max_env_steps) are absent by design -- see the note in l4.yaml.
+# `max_seq_length` defaults to 32,768 in ProfileConfig. Keep this profile-specific
+# cap absent until A100 evidence requires a lower value; see l4.yaml for why old
+# generated budgets are not authoritative for full-trajectory SFT.
 
-# --- Phase 3, set by the OOM sweep (step 8).
+# --- SFT target envelope. `micro_batch` is for non-SFT paths; the padding-free
+# SFT sampler derives row count from this total-token budget.
 micro_batch: 2
 grad_accum: 8
+max_tokens_per_microbatch: 32768
 
 # --- Phase 6, set by the pool sweep (step 12).
 generation_concurrency: 16

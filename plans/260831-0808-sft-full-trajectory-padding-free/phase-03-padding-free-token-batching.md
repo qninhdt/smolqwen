@@ -1,7 +1,7 @@
 ---
 phase: 3
 title: "Padding-free correctness and token batching"
-status: planned
+status: in_progress
 dependencies: [1, 2]
 ---
 

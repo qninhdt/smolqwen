@@ -155,36 +155,29 @@ def test_unknown_stage_and_profile_are_rejected() -> None:
 def test_budgets_is_the_first_layer_of_the_chain(tmp_path: Path) -> None:
     budgets = tmp_path / "budgets.json"
     budgets.write_text(
-        json.dumps({"recommended": {"max_seq_length": 4096, "max_env_steps": 12}}),
+        json.dumps({"recommended": {"max_new_tokens_per_step": 4096, "max_env_steps": 12}}),
         encoding="utf-8",
     )
     overlay = load_budgets(budgets)
-    assert overlay == {"profile": {"max_seq_length": 4096, "max_env_steps": 12}}
+    assert overlay == {"profile": {"max_new_tokens_per_step": 4096, "max_env_steps": 12}}
 
     # A profile may lower a seeded field...
     config = resolve(
-        "sft",
+        "grpo",
         config_dir=CONFIG_DIR,
-        overrides=["profile.max_seq_length=2048"],
+        overrides=["profile.max_new_tokens_per_step=2048"],
         budgets_path=budgets,
     )
-    assert isinstance(config, SftConfig)
-    assert config.profile.max_seq_length == 2048
+    assert isinstance(config, GrpoConfig)
+    assert config.profile.max_new_tokens_per_step == 2048
 
 
-def test_profile_may_not_exceed_the_budget_cap(tmp_path: Path) -> None:
+def test_stale_segmented_budget_does_not_resize_full_trajectory_sft(tmp_path: Path) -> None:
     budgets = tmp_path / "budgets.json"
     budgets.write_text(json.dumps({"recommended": {"max_seq_length": 4096}}), encoding="utf-8")
-    # ...but not raise it above the measured cap: the budget bounds the training
-    # distribution, and a sweep that raised it would train on a slice the
-    # profiler never characterised.
-    with pytest.raises(ConfigError, match="exceeds budgets.json cap"):
-        resolve(
-            "sft",
-            config_dir=CONFIG_DIR,
-            overrides=["profile.max_seq_length=16384"],
-            budgets_path=budgets,
-        )
+    config = resolve("sft", config_dir=CONFIG_DIR, budgets_path=budgets)
+    assert isinstance(config, SftConfig)
+    assert config.profile.max_seq_length == 32768
 
 
 def test_absent_budgets_file_is_not_an_error(tmp_path: Path) -> None:
@@ -219,7 +212,7 @@ def test_measured_budgets_reach_the_resolved_profile(tmp_path: Path) -> None:
     )
     config = resolve("sft", profile="l4", config_dir=CONFIG_DIR, budgets_path=budgets)
     assert isinstance(config, SftConfig)
-    assert config.profile.max_seq_length == 16384
+    assert config.profile.max_seq_length == 32768
     assert config.profile.max_new_tokens_per_step == 5694
 
 

@@ -1,7 +1,7 @@
 ---
 phase: 4
 title: "Trainer integration and L4 validation"
-status: planned
+status: in_progress
 dependencies: [3]
 ---
 

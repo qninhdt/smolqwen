@@ -1,7 +1,7 @@
 ---
 phase: 1
 title: "Full-trajectory render contract"
-status: planned
+status: completed
 dependencies: []
 ---
 

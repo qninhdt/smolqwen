@@ -30,7 +30,9 @@ SCRIPT = ROOT / "scripts/colab-l4-sft-speed.py"
 PYTHON = ROOT / ".venv/bin/python"
 MODEL_ID = "Qwen/Qwen3.5-2B"
 MODEL_REVISION = "15852e8c16360a2fea060d615a32b45270f8a8fc"
-EPOCH_VALID_TOKENS = 327_136_547
+# The old constant was measured on segmented shards.  Supply this from the
+# regenerated full-trajectory report when an epoch-time estimate is wanted.
+EPOCH_VALID_TOKENS: int | None = None
 EFFECTIVE_BATCH = 16
 MARKER = "SFT_SPEED_RESULT="
 
@@ -272,7 +274,7 @@ class RecordingCollator:
         self.batches: list[dict[str, Any]] = []
 
     def __call__(self, features: list[dict[str, Any]]) -> dict[str, Any]:
-        lengths = [len(row["prompt_ids"]) + len(row["completion_ids"]) for row in features]
+        lengths = [len(row["input_ids"]) for row in features]
         width = max(lengths)
         if self.pad_to_multiple_of:
             width = math.ceil(width / self.pad_to_multiple_of) * self.pad_to_multiple_of
@@ -280,7 +282,9 @@ class RecordingCollator:
             {
                 "ids": [int(row["benchmark_id"]) for row in features],
                 "valid_tokens": sum(lengths),
-                "supervised_tokens": sum(sum(row["loss_mask"]) for row in features),
+                "supervised_tokens": sum(
+                    sum(label != -100 for label in row["labels"]) for row in features
+                ),
                 "padded_tokens": len(features) * width,
             }
         )
@@ -394,7 +398,7 @@ def _run_child(candidate: str) -> dict[str, Any]:
     dataset = load_dataset("json", data_files=str(SHARD), split="train")
     # Precomputed length avoids a tokenizer/model-column probe at dataloader creation.
     dataset = dataset.add_column(
-        "length", [len(row["prompt_ids"]) + len(row["completion_ids"]) for row in dataset]
+        "length", [len(row["input_ids"]) for row in dataset]
     )
     tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, revision=MODEL_REVISION)
     if tokenizer.pad_token_id is None:
@@ -529,6 +533,9 @@ def _run_child(candidate: str) -> dict[str, Any]:
     steady_valid = sum(row["valid_tokens"] for row in steps[1:])
     steady_padded = sum(row["padded_tokens"] for row in steps[1:])
     valid_tokens_per_s = steady_valid / steady_duration
+    estimated_epoch_s = (
+        EPOCH_VALID_TOKENS / valid_tokens_per_s if EPOCH_VALID_TOKENS is not None else None
+    )
     return {
         "candidate": candidate,
         "status": "passed",
@@ -555,7 +562,7 @@ def _run_child(candidate: str) -> dict[str, Any]:
         "valid_tokens_per_s": valid_tokens_per_s,
         "padded_tokens_per_s": steady_padded / steady_duration,
         "padding_fraction": 1.0 - steady_valid / steady_padded,
-        "estimated_epoch_s": EPOCH_VALID_TOKENS / valid_tokens_per_s,
+        "estimated_epoch_s": estimated_epoch_s,
         "train_wall_s": train_wall,
         "training_loss": loss,
         "trainable_cast_tensors": cast_count,

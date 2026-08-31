@@ -1,5 +1,7 @@
-# Phase 3 semantics: what SFT trains and with which optimizations. No sizing here
-# -- micro_batch, grad_accum and max_seq_length live in configs/profiles/.
+# SFT semantics and optimizations. The profile owns the maximum trajectory
+# length, total tokens per padding-free micro-batch, and accumulation count.
+# Its fixed `micro_batch` setting is not used to size SFT rows: the sampler fills
+# complete trajectories up to the token envelope, so row count varies per batch.
 
 model_id: Qwen/Qwen3.5-2B
 # Pinned so two profiles cannot silently train against two model revisions.
@@ -34,21 +36,15 @@ training:
 
 optimization:
   bf16: true
-  # Measured, not assumed: without checkpointing the run OOMs at 21.77 of 22.03 GiB
-  # on L4 at micro-batch 1 AND 2. `every_n_layers` 2/3/4 also OOM -- even the
-  # coarsest setting leaves 12 of 24 layers eager, and an eager layer costs >1.1 GiB
-  # against an 8.24 GiB checkpointed baseline. This is a precondition, not a knob.
+  # Required by the target 32K envelope; final L4 headroom remains a GPU gate.
   gradient_checkpointing: true
   # Load-bearing. Vocab is 248,320 with tied embeddings, so a dense logits tensor
-  # is the dominant activation and the first thing to OOM on 24 GB -- ahead of the
-  # weights. Phase 3 step 5 records the before/after that justifies this.
+  # is the dominant activation and the first thing to OOM on 24 GB -- ahead of
+  # weights. The fused-kernel L4 validation remains required before training.
   liger_fused_linear_cross_entropy: true
   attn_implementation: flash_attention_2
-  # Measured +2.6% valid tok/s on L4, reproduced across two waves, for ~250 s of
-  # one-time warmup in the first step -- negligible against a 44-hour epoch. Only
-  # the default compile mode: `reduce-overhead` crashes with
-  # cudaErrorStreamCaptureInvalidated because CUDA-graph capture is incompatible
-  # with the Liger SwiGLU kernel inside the compiled MLP region.
+  # Keep the known-safe default compile mode. Its performance under full
+  # trajectories and padding-free batching must be measured on L4.
   regional_torch_compile: true
   # GDN layers run flash-linear-attention Triton kernels that upstream marks
   # torch.compiler.disable; compiling through them raises inductor errors, so the

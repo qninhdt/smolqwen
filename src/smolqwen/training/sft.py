@@ -83,7 +83,13 @@ class ShardStats:
     supervised_tokens: int
 
 
-def validate_records(records: Iterable[dict[str, Any]], *, label: str) -> ShardStats:
+def validate_records(
+    records: Iterable[dict[str, Any]],
+    *,
+    label: str,
+    max_sequence_length: int | None = None,
+    max_tokens_per_microbatch: int | None = None,
+) -> ShardStats:
     """Run every record through the mask builder before a step is taken.
 
     `record_to_sequence` is the same function the collator calls, so a shard whose
@@ -98,6 +104,18 @@ def validate_records(records: Iterable[dict[str, Any]], *, label: str) -> ShardS
             input_ids, labels = record_to_sequence(record)
         except CollateError as exc:
             raise SftError(f"{label}[{index}]: {exc}") from exc
+        if max_sequence_length is not None and len(input_ids) > max_sequence_length:
+            raise SftError(
+                f"{label}[{index}]: trajectory length {len(input_ids)} exceeds "
+                f"profile.max_seq_length={max_sequence_length}; regenerate with "
+                "`smolqwen prepare-sft` and the matching cap"
+            )
+        if max_tokens_per_microbatch is not None and len(input_ids) > max_tokens_per_microbatch:
+            raise SftError(
+                f"{label}[{index}]: trajectory length {len(input_ids)} exceeds "
+                f"profile.max_tokens_per_microbatch={max_tokens_per_microbatch}; "
+                "a trajectory cannot be split"
+            )
         samples += 1
         tokens += len(input_ids)
         supervised += sum(1 for value in labels if value != IGNORE_INDEX)
@@ -106,8 +124,19 @@ def validate_records(records: Iterable[dict[str, Any]], *, label: str) -> ShardS
     )
 
 
-def validate_shard(path: Path | str, *, label: str) -> ShardStats:
-    return validate_records(iter_records(path), label=label)
+def validate_shard(
+    path: Path | str,
+    *,
+    label: str,
+    max_sequence_length: int | None = None,
+    max_tokens_per_microbatch: int | None = None,
+) -> ShardStats:
+    return validate_records(
+        iter_records(path),
+        label=label,
+        max_sequence_length=max_sequence_length,
+        max_tokens_per_microbatch=max_tokens_per_microbatch,
+    )
 
 
 # Only these reach a training step. The metadata columns (`trajectory_id`,
@@ -162,7 +191,12 @@ class Shards:
     eval_stats: ShardStats | None
 
 
-def load_shards(dataset_dir: Path | str) -> Shards:
+def load_shards(
+    dataset_dir: Path | str,
+    *,
+    max_sequence_length: int | None = None,
+    max_tokens_per_microbatch: int | None = None,
+) -> Shards:
     """Validate `train.jsonl` / `val.jsonl`, then hand back Arrow-backed datasets."""
     directory = Path(dataset_dir)
     train_path = directory / "train.jsonl"
@@ -170,10 +204,24 @@ def load_shards(dataset_dir: Path | str) -> Shards:
     if not train_path.is_file():
         raise SftError(f"{train_path} missing -- run `smolqwen prepare-sft` first")
 
-    train_stats = validate_shard(train_path, label="train")
+    train_stats = validate_shard(
+        train_path,
+        label="train",
+        max_sequence_length=max_sequence_length,
+        max_tokens_per_microbatch=max_tokens_per_microbatch,
+    )
     if not train_stats.samples:
         raise SftError(f"{train_path} is empty")
-    eval_stats = validate_shard(val_path, label="val") if val_path.is_file() else None
+    eval_stats = (
+        validate_shard(
+            val_path,
+            label="val",
+            max_sequence_length=max_sequence_length,
+            max_tokens_per_microbatch=max_tokens_per_microbatch,
+        )
+        if val_path.is_file()
+        else None
+    )
 
     return Shards(
         train=load_shard_dataset(train_path),
@@ -284,9 +332,52 @@ def _token_budget_trainer_class() -> Any:
         def __init__(self, *args: Any, max_tokens_per_microbatch: int, **kwargs: Any) -> None:
             self.max_tokens_per_microbatch = max_tokens_per_microbatch
             self.token_batch_sampler: TokenBudgetBatchSampler | None = None
+            self._token_dataloaders: dict[str, Any] = {}
+            self._step_tokens = 0
+            self._step_supervised_tokens = 0
+            self._step_trajectories = 0
+            self._step_microbatches = 0
+            self._step_max_trajectory_length = 0
+            self._step_padding_saved = 0
             super().__init__(*args, **kwargs)
 
+        def reset_step_metrics(self) -> None:
+            self._step_tokens = 0
+            self._step_supervised_tokens = 0
+            self._step_trajectories = 0
+            self._step_microbatches = 0
+            self._step_max_trajectory_length = 0
+            self._step_padding_saved = 0
+
+        def training_step(
+            self,
+            model: Any,
+            inputs: dict[str, Any],
+            num_items_in_batch: Any = None,
+        ) -> Any:
+            # The flattened collator has no padding, so the final dimension is
+            # the exact valid-token count.  Counting shape metadata avoids a
+            # device synchronization just for telemetry.
+            tokens = int(inputs["input_ids"].shape[-1])
+            trajectories = int(inputs["cu_seq_lens_q"].shape[0]) - 1
+            max_trajectory = int(inputs["max_length_q"])
+            self._step_tokens += tokens
+            self._step_trajectories += trajectories
+            self._step_microbatches += 1
+            self._step_max_trajectory_length = max(self._step_max_trajectory_length, max_trajectory)
+            self._step_padding_saved += trajectories * max_trajectory - tokens
+            # Transformers computes this once across the whole accumulation
+            # window and passes the same total into every micro-step.
+            if num_items_in_batch is not None and not self._step_supervised_tokens:
+                self._step_supervised_tokens = int(num_items_in_batch)
+            return super().training_step(  # type: ignore[no-untyped-call]
+                model, inputs, num_items_in_batch
+            )
+
         def _token_dataloader(self, dataset: Any, *, training: bool) -> Any:
+            key = "train" if training else f"eval:{id(dataset)}"
+            if key in self._token_dataloaders:
+                return self._token_dataloaders[key]
             sampler = TokenBudgetBatchSampler(
                 [int(length) for length in dataset[LENGTH_COLUMN]],
                 max_tokens=self.max_tokens_per_microbatch,
@@ -302,7 +393,9 @@ def _token_budget_trainer_class() -> Any:
                 num_workers=self.args.dataloader_num_workers,
                 pin_memory=self.args.dataloader_pin_memory,
             )
-            return self.accelerator.prepare(dataloader)
+            prepared = self.accelerator.prepare(dataloader)
+            self._token_dataloaders[key] = prepared
+            return prepared
 
         def get_train_dataloader(self) -> Any:
             if self.train_dataset is None:
@@ -344,15 +437,33 @@ class ThroughputCallback(TrainerCallback):
     different batch sizes, so tokens/s is not comparable across them.
     """
 
-    def __init__(self, tracker: Tracker, *, tokens_per_step: int) -> None:
+    def __init__(self, tracker: Tracker, *, tokens_per_step: int | None = None) -> None:
         self.tracker = tracker
         self.tokens_per_step = tokens_per_step
+        self.trainer: Any | None = None
+
+    def bind_trainer(self, trainer: Any) -> None:
+        self.trainer = trainer
 
     def on_step_begin(self, args: Any, state: Any, control: Any, **kwargs: Any) -> None:
+        if self.trainer is not None:
+            self.trainer.reset_step_metrics()
         self.tracker.meter.start_step()
 
     def on_step_end(self, args: Any, state: Any, control: Any, **kwargs: Any) -> None:
-        self.tracker.log_step(tokens=self.tokens_per_step, step=int(state.global_step))
+        tokens = (
+            self.trainer._step_tokens if self.trainer is not None else self.tokens_per_step or 0
+        )
+        extra = {}
+        if self.trainer is not None:
+            extra = {
+                "sft/supervised_tokens": self.trainer._step_supervised_tokens,
+                "sft/trajectories": self.trainer._step_trajectories,
+                "sft/microbatches": self.trainer._step_microbatches,
+                "sft/max_trajectory_length": self.trainer._step_max_trajectory_length,
+                "sft/padding_tokens_saved": self.trainer._step_padding_saved,
+            }
+        self.tracker.log_step(tokens=tokens, step=int(state.global_step), **extra)
 
     def on_log(self, args: Any, state: Any, control: Any, **kwargs: Any) -> None:
         logs = kwargs.get("logs")
@@ -361,10 +472,11 @@ class ThroughputCallback(TrainerCallback):
 
 
 class CheckpointPushCallback(TrainerCallback):
-    """Push the adapter and the resume cursor on every save.
+    """Push the complete Trainer checkpoint and run identity on every save.
 
-    Both, together: restoring weights without the step and run id replays the
-    schedule from zero and forks the W&B curve, and neither shows up in the loss.
+    `save_adapter` copies the checkpoint directory, including Trainer's optimizer,
+    scheduler, RNG and `trainer_state.json`. Trainer uses that state to skip data
+    on resume; applying a second custom sampler cursor would skip batches twice.
     """
 
     def __init__(self, store: CheckpointStore, tracker: Tracker) -> None:
@@ -419,7 +531,11 @@ def build_trainer(
     dataset_dir: Path | str | None = None,
 ) -> Assembled:
     """Assemble the trainer without starting it, so a smoke test can inspect it."""
-    shards = load_shards(dataset_dir or config.dataset_dir)
+    shards = load_shards(
+        dataset_dir or config.dataset_dir,
+        max_sequence_length=config.profile.max_seq_length,
+        max_tokens_per_microbatch=config.profile.max_tokens_per_microbatch,
+    )
 
     tokenizer = assert_text_only_processing_class(
         load_tokenizer(config.model_id, revision=config.model_revision)
@@ -450,7 +566,10 @@ def build_trainer(
     trainer = trainer_class(
         model=config.model_id,
         args=_sft_config(config, attn=attn, use_liger=liger.enabled, report_to=[]),
-        data_collator=padding_free_collator(config.profile.max_tokens_per_microbatch),
+        data_collator=padding_free_collator(
+            config.profile.max_tokens_per_microbatch,
+            max_sequence_length=config.profile.max_seq_length,
+        ),
         train_dataset=shards.train,
         eval_dataset=shards.eval,
         processing_class=tokenizer,
@@ -466,8 +585,9 @@ def build_trainer(
     )
     toggles = (attn, liger, adapters, compiled)
 
-    tokens_per_step = config.profile.max_tokens_per_microbatch
-    trainer.add_callback(ThroughputCallback(run, tokens_per_step=tokens_per_step))
+    throughput = ThroughputCallback(run)
+    throughput.bind_trainer(trainer)
+    trainer.add_callback(throughput)
     trainer.add_callback(CheckpointPushCallback(checkpoint_store, run))
     run.config.update(ledger(toggles))
 

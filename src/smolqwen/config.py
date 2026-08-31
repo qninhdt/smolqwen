@@ -151,12 +151,15 @@ def parse_override(model: type[StrictModel], spec: str) -> dict[str, Any]:
 
 
 def load_budgets(path: Path | None = None) -> dict[str, Any]:
-    """Read the Phase 2 budget artifact into a profile overlay.
+    """Read RL limits from the profiling artifact into a profile overlay.
 
     Absent is fine before Phase 2 has run -- the profile defaults apply and the
     caps are seeded later. Present and malformed is not fine: a stage that thinks
     it is honouring a measured cap while reading a default is exactly the silent
     failure the file exists to prevent.
+
+    SFT ``max_seq_length`` is deliberately not an overlay. Historical artifacts
+    measured per-turn segments and must not silently resize full trajectories.
     """
     budgets_path = path or DEFAULT_BUDGETS_PATH
     if not budgets_path.is_file():

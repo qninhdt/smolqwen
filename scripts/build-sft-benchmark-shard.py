@@ -14,6 +14,8 @@ import random
 from pathlib import Path
 from typing import Any
 
+from smolqwen.training.collate import IGNORE_INDEX, record_to_sequence
+
 
 def sample_records(source: Path, *, count: int, seed: int) -> tuple[list[dict[str, Any]], int]:
     if count <= 0:
@@ -52,8 +54,11 @@ def main() -> int:
             record["benchmark_id"] = benchmark_id
             handle.write(json.dumps(record, separators=(",", ":")) + "\n")
 
-    lengths = [len(row["prompt_ids"]) + len(row["completion_ids"]) for row in records]
-    supervised = [sum(row["loss_mask"]) for row in records]
+    sequences = [record_to_sequence(row) for row in records]
+    lengths = [len(input_ids) for input_ids, _ in sequences]
+    supervised = [
+        sum(label != IGNORE_INDEX for label in labels) for _, labels in sequences
+    ]
     print(
         json.dumps(
             {

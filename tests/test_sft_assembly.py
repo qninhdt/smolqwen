@@ -32,8 +32,9 @@ pytestmark = pytest.mark.slow
 VOCAB = 256
 
 
-def _record(index: int) -> dict[str, Any]:
-    prompt = [(index + position) % VOCAB for position in range(6)]
+def _record(index: int, *, length: int = 11) -> dict[str, Any]:
+    prompt_length = length - 5
+    prompt = [(index + position) % VOCAB for position in range(prompt_length)]
     completion = [(index + position + 30) % VOCAB for position in range(5)]
     return {
         "schema_version": SFT_SCHEMA_VERSION,
@@ -44,16 +45,16 @@ def _record(index: int) -> dict[str, Any]:
         "mode": "non_conversation",
         "input_ids": prompt + completion,
         "labels": [-100] * len(prompt) + completion[:3] + [-100, -100],
-        "seq_length": 11,
+        "seq_length": length,
         "supervised_tokens": 3,
     }
 
 
-def _shards(directory: Path) -> Path:
+def _shards(directory: Path, *, length: int = 11) -> Path:
     shard_dir = directory / "sft"
     shard_dir.mkdir(parents=True)
     for name, offset in (("train", 0), ("val", 100)):
-        rows = [json.dumps(_record(offset + index)) for index in range(3)]
+        rows = [json.dumps(_record(offset + index, length=length)) for index in range(3)]
         (shard_dir / f"{name}.jsonl").write_text("\n".join(rows) + "\n", encoding="utf-8")
     return shard_dir
 
@@ -145,10 +146,52 @@ def test_the_collator_is_the_phase_three_one(assembled: Any) -> None:
 
 
 def test_train_dataloader_uses_variable_row_token_sampler(assembled: Any) -> None:
-    batch = next(iter(assembled.trainer.get_train_dataloader()))
+    dataloader = assembled.trainer.get_train_dataloader()
+    assert assembled.trainer.get_train_dataloader() is dataloader
+    batch = next(iter(dataloader))
     assert batch["input_ids"].shape[0] == 1
     assert batch["input_ids"].shape[1] <= 512
     assert assembled.trainer.token_batch_sampler is not None
+
+
+def test_token_budget_trainer_executes_one_flattened_step(assembled: Any) -> None:
+    import torch
+
+    result = assembled.trainer.train()
+
+    assert result.global_step == 1
+    assert torch.isfinite(torch.tensor(result.training_loss))
+    assert assembled.trainer._step_tokens == 33
+    assert assembled.trainer._step_supervised_tokens == 9
+    assert assembled.trainer._step_trajectories == 3
+    assert assembled.trainer._step_microbatches == 1
+    assert assembled.trainer._step_max_trajectory_length == 11
+    assert assembled.trainer._step_padding_saved == 0
+
+
+def test_gradient_accumulation_uses_the_window_supervised_token_count(tmp_path: Path) -> None:
+    config = _config(
+        _tiny_checkpoint(tmp_path / "base"),
+        tmp_path / "out",
+        profile=ProfileConfig(
+            micro_batch=1,
+            grad_accum=2,
+            max_seq_length=512,
+            max_tokens_per_microbatch=256,
+        ),
+    )
+    assembled = build_trainer(
+        config,
+        dataset_dir=_shards(tmp_path, length=256),
+        tracker=Tracker(project="t", enabled=False),
+    )
+
+    result = assembled.trainer.train()
+
+    assert result.global_step == 1
+    assert assembled.trainer._step_microbatches == 2
+    assert assembled.trainer._step_tokens == 512
+    assert assembled.trainer._step_supervised_tokens == 6
 
 
 def test_lora_is_attached_and_only_adapters_train(assembled: Any) -> None:

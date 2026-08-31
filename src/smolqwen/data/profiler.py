@@ -319,7 +319,7 @@ def choose_budgets(result: ProfileResult) -> dict[str, Any]:
         },
         "retention_floor": RETENTION_FLOOR,
         "consumers": {
-            "max_seq_length": "Phase 3 SFT (may lower via the OOM sweep, never raise)",
+            "max_seq_length": "SFT retention report; data/training configs own the cap",
             "max_new_tokens_per_step": "Phase 6 per-step generation cap",
             "max_env_steps": "Phase 7 step cap (widening sweep)",
         },

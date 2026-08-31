@@ -1,6 +1,6 @@
 ---
 title: "Full-trajectory reasoning SFT with padding-free batches"
-status: planned
+status: in_progress
 date: 2026-08-31
 owners: [phase-2-data, phase-3-sft]
 supersedes:
@@ -91,10 +91,22 @@ the measured OOM evidence and reports the resulting retention loss.
 
 | Phase | Status | Dependency | Deliverable |
 |---|---|---|---|
-| [1. Full-trajectory render contract](./phase-01-full-trajectory-render-contract.md) | planned | none | One row/one sample, preserved reasoning, exact labels |
-| [2. Correct profiling and conversion](./phase-02-profile-and-convert.md) | planned | 1 | Correct distributions, unique ids, regenerated shards |
-| [3. Padding-free correctness and token batching](./phase-03-padding-free-token-batching.md) | planned | 1, 2 | Boundary-safe flattening and variable-row batches |
-| [4. Trainer integration and L4 validation](./phase-04-trainer-and-gpu-validation.md) | planned | 3 | Token-normalized SFT, GPU evidence, updated authority docs |
+| [1. Full-trajectory render contract](./phase-01-full-trajectory-render-contract.md) | completed | none | One row/one sample, preserved reasoning, exact labels |
+| [2. Correct profiling and conversion](./phase-02-profile-and-convert.md) | in progress | 1 | Correct distributions, unique ids, regenerated shards |
+| [3. Padding-free correctness and token batching](./phase-03-padding-free-token-batching.md) | in progress | 1, 2 | Boundary-safe flattening and variable-row batches |
+| [4. Trainer integration and L4 validation](./phase-04-trainer-and-gpu-validation.md) | in progress | 3 | Token-normalized SFT, GPU evidence, updated authority docs |
+
+## Implementation status
+
+The full-trajectory schema/rendering path, 32K whole-row conversion cap,
+token-budget sampler, project-owned Qwen boundary metadata, causal-shift document
+mask, actual supervised-token normalization, Trainer integration, and stale-shard
+preflight are implemented and covered by CPU tests. Historical `budgets.json`
+files no longer resize SFT from the previous segmented objective.
+
+Remaining gates are intentionally not claimed complete: regenerate and account
+for the full 9,022-row artifacts, run fused-kernel padded/flattened equivalence on
+a real L4, then run the 32K one-step and 30-step memory/stability probes.
 
 ## Acceptance criteria
 

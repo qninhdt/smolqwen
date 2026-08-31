@@ -99,6 +99,12 @@ def test_missing_shard_names_the_command_that_writes_it(tmp_path: Path) -> None:
         load_shards(tmp_path / "absent")
 
 
+def test_profile_cap_is_checked_before_training(tmp_path: Path) -> None:
+    shard_dir = _write_shards(tmp_path, train=1, val=0)
+    with pytest.raises(SftError, match="profile.max_seq_length"):
+        load_shards(shard_dir, max_sequence_length=10)
+
+
 def test_dataset_carries_only_the_columns_a_step_needs(tmp_path: Path) -> None:
     shards = load_shards(_write_shards(tmp_path))
     assert set(shards.train.column_names) == {

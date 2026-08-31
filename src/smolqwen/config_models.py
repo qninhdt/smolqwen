@@ -1,9 +1,9 @@
 """Two-layer configuration: semantics in `configs/base/`, sizing in `configs/profiles/`.
 
 The merge order is ``budgets.json -> base -> profile -> --override``, deepest wins.
-``budgets.json`` is a real layer in that chain rather than a suggestion: Phase 2
-measures the trajectory distribution and writes the caps, and every later stage
-reads them instead of hardcoding a number.
+``budgets.json`` seeds RL generation and environment limits. SFT trajectory
+length is owned explicitly by the data/training configs because changing the SFT
+rendering objective invalidates older length distributions.
 
 Keeping "which GPU" out of the semantic layer is what makes the L4-vs-A100
 comparison honest -- the same experiment, different sizing. `ProfileConfig` is a
@@ -21,10 +21,9 @@ STAGES = ("data", "sft", "grpo", "eval", "serve")
 Stage = Literal["data", "sft", "grpo", "eval", "serve"]
 PROFILES = ("l4", "a100")
 
-# budgets.json key -> the profile field it seeds. Phase 2 owns the file; the
-# consuming phase may lower its own field but never raise it above the budget.
+# budgets.json key -> the profile field it seeds. SFT max sequence length is not
+# here: old per-turn profile artifacts must never resize full-trajectory SFT.
 BUDGET_SEEDED_FIELDS = {
-    "max_seq_length": "max_seq_length",
     "max_new_tokens_per_step": "max_new_tokens_per_step",
     "max_env_steps": "max_env_steps",
 }
@@ -48,10 +47,11 @@ class ProfileConfig(StrictModel):
     key in a profile YAML fails at load rather than thirty minutes into a run.
     """
 
-    # Phase 3 (OOM sweep)
+    # SFT token-envelope sizing.  `micro_batch` remains for non-SFT callers;
+    # padding-free SFT derives its row count from `max_tokens_per_microbatch`.
     micro_batch: int = Field(default=1, ge=1)
     grad_accum: int = Field(default=1, ge=1)
-    max_seq_length: int = Field(default=8192, ge=256)
+    max_seq_length: int = Field(default=32768, ge=256)
     max_tokens_per_microbatch: int = Field(default=32768, ge=256)
 
     # Phase 6 (pool sweep). `generation_concurrency` is the vLLM batch width

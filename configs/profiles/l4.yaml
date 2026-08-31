@@ -7,20 +7,13 @@
 # Each field is owned by exactly one phase (see plan.md "Cross-phase contracts");
 # a later phase must not overwrite an earlier phase's measured value.
 
-# The three budget-seeded fields -- max_seq_length, max_new_tokens_per_step,
-# max_env_steps -- are deliberately ABSENT here. They come from budgets.json,
-# which merges earlier in the chain, so a placeholder written here would override
-# a measured cap with a guess and nothing would report it. A sweep writes one back
-# only once it has measured a value it needs to LOWER to, with the measurement in
-# the comment.
+# `max_seq_length` defaults to 32,768 in ProfileConfig. It is deliberately absent
+# until an L4 measurement proves that the cap must be lowered. Old profiling
+# artifacts do not seed SFT sequence length.
 
-# --- Phase 3, measured by scripts/colab-l4-sft-speed.py on a real L4 against 96
-# prepared records. Batch 2 is faster than batch 1 ONLY with length-grouped
-# sampling: these trajectories run 4.4k-15.7k tokens, so a random pair pads to the
-# longer sample and wastes 10.7% of the step. Grouped, padding is 3.6% and this is
-# 2,043 valid tok/s -- 44.5 h/epoch, against 55.7 h at micro_batch 1. Peak 12.66 of
-# 22.03 GiB. Batch 4 pads 10.7% even grouped and is 30% slower, so 2 is the
-# optimum rather than a memory ceiling. See docs/optimization-ledger.md.
+# --- SFT target envelope. `micro_batch` is retained for non-SFT paths; padding-
+# free SFT uses the total-token budget below and may contain a variable number of
+# trajectories. The 32K L4 boundary and headroom are not measured yet.
 micro_batch: 2
 grad_accum: 8
 max_tokens_per_microbatch: 32768
