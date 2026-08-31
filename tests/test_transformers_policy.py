@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
 import torch
+import transformers
 from transformers import BatchEncoding
 
 from smolqwen.eval.policies import TransformersPolicy
@@ -28,12 +30,47 @@ class _Model:
         self.args: tuple[Any, ...] = ()
         self.kwargs: dict[str, Any] = {}
 
+    def eval(self) -> _Model:
+        return self
+
     def generate(self, *args: Any, **kwargs: Any) -> torch.Tensor:
         self.args = args
         self.kwargs = kwargs
         input_ids = kwargs["input_ids"]
         completion = torch.tensor([[7, 8]], dtype=input_ids.dtype)
         return torch.cat((input_ids, completion), dim=-1)
+
+
+def test_local_policy_requires_cuda(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+
+    with pytest.raises(RuntimeError, match="requires CUDA"):
+        TransformersPolicy("checkpoint", revision="a" * 40)
+
+
+def test_local_policy_loads_the_entire_model_on_cuda(monkeypatch: pytest.MonkeyPatch) -> None:
+    load_kwargs: dict[str, Any] = {}
+    model = _Model()
+
+    class _AutoTokenizer:
+        @staticmethod
+        def from_pretrained(*_args: object, **_kwargs: object) -> _Tokenizer:
+            return _Tokenizer(None)
+
+    class _AutoModel:
+        @staticmethod
+        def from_pretrained(*_args: object, **kwargs: Any) -> _Model:
+            load_kwargs.update(kwargs)
+            return model
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(transformers, "AutoTokenizer", _AutoTokenizer)
+    monkeypatch.setattr(transformers, "AutoModelForCausalLM", _AutoModel)
+
+    policy = TransformersPolicy("checkpoint", revision="a" * 40)
+
+    assert load_kwargs["device_map"] == {"": 0}
+    assert policy._model is model
 
 
 def _policy(rendered: Any) -> tuple[TransformersPolicy, _Model]:

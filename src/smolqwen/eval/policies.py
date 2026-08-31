@@ -227,10 +227,15 @@ class TransformersPolicy:
         import torch
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
+        if not torch.cuda.is_available():
+            raise RuntimeError("local Transformers evaluation requires CUDA")
         self._torch = torch
         self._tokenizer = AutoTokenizer.from_pretrained(checkpoint, revision=revision)
         model: Any = AutoModelForCausalLM.from_pretrained(
-            checkpoint, revision=revision, dtype=torch.bfloat16
+            checkpoint,
+            revision=revision,
+            dtype=torch.bfloat16,
+            device_map={"": 0},
         )
         if adapter:
             from peft import PeftModel
