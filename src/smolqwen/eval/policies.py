@@ -249,7 +249,15 @@ class TransformersPolicy:
             add_generation_prompt=True,
             return_tensors="pt",
         )
-        input_ids = rendered.to(self._model.device)
+        if not isinstance(rendered, Mapping):
+            raise TypeError("chat template output must be a mapping of model inputs")
+        model_inputs = {
+            str(name): value.to(self._model.device) if hasattr(value, "to") else value
+            for name, value in rendered.items()
+        }
+        input_ids = model_inputs.get("input_ids")
+        if input_ids is None:
+            raise ValueError("chat template output is missing input_ids")
         kwargs: dict[str, Any] = {
             "max_new_tokens": self.max_new_tokens,
             "do_sample": self.temperature > 0.0,
@@ -262,7 +270,7 @@ class TransformersPolicy:
         if self.seed is not None:
             self._torch.manual_seed(self.seed)
         with self._torch.inference_mode():
-            output = self._model.generate(input_ids, **kwargs)
+            output = self._model.generate(**model_inputs, **kwargs)
         generated = output[0, input_ids.shape[-1] :]
         tokens = int(generated.shape[-1])
         return GenerationResult(
