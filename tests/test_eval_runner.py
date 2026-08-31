@@ -58,8 +58,17 @@ def test_runner_collects_secondary_metrics_from_a_structured_generation() -> Non
     config = resolve("eval", profile="l4")
     assert isinstance(config, EvalConfig)
     adapter = _Adapter()
-    metrics = evaluate_adapter(config, _Policy(), adapter)
+    progress: list[tuple[str, TaskMetrics | None]] = []
+    metrics = evaluate_adapter(
+        config,
+        _Policy(),
+        adapter,
+        progress=lambda task, result: progress.append((task.task_id, result)),
+    )
     assert adapter.summarized
+    assert [task_id for task_id, _ in progress] == ["case", "case"]
+    assert progress[0][1] is None
+    assert progress[1][1] is not None
     assert metrics["fixture"] == {
         "score": 1.0,
         "invalid_call_rate": 1.0,
@@ -68,6 +77,26 @@ def test_runner_collects_secondary_metrics_from_a_structured_generation() -> Non
         "truncation_rate": 0.0,
         "exact_success_rate": 1.0,
     }
+
+
+def test_named_adapter_logs_exact_progress_and_summary(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    config = EvalConfig(adapters=("fixture",))
+    adapter = _Adapter()
+    monkeypatch.setattr(runner, "create_adapter", lambda *_: adapter)
+
+    metrics, invariants = runner._evaluate_named_adapter(config, _Policy(), "fixture")
+
+    assert metrics["fixture"]["score"] == 1.0
+    assert invariants["fixture_revision"] == "1"
+    output = capsys.readouterr().out
+    assert "evaluation fixture: loaded 1 tasks" in output
+    assert "evaluation fixture: 1/1 tasks" in output
+    assert "score=1.0000 steps=1 tokens=3" in output
+    assert "evaluation fixture complete: 1/1 tasks" in output
+    assert "evaluation fixture: summarized 1 metric categories" in output
 
 
 def test_run_evaluation_records_actual_serving_locator_and_backend(

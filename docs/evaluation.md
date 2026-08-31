@@ -28,6 +28,11 @@ the generic runner only coordinates policies and reports. Add a module under
 select it through `adapters` or `--adapter`. Adapter-specific settings belong in
 the corresponding `adapter_options` entry.
 
+Evaluation prints stage-level logs and shows a task-counted progress bar for each
+adapter, including rate/ETA and periodic score, step, and generated-token
+updates. The executable owner is `_evaluation_progress` in
+`src/smolqwen/eval/runner.py`.
+
 Each run writes `<tag>.json` and `<tag>.md` under `artifacts/evaluation/`. The
 manifest hashes decoding, system prompts, tool schemas, benchmark revision, and
 step limits. It also records execution-only details such as backend, dtype,
