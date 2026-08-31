@@ -10,8 +10,20 @@ the pinned Hub revision (served from cache when present).
 from __future__ import annotations
 
 import json
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
+from time import monotonic
 from typing import Any
+
+from rich.progress import (
+    BarColumn,
+    Progress,
+    TaskProgressColumn,
+    TextColumn,
+    TimeElapsedColumn,
+    TimeRemainingColumn,
+)
 
 from smolqwen.config_models import DataConfig, DatasetPin
 from smolqwen.data.convert_sft import (
@@ -25,6 +37,53 @@ from smolqwen.data.profiler import format_profile_table, profile_dataset, write_
 from smolqwen.data.render import render_training_sample
 from smolqwen.data.splits import Split, build_env_split_manifest, split_trajectory_ids
 from smolqwen.tokenizer import load_tokenizer
+
+
+@contextmanager
+def _progress_task(description: str, *, total: int | None = None) -> Iterator[Callable[[], None]]:
+    """Render a progress task and emit periodic logs for non-TTY notebooks."""
+    progress = Progress(
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TaskProgressColumn(),
+        TimeElapsedColumn(),
+        TimeRemainingColumn(),
+        transient=False,
+    )
+    task_id = progress.add_task(description, total=total)
+    started = monotonic()
+    completed_rows = 0
+    completed = False
+
+    def advance() -> None:
+        nonlocal completed_rows
+        completed_rows += 1
+        progress.advance(task_id)
+        if completed_rows == 1 or completed_rows % 250 == 0:
+            elapsed = monotonic() - started
+            rate = completed_rows / elapsed if elapsed else 0.0
+            target = str(total) if total is not None else "?"
+            print(
+                f"{description}: {completed_rows}/{target} trajectories "
+                f"({rate:.1f}/s, {elapsed:.0f}s elapsed)",
+                flush=True,
+            )
+
+    with progress:
+        try:
+            yield advance
+            completed = True
+        finally:
+            elapsed = monotonic() - started
+            progress.update(
+                task_id,
+                description=f"{description} {'complete' if completed else 'failed'}",
+            )
+            status = "complete" if completed else "failed"
+            print(
+                f"{description} {status}: {completed_rows} trajectories in {elapsed:.1f}s",
+                flush=True,
+            )
 
 
 def _tokenizer(config: DataConfig) -> Any:
@@ -67,13 +126,22 @@ def run_profile_data(config: DataConfig) -> int:
     """`smolqwen profile-data`: profile trajectories, write budgets and env split."""
     output_dir = Path(config.output_dir)
 
+    print("profile-data: resolving pinned datasets", flush=True)
     sft_path = _resolve_dataset(config.sft_trajectories)
     tokenizer = _tokenizer(config)
-    result = profile_dataset(tokenizer, sft_path, revision=config.sft_trajectories.revision)
+    print("profile-data: rendering/tokenizing trajectories", flush=True)
+    with _progress_task("profile-data") as advance:
+        result = profile_dataset(
+            tokenizer,
+            sft_path,
+            revision=config.sft_trajectories.revision,
+            progress=advance,
+        )
     profile_path, budgets_path = write_profile(result, output_dir)
 
     # The env-split manifest depends only on the static metadata, so it is written
     # in the same pass. The RL scenario env-ids come from the RL scenario file.
+    print("profile-data: building environment split", flush=True)
     env_path = _resolve_dataset(config.env_metadata)
     rl_env_ids = _rl_scenario_env_ids(_resolve_dataset(config.rl_scenarios))
     manifest = build_env_split_manifest(
@@ -113,19 +181,38 @@ def run_prepare_sft(config: DataConfig) -> int:
     output_dir = Path(config.output_dir)
     cap = config.max_seq_length
 
+    print("prepare-sft: resolving pinned dataset", flush=True)
     sft_path = _resolve_dataset(config.sft_trajectories)
     tokenizer = _tokenizer(config)
     shape = config.tool_result_shape
 
     # Pass one: task groups for the seeded split. Paired row variants must stay together.
-    ids = [trajectory.task_id for trajectory in iter_trajectories(sft_path)]
+    print("prepare-sft: pass 1/2 — collecting split ids", flush=True)
+    ids: list[str] = []
+    with _progress_task("prepare-sft split") as advance:
+        for trajectory in iter_trajectories(sft_path):
+            ids.append(trajectory.task_id)
+            advance()
     split = split_trajectory_ids(ids, seed=config.split_seed, val_fraction=config.val_fraction)
+    print(f"prepare-sft: pass 1/2 complete — {len(ids)} trajectories", flush=True)
 
     # Pass two: render and route.
     report = ConversionReport()
     train_path = output_dir / "sft" / "train.jsonl"
     val_path = output_dir / "sft" / "val.jsonl"
-    stats = _write_shards(sft_path, split, cap, tokenizer, shape, train_path, val_path, report)
+    print("prepare-sft: pass 2/2 — rendering and writing shards", flush=True)
+    with _progress_task("prepare-sft render/write", total=len(ids)) as advance:
+        stats = _write_shards(
+            sft_path,
+            split,
+            cap,
+            tokenizer,
+            shape,
+            train_path,
+            val_path,
+            report,
+            progress=advance,
+        )
 
     report_path = output_dir / "conversion_report.json"
     report_path.write_text(
@@ -184,6 +271,8 @@ def _write_shards(
     train_path: Path,
     val_path: Path,
     report: ConversionReport,
+    *,
+    progress: Callable[[], None] | None = None,
 ) -> LoadStats:
     """Render every trajectory and route its samples to one shard.
 
@@ -211,9 +300,11 @@ def _write_shards(
         for event in events:
             if isinstance(event, Skipped):
                 report.note_skipped(event)
-                continue
-            report.note_converted(event)
-            partition = split.partition(event.task_id)
-            handles[partition].write(json.dumps(sample_to_record(event.sample)) + "\n")
+            else:
+                report.note_converted(event)
+                partition = split.partition(event.task_id)
+                handles[partition].write(json.dumps(sample_to_record(event.sample)) + "\n")
+            if progress is not None:
+                progress()
 
     return stats

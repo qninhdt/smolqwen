@@ -30,6 +30,17 @@ def test_profile_counts_rows_samples_tasks_and_unique_uids_separately() -> None:
     assert payload["by_mode"]["non_conversation"]["samples"] == 1
 
 
+def test_profile_calls_progress_hook_once_per_trajectory() -> None:
+    updates: list[None] = []
+    profile_dataset(
+        OfflineTokenizer(),
+        "not-used.json",
+        trajectories=iter(_trajectories()),
+        progress=lambda: updates.append(None),
+    )
+    assert len(updates) == 2
+
+
 def test_profile_uses_same_one_sample_length_as_converter() -> None:
     result = profile_dataset(
         OfflineTokenizer(),

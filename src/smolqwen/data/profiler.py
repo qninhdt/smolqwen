@@ -13,7 +13,7 @@ that, so nothing holds all 9k trajectories at once.
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -224,8 +224,14 @@ def profile_dataset(
     limit: int | None = None,
     revision: str | None = None,
     trajectories: Iterable[Trajectory] | None = None,
+    progress: Callable[[], None] | None = None,
 ) -> ProfileResult:
-    """Single streaming pass over the release file."""
+    """Single streaming pass over the release file.
+
+    ``progress`` is an optional per-trajectory hook for CLI progress reporting;
+    keeping it outside the result model leaves the profiler useful for callers
+    that do not want terminal output.
+    """
     stats = LoadStats()
     modes: dict[str, ModeAccumulator] = {
         "conversation": ModeAccumulator(),
@@ -249,6 +255,8 @@ def profile_dataset(
         mode = trajectory.traj_type or "unknown"
         accumulator = modes.setdefault(mode, ModeAccumulator())
         profile_trajectory(tokenizer, trajectory, accumulator)
+        if progress is not None:
+            progress()
 
     return ProfileResult(
         modes=modes,

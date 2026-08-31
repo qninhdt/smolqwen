@@ -7,6 +7,7 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
+from smolqwen.data.cli_actions import _write_shards
 from smolqwen.data.convert_sft import (
     SFT_SCHEMA_VERSION,
     SFT_SEMANTICS,
@@ -92,6 +93,28 @@ def test_report_accounts_for_every_input_row_and_sample_equals_row() -> None:
     assert payload["converted"] == payload["samples"] == 2
     assert payload["by_mode"]["conversation"] == {"trajectories": 1, "samples": 1}
     assert payload["by_mode"]["non_conversation"] == {"trajectories": 1, "samples": 1}
+
+
+def test_write_shards_calls_progress_for_each_parsed_row(tmp_path: Path) -> None:
+    ids = [trajectory.task_id for trajectory in iter_trajectories(FIXTURES / "trajectories.json")]
+    split = split_trajectory_ids(ids, seed=5, val_fraction=0.5)
+    report = ConversionReport()
+    updates: list[None] = []
+
+    stats = _write_shards(
+        FIXTURES / "trajectories.json",
+        split,
+        10_000_000,
+        OfflineTokenizer(),
+        "tool_role",
+        tmp_path / "sft" / "train.jsonl",
+        tmp_path / "sft" / "val.jsonl",
+        report,
+        progress=lambda: updates.append(None),
+    )
+
+    assert stats.parsed == 2
+    assert len(updates) == stats.parsed
 
 
 def test_paired_variants_route_by_task_id_not_unique_uid() -> None:
