@@ -177,10 +177,11 @@ def render_training_sample(
     task_id: str = "",
     env_id: str = "",
     mode: str = "",
+    training_template: tuple[str, str] | None = None,
 ) -> RenderedSample:
     """Render one raw row as one sample with loss on every assistant block."""
     bounded, removed = trim_after_last_assistant(messages)
-    template, fingerprint = training_chat_template(tokenizer)
+    template, fingerprint = training_template or training_chat_template(tokenizer)
     encoded = tokenizer.apply_chat_template(
         to_template_messages(bounded, shape=shape),
         tools=list(tools) or None,

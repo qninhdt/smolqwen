@@ -114,6 +114,13 @@ def test_parser_exposes_pinned_revision_on_evaluate() -> None:
     assert args.prefix_caching is False
 
 
+def test_prepare_sft_parser_accepts_only_positive_worker_count() -> None:
+    parser = build_parser()
+    assert parser.parse_args(["prepare-sft", "--workers", "3"]).workers == 3
+    with pytest.raises(SystemExit):
+        parser.parse_args(["prepare-sft", "--workers", "0"])
+
+
 def test_bench_and_sweep_report_a_missing_key_without_traceback(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],

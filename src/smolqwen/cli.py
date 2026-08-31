@@ -44,6 +44,13 @@ SUBCOMMAND_STAGES: dict[str, str] = {
 }
 
 
+def _positive_int(value: str) -> int:
+    parsed = int(value)
+    if parsed < 1:
+        raise argparse.ArgumentTypeError("must be at least 1")
+    return parsed
+
+
 def _add_common(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--config", type=Path, default=None, help="explicit base config path")
     parser.add_argument("--profile", choices=PROFILES, default=None, help="GPU sizing profile")
@@ -82,13 +89,21 @@ def build_parser() -> argparse.ArgumentParser:
     )
     probe_parser.add_argument("--no-write", action="store_true", help="print only")
 
-    data_help = {
-        "profile-data": "measure the trajectory distribution and write budgets.json",
-        "prepare-sft": "convert trajectories into rendered SFT samples",
-    }
-    for name, help_text in data_help.items():
-        sub = subparsers.add_parser(name, help=help_text)
-        _add_common(sub)
+    profile_data = subparsers.add_parser(
+        "profile-data", help="measure the trajectory distribution and write budgets.json"
+    )
+    _add_common(profile_data)
+
+    prepare_sft = subparsers.add_parser(
+        "prepare-sft", help="convert trajectories into rendered SFT samples"
+    )
+    _add_common(prepare_sft)
+    prepare_sft.add_argument(
+        "--workers",
+        type=_positive_int,
+        default=None,
+        help="CPU render workers (default: auto, up to 4)",
+    )
 
     sft = subparsers.add_parser("train-sft", help="LoRA reasoning SFT")
     _add_common(sft)
@@ -254,7 +269,7 @@ def _cmd_profile_data(args: argparse.Namespace, config: StrictModel) -> int:
 def _cmd_prepare_sft(args: argparse.Namespace, config: StrictModel) -> int:
     from smolqwen.data.cli_actions import run_prepare_sft
 
-    return run_prepare_sft(_as_data_config(config))
+    return run_prepare_sft(_as_data_config(config), workers=args.workers)
 
 
 def _as_data_config(config: StrictModel) -> DataConfig:

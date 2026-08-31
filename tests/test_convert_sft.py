@@ -117,6 +117,33 @@ def test_write_shards_calls_progress_for_each_parsed_row(tmp_path: Path) -> None
     assert len(updates) == stats.parsed
 
 
+def test_parallel_write_shards_matches_single_worker_byte_for_byte(tmp_path: Path) -> None:
+    ids = [trajectory.task_id for trajectory in iter_trajectories(FIXTURES / "trajectories.json")]
+    split = split_trajectory_ids(ids, seed=5, val_fraction=0.5)
+
+    def write(worker_count: int, name: str) -> tuple[bytes, bytes, dict[str, Any]]:
+        report = ConversionReport()
+        directory = tmp_path / name
+        stats = _write_shards(
+            FIXTURES / "trajectories.json",
+            split,
+            10_000_000,
+            OfflineTokenizer(),
+            "tool_role",
+            directory / "train.jsonl",
+            directory / "val.jsonl",
+            report,
+            workers=worker_count,
+        )
+        return (
+            (directory / "train.jsonl").read_bytes(),
+            (directory / "val.jsonl").read_bytes(),
+            report.to_dict(input_shas={}, load_stats=stats),
+        )
+
+    assert write(4, "parallel") == write(1, "serial")
+
+
 def test_paired_variants_route_by_task_id_not_unique_uid() -> None:
     task_ids = ["task-a", "task-b"]
     split = split_trajectory_ids(task_ids, seed=5, val_fraction=0.5)

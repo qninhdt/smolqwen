@@ -10,9 +10,13 @@ the pinned Hub revision (served from cache when present).
 from __future__ import annotations
 
 import json
+import os
+from collections import deque
 from collections.abc import Callable, Iterator
+from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import contextmanager
 from pathlib import Path
+from threading import get_ident, local
 from time import monotonic
 from typing import Any
 
@@ -27,14 +31,16 @@ from rich.progress import (
 
 from smolqwen.config_models import DataConfig, DatasetPin
 from smolqwen.data.convert_sft import (
+    ConversionEvent,
     ConversionReport,
     Skipped,
     convert_trajectories,
+    convert_trajectory,
     sample_to_record,
 )
-from smolqwen.data.loader import LoadStats, iter_trajectories, verify_sha256
+from smolqwen.data.loader import LoadStats, Trajectory, iter_trajectories, verify_sha256
 from smolqwen.data.profiler import format_profile_table, profile_dataset, write_profile
-from smolqwen.data.render import render_training_sample
+from smolqwen.data.render import render_training_sample, training_chat_template
 from smolqwen.data.splits import Split, build_env_split_manifest, split_trajectory_ids
 from smolqwen.tokenizer import load_tokenizer
 
@@ -62,10 +68,13 @@ def _progress_task(description: str, *, total: int | None = None) -> Iterator[Ca
         if completed_rows == 1 or completed_rows % 250 == 0:
             elapsed = monotonic() - started
             rate = completed_rows / elapsed if elapsed else 0.0
-            target = str(total) if total is not None else "?"
+            count = (
+                f"{completed_rows}/{total} trajectories"
+                if total is not None
+                else f"{completed_rows} trajectories"
+            )
             print(
-                f"{description}: {completed_rows}/{target} trajectories "
-                f"({rate:.1f}/s, {elapsed:.0f}s elapsed)",
+                f"{description}: {count} ({rate:.1f}/s, {elapsed:.0f}s elapsed)",
                 flush=True,
             )
 
@@ -171,7 +180,7 @@ def _rl_scenario_env_ids(rl_path: Path) -> list[str]:
     return ids
 
 
-def run_prepare_sft(config: DataConfig) -> int:
+def run_prepare_sft(config: DataConfig, *, workers: int | None = None) -> int:
     """`smolqwen prepare-sft`: render trajectories into train/val SFT shards.
 
     Converts in two passes: the first collects task ids for the seeded train/val
@@ -185,6 +194,7 @@ def run_prepare_sft(config: DataConfig) -> int:
     sft_path = _resolve_dataset(config.sft_trajectories)
     tokenizer = _tokenizer(config)
     shape = config.tool_result_shape
+    worker_count = _prepare_worker_count(workers)
 
     # Pass one: task groups for the seeded split. Paired row variants must stay together.
     print("prepare-sft: pass 1/2 — collecting split ids", flush=True)
@@ -200,7 +210,10 @@ def run_prepare_sft(config: DataConfig) -> int:
     report = ConversionReport()
     train_path = output_dir / "sft" / "train.jsonl"
     val_path = output_dir / "sft" / "val.jsonl"
-    print("prepare-sft: pass 2/2 — rendering and writing shards", flush=True)
+    print(
+        f"prepare-sft: pass 2/2 — rendering and writing shards with {worker_count} workers",
+        flush=True,
+    )
     with _progress_task("prepare-sft render/write", total=len(ids)) as advance:
         stats = _write_shards(
             sft_path,
@@ -212,6 +225,7 @@ def run_prepare_sft(config: DataConfig) -> int:
             val_path,
             report,
             progress=advance,
+            workers=worker_count,
         )
 
     report_path = output_dir / "conversion_report.json"
@@ -273,6 +287,7 @@ def _write_shards(
     report: ConversionReport,
     *,
     progress: Callable[[], None] | None = None,
+    workers: int = 1,
 ) -> LoadStats:
     """Render every trajectory and route its samples to one shard.
 
@@ -282,19 +297,31 @@ def _write_shards(
     """
     train_path.parent.mkdir(parents=True, exist_ok=True)
     stats = LoadStats()
+    if workers < 1:
+        raise ValueError("workers must be at least 1")
 
-    def render(messages: Any, **kwargs: Any) -> Any:
-        return render_training_sample(tokenizer, messages, **kwargs)
+    render = _build_renderer(tokenizer, workers=workers)
 
     with (
         train_path.open("w", encoding="utf-8") as train_handle,
         val_path.open("w", encoding="utf-8") as val_handle,
     ):
-        events = convert_trajectories(
-            iter_trajectories(sft_path, stats=stats),
-            render=render,
-            max_seq_length=cap,
-            shape=shape,
+        trajectories = iter_trajectories(sft_path, stats=stats)
+        events = (
+            convert_trajectories(
+                trajectories,
+                render=render,
+                max_seq_length=cap,
+                shape=shape,
+            )
+            if workers == 1
+            else _convert_parallel(
+                trajectories,
+                render=render,
+                max_seq_length=cap,
+                shape=shape,
+                workers=workers,
+            )
         )
         handles = {"train": train_handle, "val": val_handle}
         for event in events:
@@ -308,3 +335,79 @@ def _write_shards(
                 progress()
 
     return stats
+
+
+def _build_renderer(tokenizer: Any, *, workers: int) -> Callable[..., Any]:
+    """Build a renderer with one immutable compiled-template cache per worker."""
+    canonical_template = training_chat_template(tokenizer)
+    worker_state = local()
+
+    def render(messages: Any, **kwargs: Any) -> Any:
+        selected_template = canonical_template
+        if workers > 1:
+            # Transformers caches compiled Jinja templates globally by source.
+            # A generation tracker is mutable and cannot be entered concurrently,
+            # so a no-op worker comment gives each thread an isolated cache entry.
+            worker_template: tuple[str, str] | None = getattr(
+                worker_state, "training_template", None
+            )
+            if worker_template is None:
+                source, fingerprint = canonical_template
+                worker_template = (
+                    f"{source}\n{{# smolqwen worker {get_ident()} #}}",
+                    fingerprint,
+                )
+                worker_state.training_template = worker_template
+            selected_template = worker_template
+        return render_training_sample(
+            tokenizer,
+            messages,
+            training_template=selected_template,
+            **kwargs,
+        )
+
+    return render
+
+
+def _prepare_worker_count(requested: int | None) -> int:
+    """Choose a conservative CPU default while allowing an explicit CLI override."""
+    workers = min(4, os.cpu_count() or 1) if requested is None else requested
+    if workers < 1:
+        raise ValueError("--workers must be at least 1")
+    return workers
+
+
+def _convert_parallel(
+    trajectories: Iterator[Trajectory],
+    *,
+    render: Callable[..., Any],
+    max_seq_length: int,
+    shape: str,
+    workers: int,
+) -> Iterator[ConversionEvent]:
+    """Render concurrently with bounded memory and deterministic input order."""
+    max_pending = workers * 2
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="prepare-sft") as executor:
+        pending: deque[Future[ConversionEvent]] = deque()
+
+        def submit_next() -> bool:
+            try:
+                trajectory = next(trajectories)
+            except StopIteration:
+                return False
+            pending.append(
+                executor.submit(
+                    convert_trajectory,
+                    trajectory,
+                    render=render,
+                    max_seq_length=max_seq_length,
+                    shape=shape,
+                )
+            )
+            return True
+
+        while len(pending) < max_pending and submit_next():
+            pass
+        while pending:
+            yield pending.popleft().result()
+            submit_next()

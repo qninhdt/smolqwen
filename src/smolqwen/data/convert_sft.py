@@ -52,33 +52,47 @@ def convert_trajectories(
     counted, never silently truncated.
     """
     for trajectory in trajectories:
-        try:
-            sample = render(
-                trajectory.messages,
-                tools=trajectory.tools,
-                shape=shape,
-                trajectory_uid=trajectory.trajectory_uid,
-                task_id=trajectory.task_id,
-                env_id=trajectory.env_id,
-                mode=trajectory.traj_type,
-            )
-        except Exception as exc:
-            yield Skipped(
-                trajectory_uid=trajectory.trajectory_uid,
-                task_id=trajectory.task_id,
-                reason=f"unrenderable: {exc}",
-            )
-            continue
-        if sample.total_tokens > max_seq_length:
-            yield Skipped(trajectory.trajectory_uid, trajectory.task_id, SKIP_TOO_LONG)
-            continue
-        yield Converted(
+        yield convert_trajectory(
+            trajectory,
+            render=render,
+            max_seq_length=max_seq_length,
+            shape=shape,
+        )
+
+
+def convert_trajectory(
+    trajectory: Trajectory,
+    *,
+    render: Callable[..., RenderedSample],
+    max_seq_length: int,
+    shape: str = "tool_role",
+) -> ConversionEvent:
+    """Convert one trajectory so callers can safely schedule rows in parallel."""
+    try:
+        sample = render(
+            trajectory.messages,
+            tools=trajectory.tools,
+            shape=shape,
             trajectory_uid=trajectory.trajectory_uid,
             task_id=trajectory.task_id,
             env_id=trajectory.env_id,
             mode=trajectory.traj_type,
-            sample=sample,
         )
+    except Exception as exc:
+        return Skipped(
+            trajectory_uid=trajectory.trajectory_uid,
+            task_id=trajectory.task_id,
+            reason=f"unrenderable: {exc}",
+        )
+    if sample.total_tokens > max_seq_length:
+        return Skipped(trajectory.trajectory_uid, trajectory.task_id, SKIP_TOO_LONG)
+    return Converted(
+        trajectory_uid=trajectory.trajectory_uid,
+        task_id=trajectory.task_id,
+        env_id=trajectory.env_id,
+        mode=trajectory.traj_type,
+        sample=sample,
+    )
 
 
 def sample_to_record(sample: RenderedSample) -> dict[str, Any]:
