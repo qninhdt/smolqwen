@@ -112,8 +112,9 @@ class OfflineTokenizer:
         # the fast tokenizer's native char-to-token alignment.
         input_ids = [self._remember(character) for character in rendered]
         assistant_mask = [0] * len(input_ids)
-        for start, end in generation_spans[0]:
-            assistant_mask[start:end] = [1] * (end - start)
+        if return_assistant_tokens_mask:
+            for start, end in generation_spans[0]:
+                assistant_mask[start:end] = [1] * (end - start)
         if not return_dict:
             return input_ids
         result: dict[str, list[int]] = {

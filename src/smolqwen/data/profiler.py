@@ -22,7 +22,7 @@ from smolqwen.data.loader import LoadStats, Trajectory, iter_trajectories, sha25
 from smolqwen.data.render import (
     RenderError,
     Tokenizer,
-    render_training_sample,
+    render_training_length,
 )
 
 # Candidate sequence caps reported with their retention. 32k is the paper's
@@ -196,17 +196,13 @@ def profile_trajectory(
     accumulator.tool_steps.append(trajectory.tool_steps)
     accumulator.tool_count.append(len(trajectory.tools))
 
-    sample = render_training_sample(
+    sample_tokens = render_training_length(
         tokenizer,
         trajectory.messages,
         tools=trajectory.tools,
-        trajectory_uid=trajectory.trajectory_uid,
-        task_id=trajectory.task_id,
-        env_id=trajectory.env_id,
-        mode=trajectory.traj_type,
     )
-    accumulator.total_tokens.append(sample.total_tokens)
-    accumulator.sample_tokens.append(sample.total_tokens)
+    accumulator.total_tokens.append(sample_tokens)
+    accumulator.sample_tokens.append(sample_tokens)
     accumulator.samples += 1
 
     assistant_turns = 0

@@ -6,7 +6,7 @@ import pytest
 
 from smolqwen.data.loader import Trajectory, parse_trajectory
 from smolqwen.data.profiler import SEQ_LENGTH_CANDIDATES, choose_budgets, profile_dataset
-from smolqwen.data.render import RenderError
+from smolqwen.data.render import RenderError, render_training_length, render_training_sample
 from tests.helpers import OfflineTokenizer, load_trajectory_rows
 
 
@@ -40,6 +40,23 @@ def test_profile_uses_same_one_sample_length_as_converter() -> None:
     assert len(result.all_sample_tokens()) == 2
     for cap in SEQ_LENGTH_CANDIDATES:
         assert result.trajectory_retention(cap) == result.retention(result.all_sample_tokens(), cap)
+
+
+def test_fast_profile_length_matches_full_label_renderer() -> None:
+    tokenizer = OfflineTokenizer()
+    for trajectory in _trajectories():
+        sample = render_training_sample(
+            tokenizer,
+            trajectory.messages,
+            tools=trajectory.tools,
+            trajectory_uid=trajectory.trajectory_uid,
+            task_id=trajectory.task_id,
+            env_id=trajectory.env_id,
+            mode=trajectory.traj_type,
+        )
+        assert render_training_length(
+            tokenizer, trajectory.messages, tools=trajectory.tools
+        ) == len(sample.input_ids)
 
 
 def test_budget_recommends_accepted_32k_operating_point() -> None:

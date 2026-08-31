@@ -215,3 +215,26 @@ def render_training_sample(
         template_fingerprint=fingerprint,
         trailing_messages_removed=removed,
     )
+
+
+def render_training_length(
+    tokenizer: Tokenizer,
+    messages: Sequence[Message],
+    *,
+    tools: Sequence[dict[str, Any]] = (),
+    shape: ToolResultShape = "tool_role",
+) -> int:
+    """Tokenize the SFT trajectory once without constructing masks or labels."""
+    bounded, _ = trim_after_last_assistant(messages)
+    template, _ = training_chat_template(tokenizer)
+    input_ids = tokenizer.apply_chat_template(
+        to_template_messages(bounded, shape=shape),
+        tools=list(tools) or None,
+        chat_template=template,
+        tokenize=True,
+        add_generation_prompt=False,
+        enable_thinking=True,
+    )
+    if isinstance(input_ids, Mapping):
+        input_ids = input_ids.get("input_ids")
+    return len(_flat_ints(input_ids, field="input_ids"))

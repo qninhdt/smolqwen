@@ -113,6 +113,7 @@ class DataConfig(StrictModel):
     rl_scenarios: DatasetPin
     env_metadata: DatasetPin
     output_dir: str = "artifacts/data"
+    max_seq_length: int = Field(default=32768, ge=256)
     split_seed: int = 1234
     val_fraction: float = Field(default=0.02, gt=0.0, lt=0.5)
     # Which shape a tool result takes on the way into the chat template. Phase 2

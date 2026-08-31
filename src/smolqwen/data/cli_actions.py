@@ -106,13 +106,12 @@ def _rl_scenario_env_ids(rl_path: Path) -> list[str]:
 def run_prepare_sft(config: DataConfig) -> int:
     """`smolqwen prepare-sft`: render trajectories into train/val SFT shards.
 
-    Reads the budget caps written by `profile-data` (the first config layer), then
-    converts in two passes: the first collects trajectory ids for the seeded
-    train/val split, the second renders and routes each sample to its shard.
+    Converts in two passes: the first collects task ids for the seeded train/val
+    split, the second renders and routes each sample to its shard. Profiling is
+    optional analysis, not a prerequisite for conversion.
     """
     output_dir = Path(config.output_dir)
-    budgets = _load_budgets(output_dir)
-    cap = int(budgets["recommended"]["max_seq_length"])
+    cap = config.max_seq_length
 
     sft_path = _resolve_dataset(config.sft_trajectories)
     tokenizer = _tokenizer(config)
@@ -218,13 +217,3 @@ def _write_shards(
             handles[partition].write(json.dumps(sample_to_record(event.sample)) + "\n")
 
     return stats
-
-
-def _load_budgets(output_dir: Path) -> dict[str, Any]:
-    budgets_path = output_dir / "budgets.json"
-    if not budgets_path.is_file():
-        raise FileNotFoundError(f"{budgets_path} missing -- run `smolqwen profile-data` first")
-    payload = json.loads(budgets_path.read_text(encoding="utf-8"))
-    if not isinstance(payload, dict):
-        raise ValueError(f"{budgets_path} must contain a JSON object")
-    return payload

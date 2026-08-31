@@ -39,6 +39,9 @@ env_metadata:
   sha256: d2c0010f16ff77d6d55868ee386353b1d0aadace58beed1eed678e8f7c84c33d
 
 output_dir: artifacts/data
+# Conversion cap. Profiling is optional analysis and is not a prerequisite for
+# preparing SFT shards.
+max_seq_length: 32768
 split_seed: 1234
 val_fraction: 0.02
 
