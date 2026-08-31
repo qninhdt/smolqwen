@@ -56,6 +56,15 @@ curriculum:
   band_weight: 1.0
   always_zero_weight: 0.1
   always_one_weight: 0.1
+  difficulty_profile_path: artifacts/rl/difficulty_profile.json
+  heldout_env_count: 10
+  heldout_scenarios_per_env: 8
+  trajectory_samples_per_log: 8
+  # Stop only after several steps, and only when observed zero-variance groups
+  # materially exceed the profile-derived expectation.
+  zero_variance_stop_margin: 0.25
+  zero_variance_stop_multiplier: 1.5
+  zero_variance_stop_after_steps: 10
 
 beta: 0.0
 loss_type: dapo
@@ -79,3 +88,12 @@ logp_difference_stop_threshold: 2.0
 # SEPARATELY constructed trainer: env_mask is read only when self.tools is empty,
 # and environment_factory populates tools from every env method.
 rollout_path: async
+
+# Phase 6 scheduler semantics. The episode wall-clock budget bounds a
+# ping-pong episode the step cap alone would only bound slowly; timeout is
+# scored, not excluded -- it is the policy's own doing under a stated budget.
+episode_timeout_s: 600.0
+
+# Drift classifier threshold, upstream's default. Drift tallies are logged per
+# run; retune only against a measured distribution, never blind.
+fork_threshold_tokens: 1024

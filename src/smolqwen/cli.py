@@ -21,6 +21,7 @@ from smolqwen.config_models import (
     ConfigError,
     DataConfig,
     GrpoConfig,
+    ServeConfig,
     SftConfig,
     StrictModel,
 )
@@ -115,13 +116,13 @@ def build_parser() -> argparse.ArgumentParser:
     difficulty.add_argument("--revision", default=None)
 
     bench_rollout = subparsers.add_parser(
-        "rollout-bench", help="A/B the async scheduler against the turn-synchronous baseline"
+        "rollout-bench", help="verify rollout equivalence and emit rollout diagnostics"
     )
     _add_common(bench_rollout)
     bench_rollout.add_argument("--episodes", type=int, default=64)
     bench_rollout.add_argument(
         "--paths",
-        default="factory_oracle,async",
+        default="serial_oracle,async",
         help="comma-separated rollout paths to benchmark",
     )
 
@@ -189,11 +190,21 @@ def build_parser() -> argparse.ArgumentParser:
     bench = subparsers.add_parser("bench", help="run vllm bench serve against a live endpoint")
     _add_common(bench)
     bench.add_argument("--dataset", default="sharegpt")
+    bench.add_argument("--dataset-path", type=Path, default=None)
     bench.add_argument("--concurrency", default="1,4,16")
+    bench.add_argument("--quality-report", type=Path, default=None)
+    bench.add_argument(
+        "--quality-reference",
+        type=Path,
+        action="append",
+        default=[],
+        help="reference evaluation report whose invariant manifest must match",
+    )
 
     sweep = subparsers.add_parser("sweep", help="drive vllm bench sweep serve and read the front")
     _add_common(sweep)
     sweep.add_argument("--resume", action="store_true", default=True)
+    sweep.add_argument("--experiment-name", default=None)
 
     return parser
 
@@ -264,6 +275,12 @@ def _as_grpo_config(config: StrictModel) -> GrpoConfig:
     return config
 
 
+def _as_serve_config(config: StrictModel) -> ServeConfig:
+    if not isinstance(config, ServeConfig):
+        raise TypeError(f"expected ServeConfig, got {type(config).__name__}")
+    return config
+
+
 def _cmd_env_selftest(args: argparse.Namespace, config: StrictModel) -> int:
     from smolqwen.env.selftest import run_selftest
 
@@ -295,6 +312,76 @@ def _cmd_evaluate(args: argparse.Namespace, config: StrictModel) -> int:
     return run_evaluation(config, args)
 
 
+def _cmd_rollout_bench(args: argparse.Namespace, config: StrictModel) -> int:
+    from smolqwen.rollout.bench import run_bench
+
+    if not isinstance(config, GrpoConfig):
+        raise TypeError(f"expected GrpoConfig, got {type(config).__name__}")
+    return run_bench(config, args=args)
+
+
+def _cmd_profile_difficulty(args: argparse.Namespace, config: StrictModel) -> int:
+    from smolqwen.training.difficulty import DifficultyError
+    from smolqwen.training.grpo import GrpoError, run_profile_difficulty
+
+    grpo = _as_grpo_config(config)
+    update: dict[str, Any] = {}
+    if args.checkpoint is not None:
+        update["model_id"] = str(args.checkpoint)
+    if args.revision is not None:
+        update["model_revision"] = args.revision
+    if update:
+        grpo = grpo.model_copy(update=update)
+    try:
+        return run_profile_difficulty(grpo)
+    except (DifficultyError, GrpoError) as exc:
+        print(f"GRPO error: {exc}", file=sys.stderr)
+        return 2
+
+
+def _cmd_train_grpo(args: argparse.Namespace, config: StrictModel) -> int:
+    from smolqwen.training.difficulty import DifficultyError
+    from smolqwen.training.grpo import GrpoError, run_train_grpo
+
+    try:
+        return run_train_grpo(_as_grpo_config(config), resume=args.resume)
+    except (DifficultyError, GrpoError) as exc:
+        print(f"GRPO error: {exc}", file=sys.stderr)
+        return 2
+
+
+def _cmd_serve(args: argparse.Namespace, config: StrictModel) -> int:
+    from smolqwen.serving.server import ServingError, run_server
+
+    try:
+        return run_server(_as_serve_config(config), print_command=args.print_command)
+    except ServingError as exc:
+        print(f"serving error: {exc}", file=sys.stderr)
+        return 2
+
+
+def _cmd_bench(args: argparse.Namespace, config: StrictModel) -> int:
+    from smolqwen.serving.bench import BenchError, run_benchmarks
+    from smolqwen.serving.server import ServingError
+
+    try:
+        return run_benchmarks(_as_serve_config(config), args=args)
+    except (BenchError, ServingError) as exc:
+        print(f"benchmark error: {exc}", file=sys.stderr)
+        return 2
+
+
+def _cmd_sweep(args: argparse.Namespace, config: StrictModel) -> int:
+    from smolqwen.serving.server import ServingError
+    from smolqwen.serving.sweep import SweepError, run_sweep
+
+    try:
+        return run_sweep(_as_serve_config(config), args=args)
+    except (SweepError, ServingError) as exc:
+        print(f"sweep error: {exc}", file=sys.stderr)
+        return 2
+
+
 DISPATCH: dict[str, Callable[[argparse.Namespace, StrictModel], int]] = {
     "profile-data": _cmd_profile_data,
     "prepare-sft": _cmd_prepare_sft,
@@ -302,12 +389,12 @@ DISPATCH: dict[str, Callable[[argparse.Namespace, StrictModel], int]] = {
     "merge-adapter": _cmd_merge_adapter,
     "env-selftest": _cmd_env_selftest,
     "evaluate": _cmd_evaluate,
-    "rollout-bench": lambda a, c: _not_implemented(6, "rollout-bench")(),
-    "profile-difficulty": lambda a, c: _not_implemented(7, "profile-difficulty")(),
-    "train-grpo": lambda a, c: _not_implemented(7, "train-grpo")(),
-    "serve": lambda a, c: _not_implemented(8, "serve")(),
-    "bench": lambda a, c: _not_implemented(8, "bench")(),
-    "sweep": lambda a, c: _not_implemented(8, "sweep")(),
+    "rollout-bench": _cmd_rollout_bench,
+    "profile-difficulty": _cmd_profile_difficulty,
+    "train-grpo": _cmd_train_grpo,
+    "serve": _cmd_serve,
+    "bench": _cmd_bench,
+    "sweep": _cmd_sweep,
 }
 
 

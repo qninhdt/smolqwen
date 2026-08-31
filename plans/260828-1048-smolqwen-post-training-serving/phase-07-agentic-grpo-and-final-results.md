@@ -1,7 +1,7 @@
 ---
 phase: 7
 title: "Agentic GRPO and final results"
-status: pending
+status: in-progress
 priority: P1
 effort: "5d"
 dependencies: [5, 6]
@@ -152,18 +152,28 @@ by comparing the scenario sequence across the break.
 ## Success Criteria
 
 - [ ] `artifacts/rl/difficulty_profile.json` classifies sampled scenarios into always-zero / band / always-one.
-- [ ] Group reward variance logged every step, with the zero-variance fraction tracked against the difficulty profile's prediction.
-- [ ] Group variance test passes: variance computed correctly; zero-variance groups flagged rather than silently dropped.
-- [ ] CPU GRPO smoke test runs 2 steps against fixture scenarios.
+- [x] Group reward variance logged every step, with the zero-variance fraction tracked against the difficulty profile's prediction.
+- [x] Group variance test passes: variance computed correctly; zero-variance groups flagged rather than silently dropped.
+- [x] CPU GRPO smoke test runs 2 steps against fixture scenarios.
 - [ ] Full GRPO run completes on the chosen profile without OOM; adapter pushed throughout; `--resume` verified by an interrupted run.
-- [ ] Resume test passes: the curriculum position and W&B run id survive a restart; the scenario sequence continues rather than replaying from the top.
-- [ ] Infrastructure-failure test passes: a `worker_crash` episode never reaches the reward function as a scoreable rollout.
+- [x] Resume test passes: the curriculum position and W&B run id survive a restart; the scenario sequence continues rather than replaying from the top.
+- [x] Infrastructure-failure test passes: a `worker_crash` episode never reaches the reward function as a scoreable rollout.
 - [ ] The RL profile choice cites `artifacts/rollout/ab_report.md` episodes/hour, not the Phase 1 capability probe.
 - [ ] Training-reward curve and held-out EnvScaler curve both logged against GRPO step in W&B.
 - [ ] SFT+RL evaluated with `assert_comparable` passing on the invariant set against the Base and SFT manifests.
 - [ ] `artifacts/evaluation/final_results.md` contains the complete three-column table with all secondary metrics.
 - [ ] Interpretation written, explicitly covering anything that did not improve.
 - [ ] Sampled trajectory tables in W&B show genuine interleaving: reasoning → call → observation → reasoning.
+
+## Sizing evidence before the full run
+
+An isolated one-step L4 probe covered the trainer-side GRPO memory boundary. At
+an 8,192-token prompt+completion envelope, micro-batch 1 passed and 2 OOM; at a
+4,096-token envelope, 2 passed and 4 OOM. A separate Transformers-generation
+probe (2,118 prompt + 512 completion, `num_generations=4`) passed generation
+batch 64 and OOMed at 128. These are sizing boundaries for the stated envelopes,
+not completion of the full async/colocated-vLLM run; the raw interpretation is
+recorded in [`qa-260830-l4-batch-limits.md`](../reports/qa-260830-l4-batch-limits.md).
 
 ## Risk Assessment
 

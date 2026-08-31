@@ -52,6 +52,7 @@ class ProfileConfig(StrictModel):
     micro_batch: int = Field(default=1, ge=1)
     grad_accum: int = Field(default=1, ge=1)
     max_seq_length: int = Field(default=8192, ge=256)
+    max_tokens_per_microbatch: int = Field(default=32768, ge=256)
 
     # Phase 6 (pool sweep). `generation_concurrency` is the vLLM batch width
     # inside one rollout call; it is NOT `num_generations`, the GRPO group size.
@@ -67,6 +68,11 @@ class ProfileConfig(StrictModel):
     # Phase 4 (timeline profile)
     env_worker_count: int = Field(default=4, ge=1)
     env_episodes_per_worker: int = Field(default=8, ge=1)
+
+    @property
+    def generation_batch_size(self) -> int:
+        """TRL prompt-pool size for one synchronous `rollout_func` call."""
+        return self.generation_concurrency * self.active_pool_multiplier
 
 
 class TrackingConfig(StrictModel):
@@ -212,6 +218,13 @@ class CurriculumConfig(StrictModel):
     band_weight: float = Field(default=1.0, gt=0.0)
     always_zero_weight: float = Field(default=0.1, ge=0.0)
     always_one_weight: float = Field(default=0.1, ge=0.0)
+    difficulty_profile_path: str = "artifacts/rl/difficulty_profile.json"
+    heldout_env_count: int = Field(default=10, ge=1)
+    heldout_scenarios_per_env: int = Field(default=8, ge=1)
+    trajectory_samples_per_log: int = Field(default=8, ge=1)
+    zero_variance_stop_margin: float = Field(default=0.25, ge=0.0, le=1.0)
+    zero_variance_stop_multiplier: float = Field(default=1.5, ge=1.0)
+    zero_variance_stop_after_steps: int = Field(default=10, ge=1)
 
 
 class GrpoConfig(StrictModel):
@@ -233,11 +246,20 @@ class GrpoConfig(StrictModel):
     # The model advertises 262,144 positions. Inheriting that under colocated
     # vLLM is an instant OOM, so the KV budget is always explicit.
     vllm_max_model_len: int = Field(default=16384, ge=512)
-    vllm_enable_prefix_caching: bool = True
+    # vLLM v1 enables APC by default for supported models, while TRL 1.12 does
+    # not expose the engine argument. Make disabling it an invalid experiment
+    # config and assert the live engine state after trainer construction.
+    vllm_enable_prefix_caching: Literal[True] = True
     vllm_enable_sleep_mode: bool = False
     # The only visible symptom of logprob misalignment under importance-sampling
     # correction. Above this, stop the run rather than train on garbage ratios.
     logp_difference_stop_threshold: float = Field(default=2.0, gt=0.0)
+    # Phase 6 scheduler semantics. An episode wall-clock budget: a ping-pong
+    # episode that never terminates must not outlive the step cap's slower
+    # bound. The drift classifier's fork threshold is upstream's default,
+    # surfaced here so the drift tally has a knob to be tuned against.
+    episode_timeout_s: float = Field(default=600.0, gt=0.0)
+    fork_threshold_tokens: int = Field(default=1024, ge=1)
     rollout_path: Literal["async", "factory_oracle"] = "async"
     profile: ProfileConfig = ProfileConfig()
     tracking: TrackingConfig = TrackingConfig()
@@ -276,6 +298,7 @@ class ServeConfig(StrictModel):
     model_path: str = "artifacts/models/qwen3.5-2b-sft-grpo-merged"
     model_revision: str | None = None
     served_model_name: str = "smolqwen"
+    dtype: str = "bfloat16"
     max_model_len: int = Field(default=32768, ge=512)
     # vLLM binds to loopback; the key-checking proxy is the only exposed service,
     # because `--api-key` challenges GUARDED_PREFIX paths only.
@@ -291,6 +314,13 @@ class ServeConfig(StrictModel):
     max_num_batched_tokens: int = Field(default=8192, ge=1)
     enable_chunked_prefill: bool = True
     gpu_memory_utilization: float = Field(default=0.90, gt=0.0, le=1.0)
+    benchmark_num_prompts: int = Field(default=100, ge=1)
+    benchmark_input_len: int = Field(default=1024, ge=1)
+    benchmark_output_len: int = Field(default=256, ge=1)
+    benchmark_percentiles: Sequence[int] = (50, 95, 99)
+    readiness_timeout_s: float = Field(default=600.0, gt=0.0)
+    readiness_poll_interval_s: float = Field(default=2.0, gt=0.0)
+    sweep_num_runs: int = Field(default=3, ge=1)
     output_dir: str = "artifacts/serving"
     profile: ProfileConfig = ProfileConfig()
     tracking: TrackingConfig = TrackingConfig()

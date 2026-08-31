@@ -1,0 +1,4 @@
+# Pending the target-L4 sweep and paired BFCL re-evaluation. Hardware supports
+# native FP8, but null remains the default until quality and speed are measured.
+quantization: null
+speculative_num_tokens: null

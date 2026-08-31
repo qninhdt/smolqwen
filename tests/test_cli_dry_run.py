@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -73,13 +74,14 @@ def test_probe_subcommand_needs_no_config(capsys: pytest.CaptureFixture[str]) ->
     assert "gpu available" in out
 
 
-def test_unimplemented_stage_exits_nonzero_naming_its_phase(
+def test_train_grpo_without_a_profile_names_the_required_preflight(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    # A stub that silently succeeded would be mistaken for a completed run.
     exit_code = main(["train-grpo", "--profile", "l4"])
     assert exit_code == 2
-    assert "Phase 7" in capsys.readouterr().err
+    stderr = capsys.readouterr().err
+    assert "profile-difficulty" in stderr
+    assert "GRPO error" in stderr
 
 
 def test_parser_exposes_pinned_revision_on_evaluate() -> None:
@@ -110,3 +112,16 @@ def test_parser_exposes_pinned_revision_on_evaluate() -> None:
     assert args.max_num_seqs == 64
     assert args.chunked_prefill is True
     assert args.prefix_caching is False
+
+
+def test_bench_and_sweep_report_a_missing_key_without_traceback(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    monkeypatch.delenv("VLLM_API_KEY", raising=False)
+    override = f"output_dir={tmp_path}"
+    assert main(["bench", "--profile", "l4", "--dataset", "random", "--override", override]) == 2
+    assert "VLLM_API_KEY" in capsys.readouterr().err
+    assert main(["sweep", "--profile", "l4", "--override", override]) == 2
+    assert "VLLM_API_KEY" in capsys.readouterr().err

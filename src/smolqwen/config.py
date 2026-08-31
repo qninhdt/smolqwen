@@ -222,6 +222,13 @@ def resolve(
         # A profile YAML holds sizing fields at its top level; nest them under the
         # stage model's `profile` section so a profile cannot reach a semantic key.
         merged = deep_merge(merged, {"profile": profile_payload})
+        if stage == "serve":
+            # Serving is the intentional exception to sizing-only GPU profiles:
+            # sm89 L4 and sm80 A100 require different quantization strategies.
+            # Keep those measured overlays separate from training-owned fields.
+            serving_profile = directory / "serving" / f"{profile}.yaml"
+            if serving_profile.is_file():
+                merged = deep_merge(merged, _load_yaml(serving_profile))
 
     for spec in overrides:
         merged = deep_merge(merged, parse_override(model, spec))

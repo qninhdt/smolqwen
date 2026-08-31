@@ -1,26 +1,12 @@
-"""Collate Phase 2 records into padded batches with labels built from the loss mask.
-
-The records carry `prompt_ids`, `completion_ids` and a `loss_mask` aligned to the
-completion. Training needs one flat `input_ids` per sample plus `labels` where
-every non-supervised position is `IGNORE_INDEX`. Two failure modes this module
-exists to prevent:
-
-- **A mask off by one token trains the model on tool output** and nothing reports
-  it. So labels are derived positionally from the stored mask, never re-derived by
-  searching for markers in decoded text.
-- **Padding silently shifts the mask.** Padded positions must be ignored in the
-  loss and masked in attention. Right-padding is used so the prompt/completion
-  boundary stays at a fixed offset from position 0.
-
-Causal-LM label shifting is the model's job (`transformers` shifts internally), so
-`labels[i]` corresponds to `input_ids[i]` here.
-"""
+"""Validate full-trajectory records and provide the diagnostic padded collator."""
 
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
+
+from smolqwen.data.convert_sft import SFT_SCHEMA_VERSION, SFT_SEMANTICS
 
 IGNORE_INDEX = -100
 
@@ -64,32 +50,28 @@ class Batch:
 
 
 def record_to_sequence(record: Mapping[str, Any]) -> tuple[list[int], list[int]]:
-    """Flatten one record into `(input_ids, labels)` before padding.
-
-    The prompt is entirely masked: loss covers the current segment's assistant
-    tokens only, which is exactly what `loss_mask` marks over the completion.
-    """
-    prompt_ids = list(record["prompt_ids"])
-    completion_ids = list(record["completion_ids"])
-    loss_mask = list(record["loss_mask"])
-
-    if len(loss_mask) != len(completion_ids):
+    """Validate and return the already aligned ids/labels from schema v2."""
+    schema_matches = record.get("schema_version") == SFT_SCHEMA_VERSION
+    semantics_match = record.get("semantics") == SFT_SEMANTICS
+    if not schema_matches or not semantics_match:
         raise CollateError(
-            f"{record.get('trajectory_id', '?')}#{record.get('segment_index', '?')}: "
-            f"loss_mask length {len(loss_mask)} != completion length {len(completion_ids)}"
+            "incompatible SFT shard; regenerate full-trajectory schema v2 with "
+            "`smolqwen prepare-sft`"
         )
-    if not any(loss_mask):
-        raise CollateError(
-            f"{record.get('trajectory_id', '?')}#{record.get('segment_index', '?')}: "
-            "no supervised token; the record should never have been written"
-        )
-
-    input_ids = prompt_ids + completion_ids
-    labels = [IGNORE_INDEX] * len(prompt_ids)
-    labels += [
-        token if flag else IGNORE_INDEX
-        for token, flag in zip(completion_ids, loss_mask, strict=True)
-    ]
+    input_ids = [int(token) for token in record["input_ids"]]
+    labels = [int(label) for label in record["labels"]]
+    uid = record.get("trajectory_uid", "?")
+    if len(input_ids) != len(labels):
+        raise CollateError(f"{uid}: labels length {len(labels)} != input length {len(input_ids)}")
+    if record.get("seq_length") != len(input_ids):
+        raise CollateError(f"{uid}: seq_length does not match input_ids")
+    if not any(label != IGNORE_INDEX for label in labels):
+        raise CollateError(f"{uid}: no supervised token; the record should never have been written")
+    for token, label in zip(input_ids, labels, strict=True):
+        if label not in (IGNORE_INDEX, token):
+            raise CollateError(f"{uid}: label must be -100 or equal its input token")
+    if record.get("supervised_tokens") != sum(label != IGNORE_INDEX for label in labels):
+        raise CollateError(f"{uid}: supervised_tokens does not match labels")
     return input_ids, labels
 
 
@@ -101,17 +83,19 @@ def collate(
 ) -> Batch:
     """Right-pad a batch of records, ignoring padded positions in the loss.
 
-    `max_length` truncates from the right when given. Truncation here is a
-    last-resort guard, not the budget mechanism: Phase 2 already skips over-cap
-    trajectories whole, so a batch reaching this path with an over-length record
-    means the cap and the shard disagree.
+    Over-cap records are rejected rather than truncated; conversion owns the cap.
     """
     sequences = [record_to_sequence(record) for record in records]
     if not sequences:
         return Batch((), (), ())
 
     if max_length is not None:
-        sequences = [(ids[:max_length], labels[:max_length]) for ids, labels in sequences]
+        over = [len(ids) for ids, _ in sequences if len(ids) > max_length]
+        if over:
+            raise CollateError(
+                f"record length {max(over)} exceeds configured max_length {max_length}; "
+                "regenerate shards with the matching cap"
+            )
 
     width = max(len(ids) for ids, _ in sequences)
     input_rows: list[tuple[int, ...]] = []
@@ -133,5 +117,43 @@ def collator(pad_token_id: int, *, max_length: int | None = None) -> Any:
 
     def call(features: Sequence[Mapping[str, Any]]) -> Any:
         return collate(features, pad_token_id=pad_token_id, max_length=max_length).to_torch()
+
+    return call
+
+
+def padding_free_collator(max_tokens: int) -> Any:
+    """Flatten complete rows and emit boundaries for FA2, GDN, and causal conv."""
+
+    def call(features: Sequence[Mapping[str, Any]]) -> Any:
+        import torch
+
+        sequences = [record_to_sequence(feature) for feature in features]
+        if not sequences:
+            raise CollateError("padding-free collator received an empty batch")
+        lengths = [len(input_ids) for input_ids, _ in sequences]
+        total = sum(lengths)
+        if total > max_tokens:
+            raise CollateError(f"batch has {total} tokens, above token budget {max_tokens}")
+        input_ids = [token for row, _ in sequences for token in row]
+        labels = [label for _, row in sequences for label in row]
+        position_ids = [position for length in lengths for position in range(length)]
+        sequence_ids = [index for index, length in enumerate(lengths) for _ in range(length)]
+        cumulative = [0]
+        for length in lengths:
+            cumulative.append(cumulative[-1] + length)
+        max_length = max(lengths)
+        cu_seqlens = torch.tensor(cumulative, dtype=torch.int32)
+        return {
+            "input_ids": torch.tensor([input_ids], dtype=torch.long),
+            "labels": torch.tensor([labels], dtype=torch.long),
+            "position_ids": torch.tensor([position_ids], dtype=torch.long),
+            # FlashAttention and FLA use cumulative boundaries; causal-conv1d
+            # uses seq_idx to reset its depthwise convolution state.
+            "cu_seq_lens_q": cu_seqlens,
+            "cu_seq_lens_k": cu_seqlens,
+            "max_length_q": max_length,
+            "max_length_k": max_length,
+            "seq_idx": torch.tensor([sequence_ids], dtype=torch.int32),
+        }
 
     return call

@@ -203,6 +203,20 @@ class Trajectory:
     steps: int
 
     @property
+    def task_id(self) -> str:
+        """The release task id, used only as the train/validation grouping key."""
+        return self.trajectory_id
+
+    @property
+    def trajectory_uid(self) -> str:
+        """Deterministic identity for one released row.
+
+        The release reuses ``task_id`` for the conversation and
+        non-conversation variants, so it is not a unique trajectory identity.
+        """
+        return f"{self.task_id}:{self.traj_type}"
+
+    @property
     def is_conversation(self) -> bool:
         """Conv vs Non-Conv, by the release's own `traj_type` label.
 

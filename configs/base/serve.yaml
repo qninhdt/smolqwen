@@ -3,6 +3,7 @@
 
 model_path: artifacts/models/qwen3.5-2b-sft-grpo-merged
 served_model_name: smolqwen
+dtype: bfloat16
 
 max_model_len: 32768
 
@@ -33,5 +34,13 @@ max_num_seqs: 64
 max_num_batched_tokens: 8192
 enable_chunked_prefill: true
 gpu_memory_utilization: 0.90
+
+benchmark_num_prompts: 100
+benchmark_input_len: 1024
+benchmark_output_len: 256
+benchmark_percentiles: [50, 95, 99]
+readiness_timeout_s: 600.0
+readiness_poll_interval_s: 2.0
+sweep_num_runs: 3
 
 output_dir: artifacts/serving

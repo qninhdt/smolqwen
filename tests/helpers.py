@@ -16,6 +16,7 @@ test that catches it.
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
 
@@ -24,6 +25,7 @@ from transformers.utils.chat_template_utils import render_jinja_template
 _FIXTURES = Path(__file__).resolve().parent / "fixtures"
 _TEMPLATE_PATH = _FIXTURES / "qwen35_chat_template.jinja"
 _TEMPLATE: str | None = None
+ChatTools = list[dict[Any, Any] | Callable[..., Any]] | None
 
 
 def load_template() -> str:
@@ -69,6 +71,8 @@ class OfflineTokenizer:
     def __init__(self, *, token_size: int = 64, shape: str = "tool_role") -> None:
         self._token_size = token_size
         self.shape = shape
+        self.chat_template = load_template()
+        self._ids_to_chunks: dict[int, str] = {}
 
     # `render.render_segment` calls `apply_chat_template` and `__call__` only; we
     # implement exactly the protocol surface it touches.
@@ -76,20 +80,49 @@ class OfflineTokenizer:
         self,
         conversation: Any,
         *,
-        tools: list[dict[str, Any]] | None = None,
+        tools: ChatTools = None,
         tokenize: bool = False,
         add_generation_prompt: bool = False,
         enable_thinking: bool = True,
+        chat_template: str | None = None,
+        return_dict: bool = False,
+        return_assistant_tokens_mask: bool = False,
         **_: Any,
-    ) -> str:
-        if tokenize:
-            raise NotImplementedError("this tokenizer only tokenizes via __call__")
-        return _render(
-            conversation,
+    ) -> Any:
+        if not tokenize:
+            return _render(
+                conversation,
+                tools=tools,
+                add_generation_prompt=add_generation_prompt,
+                enable_thinking=enable_thinking,
+            )
+
+        out = render_jinja_template(
+            [conversation],
+            chat_template=chat_template or self.chat_template,
             tools=tools,
             add_generation_prompt=add_generation_prompt,
             enable_thinking=enable_thinking,
+            return_assistant_tokens_mask=return_assistant_tokens_mask,
         )
+        rendered_chats, generation_spans = cast(tuple[list[str], list[list[tuple[int, int]]]], out)
+        rendered = rendered_chats[0]
+        # Character tokens make Jinja's generation character spans exact. This is
+        # intentionally only the offline tokenizer's mask mode; production uses
+        # the fast tokenizer's native char-to-token alignment.
+        input_ids = [self._remember(character) for character in rendered]
+        assistant_mask = [0] * len(input_ids)
+        for start, end in generation_spans[0]:
+            assistant_mask[start:end] = [1] * (end - start)
+        if not return_dict:
+            return input_ids
+        result: dict[str, list[int]] = {
+            "input_ids": input_ids,
+            "attention_mask": [1] * len(input_ids),
+        }
+        if return_assistant_tokens_mask:
+            result["assistant_masks"] = assistant_mask
+        return result
 
     def __call__(self, text: str, **_: Any) -> dict[str, list[int]]:
         return {"input_ids": self._encode(text)}
@@ -100,7 +133,23 @@ class OfflineTokenizer:
         # -- identical text produces identical ids so the prompt is a literal
         # prefix of the longer render).
         tokens = [text[i : i + self._token_size] for i in range(0, len(text), self._token_size)]
-        return [_stable_id(token) for token in tokens]
+        return [self._remember(token) for token in tokens]
+
+    def _remember(self, token: str) -> int:
+        identifier = _stable_id(token)
+        # First-wins: the rollout path decodes sampled ids back to text through
+        # this map, so a chunk must decode to the text that produced it.
+        self._ids_to_chunks.setdefault(identifier, token)
+        return identifier
+
+    def decode(self, ids: list[int], **_: Any) -> str:
+        try:
+            return "".join(self._ids_to_chunks[int(identifier)] for identifier in ids)
+        except KeyError as exc:
+            raise KeyError(
+                f"id {exc} was never encoded by this tokenizer; decode is only "
+                "defined for chunks this instance produced"
+            ) from exc
 
 
 def _stable_id(token: str) -> int:
@@ -176,6 +225,21 @@ def tiny_qwen35_model(*, vocab_size: int = 256) -> Any:
     )
     factory: Any = Qwen3_5ForCausalLM
     return factory(config)
+
+
+def smoke_device() -> str:
+    """Where the tiny mixed-mixer model can actually take a step.
+
+    Transformers resolves `causal_conv1d_fn` once, at import: with the
+    `causal_conv1d` package installed it binds that package's CUDA kernel, which
+    rejects CPU tensors outright. So a host that has the kernel -- every GPU
+    target, where the kernel is mandatory -- must run these steps on the device,
+    while CPU-only CI keeps the pure-torch conv fallback. Choosing by device
+    availability rather than by kernel import keeps one answer for both mixers.
+    """
+    import torch
+
+    return "cuda" if torch.cuda.is_available() else "cpu"
 
 
 def write_tiny_checkpoint(directory: Path, *, vocab_size: int = 256) -> Path:

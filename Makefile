@@ -30,7 +30,7 @@ fmt:
 # Resolution is a pure function, so a config typo surfaces here rather than
 # thirty minutes into a run.
 smoke:
-	@for stage in profile-data prepare-sft train-sft evaluate serve; do \
+	@for stage in profile-data prepare-sft train-sft evaluate serve bench sweep; do \
 		for profile in l4 a100; do \
 			uv run smolqwen $$stage --profile $$profile --dry-run > /dev/null \
 				|| exit 1; \

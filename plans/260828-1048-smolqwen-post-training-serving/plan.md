@@ -61,14 +61,14 @@ multi-turn path as a separate `AsyncGRPOTrainer` rather than folding it into
 
 | # | Phase | Status |
 |---|-------|--------|
-| 1 | [Phase 1: Project scaffold, GPU profiles, CLI](./phase-01-start.md) | Complete except CI workflow, `scripts/setup_colab.sh`, `notebooks/00-probe-gpu.ipynb` |
+| 1 | [Phase 1: Project scaffold, GPU profiles, CLI](./phase-01-start.md) | In progress — code, setup, and CI definitions CPU-verified; remote clean-checkout CI, GPU probe artifacts, hashed wheel URLs, and environment hygiene pending |
 | 2 | [Phase 2: Data pipeline and trajectory profiler](./phase-02-data-pipeline-and-trajectory-profiler.md) | Complete — real profile and conversion run |
 | 3 | [Phase 3: Reasoning SFT](./phase-03-reasoning-sft.md) | Code complete, CPU-verified; GPU sweep and training run pending a card |
-| 4 | [Phase 4: Environment runtime and verifier](./phase-04-environment-runtime-and-verifier.md) | Pending |
+| 4 | [Phase 4: Environment runtime and verifier](./phase-04-environment-runtime-and-verifier.md) | Complete — environment runtime and verifier CPU-verified |
 | 5 | [Phase 5: Evaluation harness and baseline results](./phase-05-evaluation-harness-and-baseline-results.md) | Code complete, CPU-verified; Base/SFT GPU results pending Phase 3 checkpoint |
-| 6 | [Phase 6: Async rollout scheduler](./phase-06-async-rollout-scheduler.md) | Pending |
-| 7 | [Phase 7: Agentic GRPO and final results](./phase-07-agentic-grpo-and-final-results.md) | Pending |
-| 8 | [Phase 8: vLLM serving optimization](./phase-08-vllm-serving-optimization.md) | Pending |
+| 6 | [Phase 6: Async rollout scheduler](./phase-06-async-rollout-scheduler.md) | In progress — code/CPU verification and production trainer wiring complete; real-L4 rollout smoke is proven, while full profile measurements remain pending |
+| 7 | [Phase 7: Agentic GRPO and final results](./phase-07-agentic-grpo-and-final-results.md) | In progress — trainer/reward/curriculum/resume code and CPU smoke complete; target-GPU profiling, training, and final evaluation pending |
+| 8 | [Phase 8: vLLM serving optimization](./phase-08-vllm-serving-optimization.md) | In progress — code complete, CPU-verified, and bounded real-L4 serving/benchmark/eval smoke passed; sweeps and live Compose/tunnel evidence pending |
 
 Dependency chain is linear except Phase 4, which only needs Phase 1: it can be
 built while SFT trains. Phase 5 needs 3 (SFT checkpoint) and 4 (held-out
@@ -318,14 +318,14 @@ must name them separately in the schema.
 
 ## Success Criteria
 
-- [ ] `smolqwen` CLI drives the whole pipeline from config: data prep → SFT → GRPO → eval → serve. Colab notebooks are thin wrappers.
+- [x] `smolqwen` CLI drives the whole pipeline from config: data prep → SFT → GRPO → eval → serve. Colab notebooks are thin wrappers.
 - [ ] Both GPU profiles exist as configs, and both were probed for VRAM/throughput before the full training run started; the RL profile choice cites Phase 6's episodes/hour A/B.
-- [ ] RL rollouts are interactive end to end; no flattened trajectory generation anywhere in the codebase.
-- [ ] Test proves environment state isolation: two instances from one `init_config`, mutate one, the other is unchanged.
-- [ ] Test proves the verifier runner: known-correct state → 1.0, known-partial → the exact expected fraction, initial state → appropriately low.
-- [ ] Test proves the chat template preserves reasoning at exactly the positions the training format assumes, and tool-call parse/serialize round-trips.
-- [ ] `env_mask` correctness is measured, not assumed: token drift between the accumulated spans and a fresh re-render is classified and logged per turn, not validated against a fixture built by the same concatenation rule.
-- [ ] No trainer is ever constructed with both `rollout_func` and `environment_factory`/`tools`; a test fails if both are configured.
+- [x] RL rollouts are interactive end to end; no flattened trajectory generation anywhere in the codebase.
+- [x] Test proves environment state isolation: two instances from one `init_config`, mutate one, the other is unchanged.
+- [x] Test proves the verifier runner: known-correct state → 1.0, known-partial → the exact expected fraction, initial state → appropriately low.
+- [x] Test proves the chat template preserves reasoning at exactly the positions the training format assumes, and tool-call parse/serialize round-trips.
+- [x] `env_mask` correctness is measured, not assumed: token drift between the accumulated spans and a fresh re-render is classified and logged per turn, not validated against a fixture built by the same concatenation rule.
+- [x] No trainer is ever constructed with both `rollout_func` and `environment_factory`/`tools`; a test fails if both are configured.
 - [ ] Three checkpoints evaluated under identical decoding, system prompt, tool harness, and step limits.
 - [ ] `BFCL-MT(SFT) > BFCL-MT(Base)` and `BFCL-MT(SFT+RL) > BFCL-MT(SFT)`, with held-out EnvScaler reward rising under RL as confirmation.
 - [ ] Rollout throughput A/B recorded in episodes/hour — baseline vs async scheduler — not GPU utilization percent.

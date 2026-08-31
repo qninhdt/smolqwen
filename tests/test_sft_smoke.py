@@ -1,13 +1,15 @@
-"""SFT smoke: two steps on a tiny random-weight Qwen3.5 on CPU, loss finite.
+"""SFT smoke: two steps on a tiny random-weight Qwen3.5, loss finite.
 
 The point is not that a 4-layer random model learns anything. It is that the
 whole assembly path executes -- shard load, mask validation, `datasets` wrapping,
-the Phase 3 collator, LoRA attachment, forward, backward, optimizer step -- on
-CPU, before a GPU run costs an hour to discover a wiring mistake.
+the Phase 3 collator, LoRA attachment, forward, backward, optimizer step --
+before a full GPU run costs an hour to discover a wiring mistake.
 
 The tiny model alternates `Qwen3_5GatedDeltaNet` and `Qwen3_5Attention` layers
 rather than being a generic causal LM, so the step path being exercised is the
-same mixed-mixer one the real checkpoint has.
+same mixed-mixer one the real checkpoint has. That is also why the steps run on
+whichever device `smoke_device` reports: with the mandatory `causal_conv1d`
+kernel installed, the GDN mixer has no CPU path.
 """
 
 from __future__ import annotations
@@ -19,6 +21,7 @@ from typing import Any
 
 import pytest
 
+from smolqwen.data.convert_sft import SFT_SCHEMA_VERSION, SFT_SEMANTICS
 from smolqwen.training.collate import IGNORE_INDEX, collator
 from smolqwen.training.sft import (
     SftError,
@@ -26,7 +29,7 @@ from smolqwen.training.sft import (
     load_shards,
     validate_shard,
 )
-from tests.helpers import tiny_qwen35_model
+from tests.helpers import smoke_device, tiny_qwen35_model
 
 pytestmark = pytest.mark.slow
 
@@ -37,14 +40,15 @@ def _record(index: int) -> dict[str, Any]:
     prompt = [(index + position) % VOCAB for position in range(6)]
     completion = [(index + position + 30) % VOCAB for position in range(5)]
     return {
-        "trajectory_id": f"t{index}",
+        "schema_version": SFT_SCHEMA_VERSION,
+        "semantics": SFT_SEMANTICS,
+        "trajectory_uid": f"t{index}:non_conversation",
+        "task_id": f"t{index}",
         "env_id": "env_1_sft",
         "mode": "non_conversation",
-        "segment_index": 0,
-        "prompt_ids": prompt,
-        "completion_ids": completion,
-        "loss_mask": [1, 1, 1, 0, 0],
-        "total_tokens": len(prompt) + len(completion),
+        "input_ids": prompt + completion,
+        "labels": [-100] * len(prompt) + completion[:3] + [-100, -100],
+        "seq_length": len(prompt) + len(completion),
         "supervised_tokens": 3,
     }
 
@@ -71,14 +75,14 @@ def test_shard_loading_validates_and_counts_tokens(tmp_path: Path) -> None:
     assert shards.train_stats.supervised_tokens == 4 * 3
 
 
-def test_a_shard_with_a_broken_mask_fails_at_load(tmp_path: Path) -> None:
+def test_a_shard_with_broken_labels_fails_at_load(tmp_path: Path) -> None:
     shard_dir = tmp_path / "sft"
     shard_dir.mkdir(parents=True)
     broken = _record(0)
-    broken["loss_mask"] = [1, 1]
+    broken["labels"] = [1, 1]
     (shard_dir / "train.jsonl").write_text(json.dumps(broken) + "\n", encoding="utf-8")
 
-    with pytest.raises(SftError, match="loss_mask length"):
+    with pytest.raises(SftError, match="labels length"):
         load_shards(shard_dir)
 
 
@@ -97,18 +101,28 @@ def test_missing_shard_names_the_command_that_writes_it(tmp_path: Path) -> None:
 
 def test_dataset_carries_only_the_columns_a_step_needs(tmp_path: Path) -> None:
     shards = load_shards(_write_shards(tmp_path))
-    assert set(shards.train.column_names) == {"prompt_ids", "completion_ids", "loss_mask"}
+    assert set(shards.train.column_names) == {
+        "schema_version",
+        "semantics",
+        "trajectory_uid",
+        "input_ids",
+        "labels",
+        "seq_length",
+        "supervised_tokens",
+        "length",
+    }
 
 
 def test_two_steps_on_a_tiny_model_produce_a_finite_loss(tmp_path: Path) -> None:
-    """The full step path on CPU: collator -> LoRA forward -> backward -> step."""
+    """The full step path: collator -> LoRA forward -> backward -> step."""
     import torch
     from peft import LoraConfig, get_peft_model
 
+    device = smoke_device()
     shard_dir = _write_shards(tmp_path, train=4)
     records = list(iter_records(shard_dir / "train.jsonl"))
 
-    model = _tiny_model()
+    model = _tiny_model().to(device)
     peft_model = get_peft_model(
         model,
         LoraConfig(
@@ -131,6 +145,7 @@ def test_two_steps_on_a_tiny_model_produce_a_finite_loss(tmp_path: Path) -> None
         batch = collate(records[step * 2 : step * 2 + 2])
         # The mask must survive the tensor boundary, not just the list one.
         assert (batch["labels"] == IGNORE_INDEX).any()
+        batch = {key: value.to(device) for key, value in batch.items()}
         outputs = peft_model(**batch)
         loss = outputs.loss
         assert torch.isfinite(loss), f"step {step} loss is not finite: {loss}"
@@ -151,10 +166,12 @@ def test_loss_is_computed_over_exactly_the_supervised_positions(tmp_path: Path) 
     """
     import torch
 
+    device = smoke_device()
     shard_dir = _write_shards(tmp_path, train=2)
     records = list(iter_records(shard_dir / "train.jsonl"))
-    model = _tiny_model()
+    model = _tiny_model().to(device)
     batch = collator(pad_token_id=0, max_length=32)(records[:2])
+    batch = {key: value.to(device) for key, value in batch.items()}
 
     with torch.no_grad():
         outputs = model(**batch)

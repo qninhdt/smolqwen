@@ -1,7 +1,7 @@
 ---
 phase: 6
 title: "Async rollout scheduler"
-status: pending
+status: in-progress
 priority: P1
 effort: "5d"
 dependencies: [4]
@@ -297,21 +297,21 @@ terminal reason), `generation.py` (token spans, logprobs, timings),
 
 ## Success Criteria
 
-- [ ] `environment_factory` path runs complete episodes and produces verifier rewards, in its own trainer with no `rollout_func`.
-- [ ] Trainer-kwargs exclusivity test passes: both `rollout_func` and `tools`/`environment_factory` on one trainer fails loudly.
-- [ ] `env_mask` alignment test passes differentially: mask is 1 exactly on model-generated tokens, 0 on every appended observation, verified against a fresh re-render rather than a same-rule fixture. `len(logprobs) == len(completion_ids) == len(env_mask)` asserted, with NaN at observation positions.
-- [ ] `sampling/sampling_logp_difference/max` logged, with a stated stop threshold.
-- [ ] Factory oracle reuse test passes: running the oracle over two consecutive batches of one scenario yields identical `final_state()` key sets — no attribute survives from the prior episode.
-- [ ] Drift-token distribution logged per turn; `FORK` and `REALIGN` counts visible in W&B.
-- [ ] Batch shape contract test passes: returned row count and group ordering match the input prompts, including when episodes fail and are replaced.
-- [ ] Infrastructure-failure test passes: `worker_crash` episodes are replaced rather than scored; `timeout` episodes are scored.
-- [ ] Rollout equivalence test passes: fixed seed + scripted policy → identical rewards on the factory and async paths.
-- [ ] No-turn-barrier test passes: one deliberately slow episode does not delay others under a simulated clock.
-- [ ] Terminal-condition test covers final answer, step cap, unrecoverable state, timeout, and worker crash.
+- [x] `environment_factory` path runs complete episodes and produces verifier rewards, in its own trainer with no `rollout_func`.
+- [x] Trainer-kwargs exclusivity test passes: both `rollout_func` and `tools`/`environment_factory` on one trainer fails loudly.
+- [x] `env_mask` alignment test passes differentially: mask is 1 exactly on model-generated tokens, 0 on every appended observation, verified against a fresh re-render rather than a same-rule fixture. `len(logprobs) == len(completion_ids) == len(env_mask)` asserted, with NaN at observation positions.
+- [x] `sampling/sampling_logp_difference/max` logged, with a stated stop threshold.
+- [x] Factory oracle reuse test passes: running the oracle over two consecutive batches of one scenario yields identical `final_state()` key sets — no attribute survives from the prior episode.
+- [x] Drift-token distribution logged per turn; `FORK` and `REALIGN` counts visible in W&B.
+- [x] Batch shape contract test passes: returned row count and group ordering match the input prompts, including when episodes fail and are replaced.
+- [x] Infrastructure-failure test passes: `worker_crash` episodes are replaced rather than scored; `timeout` episodes are scored.
+- [x] Rollout equivalence test passes: fixed seed + scripted policy → identical rewards on the factory and async paths.
+- [x] No-turn-barrier test passes: one deliberately slow episode does not delay others under a simulated clock.
+- [x] Terminal-condition test covers final answer, step cap, unrecoverable state, timeout, and worker crash.
 - [ ] `artifacts/rollout/ab_report.md` reports episodes/hour for both paths on both profiles, with the timeline breakdown including a weight-sync row. Prefix-cache hit rate is measured with per-step sync invalidation, not from a sync-free bench.
 - [ ] Async path beats the turn-synchronous baseline in episodes/hour on at least one profile — or the timeline profile explains why not, and that explanation is written down.
 - [ ] `generation_batch_size` (active pool) and `generation_concurrency` swept, with chosen values written into this phase's owned profile fields only.
-- [ ] vLLM KV budget explicitly capped in config; the 262k default is never inherited.
+- [x] vLLM KV budget explicitly capped in config; the 262k default is never inherited.
 
 ## Risk Assessment
 

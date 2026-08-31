@@ -1,12 +1,8 @@
-"""Assemble the LoRA SFT run: dataset, collator, trainer, callbacks, resume.
+"""Assemble full-trajectory, token-budget, padding-free LoRA SFT.
 
-The Phase 2 shards already carry `prompt_ids`, `completion_ids` and a
-`loss_mask`, so this module deliberately does **not** let TRL re-tokenize or
-re-derive the mask. `skip_prepare_dataset=True` plus the Phase 3 collator means
-the labels a step trains on are the ones `test_collate_mask.py` pins. Handing the
-records back to TRL's preparation pipeline would re-render text through the chat
-template and re-infer the completion boundary, and any disagreement there trains
-the model on tool output with nothing reporting it.
+The shards already carry exact full-render ``input_ids`` and ``labels``, so this
+module deliberately does **not** let TRL re-tokenize or re-derive assistant
+ownership. ``skip_prepare_dataset=True`` keeps those persisted labels authoritative.
 
 Two more decisions worth stating because they are not defaults:
 
@@ -36,15 +32,22 @@ from smolqwen.artifacts import CheckpointStore, ResumeState
 from smolqwen.config_models import SftConfig
 from smolqwen.tokenizer import assert_text_only_processing_class, load_tokenizer
 from smolqwen.tracking import Tracker
-from smolqwen.training.collate import IGNORE_INDEX, CollateError, collator, record_to_sequence
+from smolqwen.training.collate import (
+    IGNORE_INDEX,
+    CollateError,
+    padding_free_collator,
+    record_to_sequence,
+)
 from smolqwen.training.optim import (
     Toggle,
+    apply_regional_compile,
     cast_adapters,
     format_ledger,
     ledger,
     resolve_attn_implementation,
     resolve_liger,
 )
+from smolqwen.training.token_batching import TokenBudgetBatchSampler
 
 
 class SftError(RuntimeError):
@@ -111,11 +114,25 @@ def validate_shard(path: Path | str, *, label: str) -> ShardStats:
 # `env_id`, ...) are dropped at load rather than by `remove_unused_columns`,
 # because the collator is handed raw feature dicts and a column it ignores is
 # only weight in the Arrow table.
-FEATURE_COLUMNS = ("prompt_ids", "completion_ids", "loss_mask")
+FEATURE_COLUMNS = (
+    "schema_version",
+    "semantics",
+    "trajectory_uid",
+    "input_ids",
+    "labels",
+    "seq_length",
+    "supervised_tokens",
+)
+
+# Length-grouped sampling reads this column. It is materialized at load rather
+# than left for the sampler to probe: without it `LengthGroupedSampler` tokenizes
+# the whole shard to measure it, which on a 2 GB shard is minutes of startup for a
+# number the records already determine.
+LENGTH_COLUMN = "length"
 
 
 def load_shard_dataset(path: Path | str) -> Any:
-    """Memory-map one shard through Arrow, keeping only the feature columns.
+    """Memory-map one shard through Arrow, keeping only what a step needs.
 
     `Dataset.from_dict` over parsed Python lists would need the whole 2 GB shard
     resident; `load_dataset("json", ...)` writes an Arrow cache once and then
@@ -124,8 +141,15 @@ def load_shard_dataset(path: Path | str) -> Any:
     from datasets import load_dataset
 
     dataset = load_dataset("json", data_files=str(path), split="train")
-    extra = [column for column in dataset.column_names if column not in FEATURE_COLUMNS]
-    return dataset.remove_columns(extra) if extra else dataset
+    keep = (*FEATURE_COLUMNS, LENGTH_COLUMN)
+    extra = [column for column in dataset.column_names if column not in keep]
+    dataset = dataset.remove_columns(extra) if extra else dataset
+    if LENGTH_COLUMN not in dataset.column_names:
+        dataset = dataset.add_column(
+            LENGTH_COLUMN,
+            [len(row) for row in dataset["input_ids"]],
+        )
+    return dataset
 
 
 @dataclass(frozen=True)
@@ -208,8 +232,10 @@ def _sft_config(config: SftConfig, *, attn: Toggle, use_liger: bool, report_to: 
     optimization = config.optimization
     return TrlSftConfig(
         output_dir=config.output_dir,
-        per_device_train_batch_size=profile.micro_batch,
-        per_device_eval_batch_size=profile.micro_batch,
+        # A custom batch_sampler owns row count; TrainingArguments still requires
+        # positive compatibility values here.
+        per_device_train_batch_size=1,
+        per_device_eval_batch_size=1,
         gradient_accumulation_steps=profile.grad_accum,
         learning_rate=training.learning_rate,
         num_train_epochs=training.num_train_epochs,
@@ -238,12 +264,77 @@ def _sft_config(config: SftConfig, *, attn: Toggle, use_liger: bool, report_to: 
         completion_only_loss=False,
         assistant_only_loss=False,
         packing=False,
+        # Project-owned flattening emits Qwen3.5 GDN/conv boundaries that native
+        # TRL padding-free does not provide.
+        padding_free=False,
         max_length=None,
         remove_unused_columns=False,
         report_to=report_to,
         push_to_hub=False,
         save_total_limit=2,
     )
+
+
+def _token_budget_trainer_class() -> Any:
+    """Create the TRL subclass lazily so CLI dry-runs stay lightweight."""
+    from torch.utils.data import DataLoader
+    from trl import SFTTrainer  # type: ignore[attr-defined]
+
+    class TokenBudgetSFTTrainer(SFTTrainer):
+        def __init__(self, *args: Any, max_tokens_per_microbatch: int, **kwargs: Any) -> None:
+            self.max_tokens_per_microbatch = max_tokens_per_microbatch
+            self.token_batch_sampler: TokenBudgetBatchSampler | None = None
+            super().__init__(*args, **kwargs)
+
+        def _token_dataloader(self, dataset: Any, *, training: bool) -> Any:
+            sampler = TokenBudgetBatchSampler(
+                [int(length) for length in dataset[LENGTH_COLUMN]],
+                max_tokens=self.max_tokens_per_microbatch,
+                seed=int(self.args.seed),
+                shuffle=training,
+            )
+            if training:
+                self.token_batch_sampler = sampler
+            dataloader = DataLoader(
+                dataset,
+                batch_sampler=sampler,
+                collate_fn=self.data_collator,
+                num_workers=self.args.dataloader_num_workers,
+                pin_memory=self.args.dataloader_pin_memory,
+            )
+            return self.accelerator.prepare(dataloader)
+
+        def get_train_dataloader(self) -> Any:
+            if self.train_dataset is None:
+                raise SftError("training requires a train dataset")
+            return self._token_dataloader(self.train_dataset, training=True)
+
+        def get_eval_dataloader(self, eval_dataset: Any | None = None) -> Any:
+            dataset = eval_dataset if eval_dataset is not None else self.eval_dataset
+            if dataset is None:
+                raise SftError("evaluation requires an eval dataset")
+            return self._token_dataloader(dataset, training=False)
+
+    return TokenBudgetSFTTrainer
+
+
+def assert_padding_free_runtime() -> None:
+    """Fail closed unless all target-kernel boundary paths are available."""
+    import importlib.util
+
+    import torch
+
+    missing = [
+        package
+        for package in ("flash_attn", "fla", "causal_conv1d")
+        if importlib.util.find_spec(package) is None
+    ]
+    if not torch.cuda.is_available() or missing:
+        detail = f"missing kernels: {', '.join(missing)}" if missing else "CUDA unavailable"
+        raise SftError(
+            "padding-free Qwen3.5 requires real CUDA FlashAttention, FLA GDN, "
+            f"and causal-conv boundary kernels; {detail}"
+        )
 
 
 class ThroughputCallback(TrainerCallback):
@@ -328,8 +419,6 @@ def build_trainer(
     dataset_dir: Path | str | None = None,
 ) -> Assembled:
     """Assemble the trainer without starting it, so a smoke test can inspect it."""
-    from trl import SFTTrainer  # type: ignore[attr-defined]
-
     shards = load_shards(dataset_dir or config.dataset_dir)
 
     tokenizer = assert_text_only_processing_class(
@@ -357,20 +446,27 @@ def build_trainer(
         resume_run_id=resume_state.wandb_run_id if resume_state else None,
     )
 
-    trainer = SFTTrainer(
+    trainer_class = _token_budget_trainer_class()
+    trainer = trainer_class(
         model=config.model_id,
         args=_sft_config(config, attn=attn, use_liger=liger.enabled, report_to=[]),
-        data_collator=collator(pad_token_id, max_length=config.profile.max_seq_length),
+        data_collator=padding_free_collator(config.profile.max_tokens_per_microbatch),
         train_dataset=shards.train,
         eval_dataset=shards.eval,
         processing_class=tokenizer,
         peft_config=_lora_config(config),
+        max_tokens_per_microbatch=config.profile.max_tokens_per_microbatch,
     )
 
     adapters = cast_adapters(trainer.model, config.lora.adapter_dtype)
-    toggles = (attn, liger, adapters)
+    compiled = apply_regional_compile(
+        trainer.model,
+        exclude_patterns=config.optimization.compile_exclude_patterns,
+        enabled=config.optimization.regional_torch_compile,
+    )
+    toggles = (attn, liger, adapters, compiled)
 
-    tokens_per_step = config.profile.micro_batch * config.profile.max_seq_length
+    tokens_per_step = config.profile.max_tokens_per_microbatch
     trainer.add_callback(ThroughputCallback(run, tokens_per_step=tokens_per_step))
     trainer.add_callback(CheckpointPushCallback(checkpoint_store, run))
     run.config.update(ledger(toggles))
@@ -386,6 +482,7 @@ def build_trainer(
 
 def run_train_sft(config: SftConfig, *, resume: bool = False) -> int:
     """`smolqwen train-sft`: train, evaluate once at the end, record the ledger."""
+    assert_padding_free_runtime()
     assembled = build_trainer(config, resume=resume)
     trainer = assembled.trainer
     print(format_ledger(list(assembled.toggles)))

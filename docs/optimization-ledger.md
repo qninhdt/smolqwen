@@ -25,18 +25,78 @@ number.
 
 ## Measurements
 
-Empty by design rather than by omission: filling these needs a card that can hold
-the 2B model, and the sweep writes them here as it runs. `micro_batch`,
-`grad_accum` and `max_seq_length` are this phase's owned profile fields (see the
-plan's cross-phase contract table), and `max_seq_length` is seeded from
-`budgets.json` — a sweep may lower it, never raise it.
+`micro_batch`, `grad_accum` and `max_seq_length` are this phase's owned profile
+fields (see the plan's cross-phase contract table), and `max_seq_length` is
+seeded from `budgets.json` — a sweep may lower it, never raise it.
 
-| Toggle | s/Mtok before | s/Mtok after | peak VRAM before | peak VRAM after | decision |
-|---|---|---|---|---|---|
-| baseline (bf16 + checkpointing) | — | — | — | — | pending L4 sweep |
-| + liger fused CE | — | — | — | — | pending L4 sweep |
-| + bf16 adapters | — | — | — | — | pending L4 sweep |
-| + regional compile | — | — | — | — | pending L4 sweep |
+### Epoch-time sweep on one L4 (2026-08-30/31)
+
+Measured by [`scripts/colab-l4-sft-speed.py`](../scripts/colab-l4-sft-speed.py)
+on an NVIDIA L4 (22.034 GiB, sm89, torch 2.11+cu130) against 96 real prepared
+records from the Phase 2 shard. Every candidate runs in a fresh child process at
+the same effective batch of 16; the first optimizer step warms kernels and is
+excluded. Throughput is **valid** (unpadded) tokens per second, so a candidate
+cannot win by processing more padding, and the epoch estimate is that rate
+against the shard's 327,136,547 valid tokens.
+
+| Candidate | valid tok/s | epoch (h) | padding | peak reserved | vs. best |
+|---|---:|---:|---:|---:|---:|
+| **mb2 + group_by_length + regional compile** | **2043** | **44.5** | 3.6% | 12.66 GiB | — |
+| mb2 + grouped + reentrant checkpoint | 2031 | 44.8 | 3.6% | 12.71 GiB | −0.6% |
+| mb2 + grouped (no compile) | 2020 / 1991 | 45.0 / 45.6 | 2.8% / 3.6% | 12.40 / 12.67 GiB | −1.2% / −2.6% |
+| mb2 + grouped + pad-to-64 | 2017 | 45.0 | 4.1% | 12.67 GiB | −1.3% |
+| mb1 + grouped + compile | 1965 | 46.2 | 0% | 8.24 GiB alloc | −3.8% |
+| mb1, sequential order | 1631 | 55.7 | 0% | 9.20 GiB | −20.2% |
+| mb2, sequential order | 1394 | 65.2 | 10.7% | 16.29 GiB | −31.8% |
+| mb4 + grouped + compile | 1425 | 63.8 | 10.7% | 20.66 GiB | −30.3% |
+| mb4, sequential order | 1128 | 80.5 | 24.6% | 21.60 GiB | −44.8% |
+
+The committed L4 profile is therefore `micro_batch: 2`, `grad_accum: 8`,
+`group_by_length` sampling and regional compile: **44.5 h/epoch, down from 55.7 h
+at the previous `micro_batch: 1` default — a 20% cut.**
+
+**Length-grouped sampling is the single largest win, and it is what makes batching
+work at all.** These trajectories run 4.4k–15.7k tokens, so a random batch of 2
+pads to the longer sample and wastes 10.7% of every step; grouping drops that to
+2.8% and turns micro-batch 2 from 31.8% *slower* than batch 1 into 20% faster.
+Batch 4 is a hard ceiling for the wrong reason: even grouped it pads 10.7% and
+lands at 20.66 GiB, so it pays more memory to go 30% slower.
+
+### Knobs measured and rejected
+
+| Knob | Result | Why |
+|---|---|---|
+| `gradient_checkpointing: false` | OOM at micro-batch 1 **and** 2 | 21.77 GiB reserved of 22.03 available. Checkpointing is a precondition on this card, not a tunable — this is the measurement the baseline row claimed without evidence. |
+| `every_n_layers` 2/3/4 | OOM at both batches, even with `expandable_segments` | The coarsest setting still leaves 12 of 24 layers eager. At micro-batch 1 that peaks at 21.73 GiB against an 8.24 GiB fully-checkpointed baseline, so one eager layer costs >1.1 GiB and the ~9 GiB of headroom buys a handful of layers, never half of them. |
+| `use_reentrant: true` | 2031 vs 2043 tok/s | Within noise and strictly worse; the non-reentrant default also composes with compile. Keeping the default. |
+| `pad_to_multiple_of: 64` | 2017 vs 2043 tok/s | Fixed-width tiles do not pay for themselves once grouping has already cut padding to 3.6%; it *raises* padding to 4.1%. |
+| `compile_mode: reduce-overhead` | Crash | `cudaErrorStreamCaptureInvalidated`: CUDA-graph capture is incompatible with the Liger SwiGLU kernel in the compiled MLP region. Default mode only. |
+| dataloader workers / prefetch | Not swept | 6 CUDA-synchronized steps account for 559.3 s of 560.7 s wall — 0.24% of the step is outside the GPU, so there is nothing for the input pipeline to win. |
+
+Regional compile is a real but small win (+2.6% over the same configuration
+uncompiled, reproduced across two waves), and it costs ~250 s of one-time warmup
+in step 1 — negligible against a 44-hour epoch.
+
+### Batch ceiling probe (2026-08-30)
+
+The pinned Qwen3.5-2B checkpoint was loaded on an NVIDIA L4 (22.034 GiB) with
+bf16, LoRA `all-linear` rank 32, gradient checkpointing, FlashAttention 2, and
+Liger. Each point took one optimizer step in a fresh process. The complete
+evidence and caveats are in
+[`plans/reports/qa-260830-l4-batch-limits.md`](../plans/reports/qa-260830-l4-batch-limits.md).
+
+| Workload | Fixed token envelope | Largest pass | First OOM |
+|---|---:|---:|---:|
+| SFT micro-batch | 16,384/sample | 4 | 8 |
+| GRPO generation batch (Transformers generation, not vLLM) | 2,118 prompt + 512 completion | 64 | 128 |
+| GRPO trainer micro-batch | 4,096 + 4,096 | 1 | 2 |
+| GRPO trainer micro-batch | 2,048 + 2,048 | 2 | 4 |
+
+The SFT ceiling of 4 is a hard measured boundary for the stated cap, but its
+peak reserved usage leaves under 1 GiB of headroom; the committed L4 profile
+therefore remains conservative at `micro_batch: 1` until a real-shard run is
+completed. The GRPO generation row is an upper bound for the tested
+Transformers path only; colocated vLLM KV memory still needs a separate sweep.
 
 ### Why this host cannot fill them
 

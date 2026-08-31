@@ -34,18 +34,25 @@ training:
 
 optimization:
   bf16: true
-  # Without checkpointing, activations at the Phase 2 cap will not fit on L4 even
-  # at batch 1, so this is on for the baseline measurement rather than swept.
+  # Measured, not assumed: without checkpointing the run OOMs at 21.77 of 22.03 GiB
+  # on L4 at micro-batch 1 AND 2. `every_n_layers` 2/3/4 also OOM -- even the
+  # coarsest setting leaves 12 of 24 layers eager, and an eager layer costs >1.1 GiB
+  # against an 8.24 GiB checkpointed baseline. This is a precondition, not a knob.
   gradient_checkpointing: true
   # Load-bearing. Vocab is 248,320 with tied embeddings, so a dense logits tensor
   # is the dominant activation and the first thing to OOM on 24 GB -- ahead of the
   # weights. Phase 3 step 5 records the before/after that justifies this.
   liger_fused_linear_cross_entropy: true
   attn_implementation: flash_attention_2
-  # Off until Phase 3 step 7 measures it. GDN layers run flash-linear-attention
-  # Triton kernels that upstream marks torch.compiler.disable; compiling through
-  # them raises inductor errors, so the exclusion list is not optional.
-  regional_torch_compile: false
+  # Measured +2.6% valid tok/s on L4, reproduced across two waves, for ~250 s of
+  # one-time warmup in the first step -- negligible against a 44-hour epoch. Only
+  # the default compile mode: `reduce-overhead` crashes with
+  # cudaErrorStreamCaptureInvalidated because CUDA-graph capture is incompatible
+  # with the Liger SwiGLU kernel inside the compiled MLP region.
+  regional_torch_compile: true
+  # GDN layers run flash-linear-attention Triton kernels that upstream marks
+  # torch.compiler.disable; compiling through them raises inductor errors, so the
+  # exclusion list is not optional.
   compile_exclude_patterns:
     - linear_attn
     - mixer

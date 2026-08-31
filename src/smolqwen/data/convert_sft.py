@@ -1,19 +1,4 @@
-"""Convert trajectories into Qwen3.5-rendered SFT samples, split at real user boundaries.
-
-The converter emits:
-
-- Non-Conv trajectory -> one sample, with loss on every assistant turn.
-- Conv trajectory -> one sample per real user turn; within each segment loss
-  covers that segment's assistant turns only.
-
-The prompt/completion boundary and the loss mask are produced by
-`render.render_segment`, which slices at real user-message boundaries (the exact
-positions the template retains reasoning after) and masks by diffing consecutive
-renders rather than assuming concatenation is stable.
-
-Conversion is streaming: it never holds all 9k rendered trajectories in memory.
-Samples are written incrementally to a jsonl shard per key.
-"""
+"""Stream one released teacher trajectory into one full-trajectory SFT record."""
 
 from __future__ import annotations
 
@@ -22,26 +7,30 @@ from dataclasses import dataclass
 from typing import Any
 
 from smolqwen.data.loader import Trajectory
-from smolqwen.data.render import RenderedSample, split_segments
+from smolqwen.data.render import RenderedSample
 
 SKIP_TOO_LONG = "too_long"
+SFT_SCHEMA_VERSION = 2
+SFT_SEMANTICS = "full_trajectory_reasoning_v1"
 
 
 @dataclass(frozen=True)
 class Converted:
-    """A trajectory that produced at least one rendered sample within the cap."""
+    """A trajectory that produced its single rendered sample within the cap."""
 
-    trajectory_id: str
+    trajectory_uid: str
+    task_id: str
     env_id: str
     mode: str
-    samples: tuple[RenderedSample, ...]
+    sample: RenderedSample
 
 
 @dataclass(frozen=True)
 class Skipped:
     """A trajectory the converter did not emit, with the reason."""
 
-    trajectory_id: str
+    trajectory_uid: str
+    task_id: str
     reason: str
 
 
@@ -64,55 +53,49 @@ def convert_trajectories(
     """
     for trajectory in trajectories:
         try:
-            segments = split_segments(trajectory.messages)
-        except Exception as exc:
-            yield Skipped(trajectory.trajectory_id, f"unsegmentable: {exc}")
-            continue
-
-        samples: list[RenderedSample] = []
-        too_long = False
-        for index, segment in enumerate(segments):
             sample = render(
                 trajectory.messages,
-                segment,
                 tools=trajectory.tools,
                 shape=shape,
-                trajectory_id=trajectory.trajectory_id,
+                trajectory_uid=trajectory.trajectory_uid,
+                task_id=trajectory.task_id,
                 env_id=trajectory.env_id,
                 mode=trajectory.traj_type,
-                segment_index=index,
             )
-            if sample.total_tokens > max_seq_length:
-                too_long = True
-                break
-            samples.append(sample)
-
-        if too_long:
-            yield Skipped(trajectory.trajectory_id, SKIP_TOO_LONG)
+        except Exception as exc:
+            yield Skipped(
+                trajectory_uid=trajectory.trajectory_uid,
+                task_id=trajectory.task_id,
+                reason=f"unrenderable: {exc}",
+            )
             continue
-        if not samples:
-            yield Skipped(trajectory.trajectory_id, "no_supervised_segment")
+        if sample.total_tokens > max_seq_length:
+            yield Skipped(trajectory.trajectory_uid, trajectory.task_id, SKIP_TOO_LONG)
             continue
         yield Converted(
-            trajectory_id=trajectory.trajectory_id,
+            trajectory_uid=trajectory.trajectory_uid,
+            task_id=trajectory.task_id,
             env_id=trajectory.env_id,
             mode=trajectory.traj_type,
-            samples=tuple(samples),
+            sample=sample,
         )
 
 
 def sample_to_record(sample: RenderedSample) -> dict[str, Any]:
-    """The persisted shape: token ids and the loss mask, keyed for training."""
+    """Versioned persisted shape consumed by the full-trajectory trainer."""
     return {
-        "trajectory_id": sample.trajectory_id,
+        "schema_version": SFT_SCHEMA_VERSION,
+        "semantics": SFT_SEMANTICS,
+        "trajectory_uid": sample.trajectory_uid,
+        "task_id": sample.task_id,
         "env_id": sample.env_id,
         "mode": sample.mode,
-        "segment_index": sample.segment_index,
-        "prompt_ids": list(sample.prompt_ids),
-        "completion_ids": list(sample.completion_ids),
-        "loss_mask": list(sample.loss_mask),
-        "total_tokens": sample.total_tokens,
+        "input_ids": list(sample.input_ids),
+        "labels": list(sample.labels),
+        "seq_length": sample.total_tokens,
         "supervised_tokens": sample.supervised_tokens,
+        "template_fingerprint": sample.template_fingerprint,
+        "trailing_messages_removed": sample.trailing_messages_removed,
     }
 
 
@@ -130,13 +113,12 @@ class ConversionReport:
 
     def note_converted(self, event: Converted) -> None:
         self.converted += 1
-        self.samples += len(event.samples)
+        self.samples += 1
         if self.by_mode is None:
             self.by_mode = {}
         trajectories, samples = self.by_mode.get(event.mode, (0, 0))
-        self.by_mode[event.mode] = (trajectories + 1, samples + len(event.samples))
-        for sample in event.samples:
-            self.supervised_tokens += sample.supervised_tokens
+        self.by_mode[event.mode] = (trajectories + 1, samples + 1)
+        self.supervised_tokens += event.sample.supervised_tokens
 
     def note_skipped(self, event: Skipped) -> None:
         self.skipped += 1

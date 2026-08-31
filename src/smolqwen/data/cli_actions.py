@@ -22,7 +22,7 @@ from smolqwen.data.convert_sft import (
 )
 from smolqwen.data.loader import LoadStats, iter_trajectories, verify_sha256
 from smolqwen.data.profiler import format_profile_table, profile_dataset, write_profile
-from smolqwen.data.render import render_segment
+from smolqwen.data.render import render_training_sample
 from smolqwen.data.splits import Split, build_env_split_manifest, split_trajectory_ids
 from smolqwen.tokenizer import load_tokenizer
 
@@ -118,8 +118,8 @@ def run_prepare_sft(config: DataConfig) -> int:
     tokenizer = _tokenizer(config)
     shape = config.tool_result_shape
 
-    # Pass one: trajectory ids for the seeded split.
-    ids = [t.trajectory_id for t in iter_trajectories(sft_path)]
+    # Pass one: task groups for the seeded split. Paired row variants must stay together.
+    ids = [trajectory.task_id for trajectory in iter_trajectories(sft_path)]
     split = split_trajectory_ids(ids, seed=config.split_seed, val_fraction=config.val_fraction)
 
     # Pass two: render and route.
@@ -195,8 +195,8 @@ def _write_shards(
     train_path.parent.mkdir(parents=True, exist_ok=True)
     stats = LoadStats()
 
-    def render(messages: Any, segment: Any, **kwargs: Any) -> Any:
-        return render_segment(tokenizer, messages, segment, **kwargs)
+    def render(messages: Any, **kwargs: Any) -> Any:
+        return render_training_sample(tokenizer, messages, **kwargs)
 
     with (
         train_path.open("w", encoding="utf-8") as train_handle,
@@ -214,9 +214,8 @@ def _write_shards(
                 report.note_skipped(event)
                 continue
             report.note_converted(event)
-            partition = split.partition(event.trajectory_id)
-            for sample in event.samples:
-                handles[partition].write(json.dumps(sample_to_record(sample)) + "\n")
+            partition = split.partition(event.task_id)
+            handles[partition].write(json.dumps(sample_to_record(event.sample)) + "\n")
 
     return stats
 

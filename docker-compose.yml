@@ -1,0 +1,71 @@
+name: smolqwen
+
+services:
+  vllm-server:
+    build:
+      context: .
+      dockerfile: serving/Dockerfile
+    image: smolqwen-vllm:0.26.0
+    environment:
+      VLLM_API_KEY: ${VLLM_API_KEY:?VLLM_API_KEY must be set}
+      SMOLQWEN_PROFILE: ${SMOLQWEN_PROFILE:-l4}
+    volumes:
+      - ${MODEL_PATH:-./artifacts/models/qwen3.5-2b-sft-grpo-merged}:/opt/smolqwen/artifacts/models/qwen3.5-2b-sft-grpo-merged:ro
+      - ./artifacts/serving:/opt/smolqwen/artifacts/serving
+    ports:
+      # nginx shares this network namespace; vLLM's loopback-only :8000 is not published.
+      - ${PROXY_PORT:-8080}:8080
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          curl --fail --silent --show-error
+          -H "Authorization: Bearer $$VLLM_API_KEY"
+          http://127.0.0.1:8000/v1/models >/dev/null
+      interval: 10s
+      timeout: 5s
+      retries: 60
+      start_period: 120s
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  proxy:
+    image: nginx:1.28.0-alpine
+    network_mode: service:vllm-server
+    environment:
+      VLLM_API_KEY: ${VLLM_API_KEY:?VLLM_API_KEY must be set}
+    volumes:
+      - ./serving/proxy.conf:/etc/nginx/templates/default.conf.template:ro
+    depends_on:
+      vllm-server:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          wget -qO- --header="Authorization: Bearer $$VLLM_API_KEY"
+          http://127.0.0.1:8080/v1/models >/dev/null
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  bench:
+    image: smolqwen-vllm:0.26.0
+    entrypoint: ["smolqwen"]
+    command: ["bench", "--profile", "${SMOLQWEN_PROFILE:-l4}", "--dataset", "random"]
+    environment:
+      VLLM_API_KEY: ${VLLM_API_KEY:?VLLM_API_KEY must be set}
+      SMOLQWEN_BASE_URL: http://vllm-server:8080
+    volumes:
+      - ${MODEL_PATH:-./artifacts/models/qwen3.5-2b-sft-grpo-merged}:/opt/smolqwen/artifacts/models/qwen3.5-2b-sft-grpo-merged:ro
+      - ./third_party:/opt/smolqwen/third_party:ro
+      - ./artifacts/serving:/opt/smolqwen/artifacts/serving
+    depends_on:
+      proxy:
+        condition: service_healthy
+    profiles: [bench]

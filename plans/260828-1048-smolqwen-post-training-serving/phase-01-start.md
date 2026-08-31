@@ -1,7 +1,7 @@
 ---
 phase: 1
 title: "Project scaffold, GPU profiles, CLI"
-status: pending
+status: in-progress
 priority: P1
 effort: "2d"
 dependencies: []
@@ -137,15 +137,15 @@ no training code touches `huggingface_hub` directly.
 
 ## Success Criteria
 
-- [ ] `uv sync --dev && make check && make test` green locally; `uv.lock` committed and the resolved torch is 2.13.0.
-- [ ] A test asserts the pipeline's `processing_class` is a `PreTrainedTokenizerBase`, not a `ProcessorMixin` — the checkpoint is multimodal and a processor flips TRL onto its VLM code paths.
+- [x] `uv sync --dev && make check && make test` green locally; `uv.lock` committed and the resolved torch is 2.13.0.
+- [x] A test asserts the pipeline's `processing_class` is a `PreTrainedTokenizerBase`, not a `ProcessorMixin` — the checkpoint is multimodal and a processor flips TRL onto its VLM code paths.
 - [ ] CI green on a clean checkout with no GPU, no network, no HF token.
-- [ ] `smolqwen train-sft --config configs/base/sft.yaml --profile l4 --dry-run` validates config and exits 0 without importing torch CUDA paths.
-- [ ] `--override sft.training.learning_rate=1e-4` type-coerces; an unknown key fails at load with a clear message.
+- [x] `smolqwen train-sft --config configs/base/sft.yaml --profile l4 --dry-run` validates config and exits 0 without importing torch CUDA paths.
+- [x] `--override sft.training.learning_rate=1e-4` type-coerces; an unknown key fails at load with a clear message.
 - [ ] `artifacts/probe/l4.json` and `artifacts/probe/a100.json` committed; A100 VRAM recorded in the plan. Probe output contains no throughput or cost field.
-- [ ] `third_party/EnvScaler` pinned and read-only; nothing in `src/` mutates it.
-- [ ] A `CheckpointStore` round-trip test passes against a temp dir (Hub calls mocked).
-- [ ] Checkpoint pinning test passes: reads require an explicit revision sha; no eval path can call `latest_revision`.
+- [x] `third_party/EnvScaler` pinned and read-only; nothing in `src/` mutates it.
+- [x] A `CheckpointStore` round-trip test passes against a temp dir (Hub calls mocked).
+- [x] Checkpoint pinning test passes: reads require an explicit revision sha; no eval path can call `latest_revision`.
 - [ ] Kernel-wheel URLs in the `colab` extra carry pinned hashes; the resolved torch version is asserted in `setup_colab.sh` before any other install.
 - [ ] `.env.example` names required tokens without values; `.gitignore` covers `.env`, `artifacts/`, and the serving key file. CI asserts every committed `.ipynb` has empty output cells — a printed tunnel URL plus API key in a notebook cell is a published credential.
 

@@ -1,7 +1,7 @@
 ---
 phase: 4
 title: "Environment runtime and verifier"
-status: pending
+status: completed
 priority: P1
 effort: "4d"
 dependencies: [1]

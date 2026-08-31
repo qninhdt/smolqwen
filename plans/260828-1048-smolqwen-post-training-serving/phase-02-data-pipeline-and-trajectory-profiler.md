@@ -1,7 +1,7 @@
 ---
 phase: 2
 title: "Data pipeline and trajectory profiler"
-status: pending
+status: completed
 priority: P1
 effort: "3d"
 dependencies: [1]
@@ -178,17 +178,17 @@ current final answer   LOSS
 
 ## Success Criteria
 
-- [ ] `smolqwen profile-data` writes `artifacts/data/profile.json` with per-mode percentiles for user turns, tool steps, total tokens, and per-turn reasoning tokens.
-- [ ] `artifacts/data/budgets.json` exists and states, for each candidate cap, the fraction of the dataset retained. Its three keys have named consumers: `max_seq_length` (Phase 3), per-step generation cap (Phase 6), `max_env_steps` (Phase 7).
-- [ ] Reasoning-retention test passes against real excerpts of both message shapes: reasoning survives across a tool-calling chain and is stripped across a real user turn, matching the split logic.
-- [ ] The converter's tool-result message shape is recorded, and a shared fixture proves the SFT-rendered observation token stream matches what Phase 6's rollout appends.
-- [ ] No converted sample contains a JSON-form `<tool_call>{` — all tool calls are Qwen3.5 `<function=...>` XML.
-- [ ] Tool-call parse/serialize round-trip test passes against the `<tool_call><function=NAME><parameter=K>` syntax.
-- [ ] Loss-mask test passes: exactly the current-segment assistant tokens are unmasked; observations and history are masked.
-- [ ] Conv split test passes: an n-real-user-message trajectory yields n samples with correct cumulative prefixes.
-- [ ] Train/val split is by trajectory id and reproducible from the seed.
-- [ ] `artifacts/data/env_split.json` records 140 SFT / 51 RL derived from `env_id` suffixes, and asserts every RL scenario's `env_id` is in the RL set.
-- [ ] `conversion_report.json` accounts for every input trajectory: converted, skipped-too-long, or malformed — and records the sha256 of every input file alongside its pinned revision.
+- [x] `smolqwen profile-data` writes `artifacts/data/profile.json` with per-mode percentiles for user turns, tool steps, total tokens, and per-turn reasoning tokens.
+- [x] `artifacts/data/budgets.json` exists and states, for each candidate cap, the fraction of the dataset retained. Its three keys have named consumers: `max_seq_length` (Phase 3), per-step generation cap (Phase 6), `max_env_steps` (Phase 7).
+- [x] Reasoning-retention test passes against real excerpts of both message shapes: reasoning survives across a tool-calling chain and is stripped across a real user turn, matching the split logic.
+- [x] The converter's tool-result message shape is recorded, and a shared fixture proves the SFT-rendered observation token stream matches what Phase 6's rollout appends.
+- [x] No converted sample contains a JSON-form `<tool_call>{` — all tool calls are Qwen3.5 `<function=...>` XML.
+- [x] Tool-call parse/serialize round-trip test passes against the `<tool_call><function=NAME><parameter=K>` syntax.
+- [x] Loss-mask test passes: exactly the current-segment assistant tokens are unmasked; observations and history are masked.
+- [x] Conv split test passes: an n-real-user-message trajectory yields n samples with correct cumulative prefixes.
+- [x] Train/val split is by trajectory id and reproducible from the seed.
+- [x] `artifacts/data/env_split.json` records 140 SFT / 51 RL derived from `env_id` suffixes, and asserts every RL scenario's `env_id` is in the RL set.
+- [x] `conversion_report.json` accounts for every input trajectory: converted, skipped-too-long, or malformed — and records the sha256 of every input file alongside its pinned revision.
 
 ## Risk Assessment
 

@@ -148,6 +148,7 @@ require a card that can hold the 2B model; this host has 3.7 GB of VRAM against
 | The mixer is never compiled | `select_compile_targets` excludes `Qwen3_5GatedDeltaNet` by class name even with an empty pattern list, and never returns the root module. |
 | Real shards satisfy the mask contract | `validate_shard` over the actual conversion output: train 39,957 samples / 327,136,547 tokens / 76,033,852 supervised; val 885 / 7,350,599 / 1,633,346. Zero rejections. |
 | Shard loading does not scale in RAM | Validation streams line by line; the trainer reads through a memory-mapped Arrow cache, because `train.jsonl` is ~2 GB of JSON. |
+| L4 batch ceiling at the budget cap | One-step probe on NVIDIA L4 (22.034 GiB): SFT micro-batch 1/2/4 passed at 16,384 tokens; batch 8 OOM. The measured ceiling is 4, while the committed profile remains at 1 for headroom. See [`qa-260830-l4-batch-limits.md`](../reports/qa-260830-l4-batch-limits.md). |
 
 
 ## Risk Assessment

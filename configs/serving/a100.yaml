@@ -1,0 +1,4 @@
+# Pending the target-A100 sweep and paired BFCL re-evaluation. sm80 has no native
+# FP8 path; choose AWQ/GPTQ or retain BF16 only after the quality pairing exists.
+quantization: null
+speculative_num_tokens: null

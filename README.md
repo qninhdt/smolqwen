@@ -20,3 +20,20 @@ git submodule update --init --recursive
 
 See [docs/evaluation.md](docs/evaluation.md) for the pinned-checkpoint
 evaluation command, BFCL/EnvScaler adapters, manifests, and comparison reports.
+
+## Rollouts
+
+See [docs/rollout.md](docs/rollout.md) for the async rollout contract, the
+correctness-first `rollout-bench` workflow, and how to interpret its A/B report.
+
+## Agentic GRPO
+
+See [docs/grpo.md](docs/grpo.md) for difficulty profiling, online GRPO,
+checkpoint resume semantics, safety stops, and the target-GPU evidence still
+required before final results can be reported.
+
+## Serving
+
+See [docs/serving.md](docs/serving.md) for authenticated Compose and Colab
+operation, benchmark and sweep entry points, and the target-GPU evidence still
+required before selecting a serving profile.

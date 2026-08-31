@@ -14,10 +14,16 @@
 # only once it has measured a value it needs to LOWER to, with the measurement in
 # the comment.
 
-# --- Phase 3, set by the OOM sweep (step 8). Measured peak VRAM goes here as a
-# comment when the sweep runs.
-micro_batch: 1
-grad_accum: 16
+# --- Phase 3, measured by scripts/colab-l4-sft-speed.py on a real L4 against 96
+# prepared records. Batch 2 is faster than batch 1 ONLY with length-grouped
+# sampling: these trajectories run 4.4k-15.7k tokens, so a random pair pads to the
+# longer sample and wastes 10.7% of the step. Grouped, padding is 3.6% and this is
+# 2,043 valid tok/s -- 44.5 h/epoch, against 55.7 h at micro_batch 1. Peak 12.66 of
+# 22.03 GiB. Batch 4 pads 10.7% even grouped and is 30% slower, so 2 is the
+# optimum rather than a memory ceiling. See docs/optimization-ledger.md.
+micro_batch: 2
+grad_accum: 8
+max_tokens_per_microbatch: 32768
 
 # --- Phase 6, set by the pool sweep (step 12), against measured episodes/hour.
 # generation_concurrency is the vLLM batch width INSIDE one rollout_func call.

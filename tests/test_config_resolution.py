@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from pydantic import ValidationError
 
 from smolqwen.config import (
     deep_merge,
@@ -22,6 +23,7 @@ from smolqwen.config_models import (
     DataConfig,
     GrpoConfig,
     ProfileConfig,
+    ServeConfig,
     SftConfig,
 )
 
@@ -57,11 +59,29 @@ def test_profile_overlays_only_sizing_fields(tmp_path: Path) -> None:
         "sft", profile="a100", config_dir=CONFIG_DIR, budgets_path=tmp_path / "none.json"
     )
     assert isinstance(l4, SftConfig) and isinstance(a100, SftConfig)
-    # Sizing differs...
-    assert l4.profile.micro_batch != a100.profile.micro_batch
+    # Sizing differs. Asserted on the whole profile rather than on micro_batch:
+    # the L4 epoch-time sweep measured micro_batch 2 as the optimum there too, so
+    # the two cards agree on that one field while still sizing differently.
+    assert l4.profile != a100.profile
+    assert l4.profile.generation_concurrency != a100.profile.generation_concurrency
     # ...while every semantic field is identical, which is what makes the
     # L4-vs-A100 comparison the same experiment.
     assert l4.model_dump(exclude={"profile"}) == a100.model_dump(exclude={"profile"})
+
+
+def test_serving_profile_overlay_is_loaded_without_claiming_unmeasured_quantization(
+    tmp_path: Path,
+) -> None:
+    for profile in PROFILES:
+        config = resolve(
+            "serve",
+            profile=profile,
+            config_dir=CONFIG_DIR,
+            budgets_path=tmp_path / "none.json",
+        )
+        assert isinstance(config, ServeConfig)
+        assert config.quantization is None
+        assert config.speculative_num_tokens is None
 
 
 def test_profile_cannot_carry_a_semantic_field(tmp_path: Path) -> None:
@@ -234,6 +254,11 @@ def test_grpo_runtime_pins_the_vendored_executable_metadata() -> None:
     assert config.env.env_metadata_source == "vendored"
     assert config.env.vendored_env_metadata_sha256
     assert config.env.vendored_rl_scenarios_sha256
+
+
+def test_grpo_cannot_silently_disable_required_prefix_caching() -> None:
+    with pytest.raises(ValidationError, match="vllm_enable_prefix_caching"):
+        GrpoConfig(vllm_enable_prefix_caching=False)  # type: ignore[arg-type]
 
 
 def test_committed_sft_config_does_not_reference_the_pretemplated_file() -> None:

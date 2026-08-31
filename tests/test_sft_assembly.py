@@ -22,6 +22,7 @@ import pytest
 
 from smolqwen.artifacts import CheckpointStore, ResumeState
 from smolqwen.config_models import ProfileConfig, SftConfig, TrackingConfig, TrainingConfig
+from smolqwen.data.convert_sft import SFT_SCHEMA_VERSION, SFT_SEMANTICS
 from smolqwen.tracking import Tracker
 from smolqwen.training.sft import SftError, build_trainer
 from tests.helpers import write_tiny_checkpoint
@@ -32,15 +33,18 @@ VOCAB = 256
 
 
 def _record(index: int) -> dict[str, Any]:
+    prompt = [(index + position) % VOCAB for position in range(6)]
+    completion = [(index + position + 30) % VOCAB for position in range(5)]
     return {
-        "trajectory_id": f"t{index}",
+        "schema_version": SFT_SCHEMA_VERSION,
+        "semantics": SFT_SEMANTICS,
+        "trajectory_uid": f"t{index}:non_conversation",
+        "task_id": f"t{index}",
         "env_id": "env_1_sft",
         "mode": "non_conversation",
-        "segment_index": 0,
-        "prompt_ids": [(index + p) % VOCAB for p in range(6)],
-        "completion_ids": [(index + p + 30) % VOCAB for p in range(5)],
-        "loss_mask": [1, 1, 1, 0, 0],
-        "total_tokens": 11,
+        "input_ids": prompt + completion,
+        "labels": [-100] * len(prompt) + completion[:3] + [-100, -100],
+        "seq_length": 11,
         "supervised_tokens": 3,
     }
 
@@ -64,7 +68,12 @@ def _config(model_dir: Path, output_dir: Path, **overrides: Any) -> SftConfig:
         "model_revision": None,
         "output_dir": str(output_dir),
         "merged_dir": str(output_dir / "merged"),
-        "profile": ProfileConfig(micro_batch=1, grad_accum=1, max_seq_length=512),
+        "profile": ProfileConfig(
+            micro_batch=1,
+            grad_accum=1,
+            max_seq_length=512,
+            max_tokens_per_microbatch=512,
+        ),
         "training": TrainingConfig(max_steps=1, save_steps=1, eval_steps=1, logging_steps=1),
         "tracking": TrackingConfig(hub_repo_id=None, local_artifact_dir=str(output_dir)),
     }
@@ -94,18 +103,52 @@ def test_trl_never_re_derives_the_mask(assembled: Any) -> None:
 
 def test_the_dataset_keeps_the_stored_ids_not_rendered_text(assembled: Any) -> None:
     columns = set(assembled.trainer.train_dataset.column_names)
-    assert columns == {"prompt_ids", "completion_ids", "loss_mask"}
-    assert "text" not in columns and "input_ids" not in columns
+    # `length` is materialized at load for the length-grouped sampler; without it
+    # the sampler tokenizes the whole shard to measure what the records determine.
+    assert columns == {
+        "schema_version",
+        "semantics",
+        "trajectory_uid",
+        "input_ids",
+        "labels",
+        "seq_length",
+        "supervised_tokens",
+        "length",
+    }
+    assert "text" not in columns
+
+
+def test_the_length_column_matches_the_stored_ids(assembled: Any) -> None:
+    dataset = assembled.trainer.train_dataset
+    for row in dataset:
+        assert row["length"] == len(row["input_ids"])
 
 
 def test_the_collator_is_the_phase_three_one(assembled: Any) -> None:
     import torch
 
     batch = assembled.trainer.data_collator([_record(0), _record(1)])
-    assert set(batch) == {"input_ids", "labels", "attention_mask"}
+    assert set(batch) == {
+        "input_ids",
+        "labels",
+        "position_ids",
+        "cu_seq_lens_q",
+        "cu_seq_lens_k",
+        "max_length_q",
+        "max_length_k",
+        "seq_idx",
+    }
+    assert batch["input_ids"].shape == (1, 22)
     assert isinstance(batch["labels"], torch.Tensor)
     # 3 supervised positions per record, exactly as the stored mask says.
     assert int((batch["labels"] != -100).sum()) == 6
+
+
+def test_train_dataloader_uses_variable_row_token_sampler(assembled: Any) -> None:
+    batch = next(iter(assembled.trainer.get_train_dataloader()))
+    assert batch["input_ids"].shape[0] == 1
+    assert batch["input_ids"].shape[1] <= 512
+    assert assembled.trainer.token_batch_sampler is not None
 
 
 def test_lora_is_attached_and_only_adapters_train(assembled: Any) -> None:

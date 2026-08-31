@@ -22,20 +22,25 @@ from smolqwen.data.loader import LoadStats, Trajectory, iter_trajectories, sha25
 from smolqwen.data.render import (
     RenderError,
     Tokenizer,
-    render_prefix,
-    render_segment,
-    split_segments,
+    render_training_sample,
 )
 
 # Candidate sequence caps reported with their retention. 32k is the paper's
 # training cap; the smaller ones are what a 24 GB card is likely to afford.
-SEQ_LENGTH_CANDIDATES: tuple[int, ...] = (4096, 8192, 12288, 16384, 24576, 32768)
+SEQ_LENGTH_CANDIDATES: tuple[int, ...] = (
+    8192,
+    16384,
+    24576,
+    32768,
+    49152,
+    65536,
+)
 STEP_CANDIDATES: tuple[int, ...] = (8, 12, 16, 24, 32, 48)
 PERCENTILES: tuple[int, ...] = (50, 90, 95, 99)
 
 # Below this, the cap is reshaping the distribution rather than trimming its tail,
 # and the plan's stated response is to raise the cap and cut batch size instead.
-RETENTION_FLOOR = 0.70
+RETENTION_FLOOR = 0.98
 
 
 def percentile(values: Sequence[float], q: int) -> float:
@@ -74,18 +79,10 @@ class ModeAccumulator:
     trajectories: int = 0
     user_turns: list[float] = field(default_factory=list)
     tool_steps: list[float] = field(default_factory=list)
-    # The rendered length of the whole conversation. Informative, but NOT what the
-    # SFT cap has to accommodate -- see `sample_tokens`.
+    # Full training-render length. Kept under both names in the report during the
+    # schema transition; one raw row is now exactly one sample.
     total_tokens: list[float] = field(default_factory=list)
-    # The rendered length of each **sample** the converter emits. This is the unit
-    # the cap applies to, and it is not bounded by `total_tokens`: a per-segment
-    # render retains that segment's reasoning, which the whole-conversation render
-    # strips for every turn before the last real user query. Measuring only the
-    # full render therefore reports a retention the conversion cannot deliver.
     sample_tokens: list[float] = field(default_factory=list)
-    # The longest sample per trajectory, so trajectory-level retention can be
-    # computed: the converter drops a trajectory whole when any sample is over cap.
-    longest_sample_per_trajectory: list[float] = field(default_factory=list)
     samples: int = 0
     reasoning_tokens_per_turn: list[float] = field(default_factory=list)
     observation_tokens: list[float] = field(default_factory=list)
@@ -114,6 +111,8 @@ class ProfileResult:
     input_path: str
     input_sha256: str
     input_revision: str | None = None
+    unique_task_groups: int = 0
+    unique_trajectory_uids: int = 0
 
     def all_total_tokens(self) -> list[float]:
         return [value for mode in self.modes.values() for value in mode.total_tokens]
@@ -131,20 +130,8 @@ class ProfileResult:
         return sum(1 for value in values if value <= cap) / len(values)
 
     def trajectory_retention(self, cap: int) -> float:
-        """The fraction of *trajectories* the converter keeps at `cap`.
-
-        A trajectory is dropped whole when any of its samples exceeds the cap, so
-        this is the number that describes the training distribution -- not the
-        per-sample fraction, which is higher.
-        """
-        kept = 0
-        total = 0
-        for mode in self.modes.values():
-            for longest in mode.longest_sample_per_trajectory:
-                total += 1
-                if longest <= cap:
-                    kept += 1
-        return kept / total if total else 0.0
+        """One row is one sample, so row and sample retention are identical."""
+        return self.retention(self.all_sample_tokens(), cap)
 
     def to_dict(self) -> dict[str, Any]:
         totals = self.all_total_tokens()
@@ -162,6 +149,8 @@ class ProfileResult:
                 "malformed": self.load_stats.malformed,
                 "malformed_reasons": self.load_stats.malformed_reasons or {},
                 "samples": sum(mode.samples for mode in self.modes.values()),
+                "unique_task_groups": self.unique_task_groups,
+                "unique_trajectory_uids": self.unique_trajectory_uids,
             },
             "by_mode": {name: acc.to_dict() for name, acc in sorted(self.modes.items())},
             "overall": {
@@ -201,47 +190,24 @@ def _count_tokens(tokenizer: Tokenizer, text: str) -> int:
 def profile_trajectory(
     tokenizer: Tokenizer, trajectory: Trajectory, accumulator: ModeAccumulator
 ) -> None:
-    """Accumulate one trajectory's statistics.
-
-    Two lengths are measured, and the distinction is load-bearing:
-
-    - the **conversation** length, i.e. the whole trajectory rendered once. The
-      template strips reasoning for every assistant turn before the last real user
-      query, so this is *shorter* than the sum of the samples.
-    - the **sample** lengths, i.e. what `convert_sft` actually emits: one render
-      per real user boundary, each retaining that segment's reasoning. This is the
-      unit `max_seq_length` caps, so it is what the retention numbers must be
-      computed from. Measuring only the conversation length reports a retention the
-      conversion cannot deliver.
-    """
+    """Accumulate one full preserved-reasoning training sample."""
     accumulator.trajectories += 1
     accumulator.user_turns.append(trajectory.real_user_turns)
     accumulator.tool_steps.append(trajectory.tool_steps)
     accumulator.tool_count.append(len(trajectory.tools))
 
-    rendered = render_prefix(tokenizer, trajectory.messages, tools=trajectory.tools)
-    accumulator.total_tokens.append(_count_tokens(tokenizer, rendered))
-
-    # The per-sample lengths, from the same splitter the converter uses.
-    longest = 0.0
-    try:
-        segments = split_segments(trajectory.messages)
-    except RenderError:
-        segments = []
-    for index, segment in enumerate(segments):
-        sample = render_segment(
-            tokenizer,
-            trajectory.messages,
-            segment,
-            tools=trajectory.tools,
-            trajectory_id=trajectory.trajectory_id,
-            segment_index=index,
-        )
-        accumulator.sample_tokens.append(sample.total_tokens)
-        accumulator.samples += 1
-        longest = max(longest, float(sample.total_tokens))
-    if segments:
-        accumulator.longest_sample_per_trajectory.append(longest)
+    sample = render_training_sample(
+        tokenizer,
+        trajectory.messages,
+        tools=trajectory.tools,
+        trajectory_uid=trajectory.trajectory_uid,
+        task_id=trajectory.task_id,
+        env_id=trajectory.env_id,
+        mode=trajectory.traj_type,
+    )
+    accumulator.total_tokens.append(sample.total_tokens)
+    accumulator.sample_tokens.append(sample.total_tokens)
+    accumulator.samples += 1
 
     assistant_turns = 0
     for message in trajectory.messages:
@@ -274,7 +240,16 @@ def profile_dataset(
         if trajectories is not None
         else iter_trajectories(path, limit=limit, stats=stats)
     )
+    task_ids: set[str] = set()
+    trajectory_uids: set[str] = set()
     for trajectory in source:
+        if trajectories is not None:
+            stats.total += 1
+            stats.parsed += 1
+        if trajectory.trajectory_uid in trajectory_uids:
+            raise RenderError(f"duplicate trajectory_uid: {trajectory.trajectory_uid}")
+        trajectory_uids.add(trajectory.trajectory_uid)
+        task_ids.add(trajectory.task_id)
         mode = trajectory.traj_type or "unknown"
         accumulator = modes.setdefault(mode, ModeAccumulator())
         profile_trajectory(tokenizer, trajectory, accumulator)
@@ -285,6 +260,8 @@ def profile_dataset(
         input_path=str(path),
         input_sha256=sha256_of(path) if Path(path).is_file() else "",
         input_revision=revision,
+        unique_task_groups=len(task_ids),
+        unique_trajectory_uids=len(trajectory_uids),
     )
 
 
@@ -308,11 +285,9 @@ def choose_budgets(result: ProfileResult) -> dict[str, Any]:
                 return candidate
         return candidates[-1]
 
-    max_seq_length = SEQ_LENGTH_CANDIDATES[-1]
-    for candidate in SEQ_LENGTH_CANDIDATES:
-        if result.trajectory_retention(candidate) >= RETENTION_FLOOR:
-            max_seq_length = candidate
-            break
+    # 32K is the accepted initial operating point (98.46% on the pinned corpus).
+    # Phase 4 may lower it only from measured L4 OOM/headroom evidence.
+    max_seq_length = 32768
     max_env_steps = smallest_above_floor(STEP_CANDIDATES, steps)
 
     # Per-step generation cap: enough headroom for one reasoning block plus one

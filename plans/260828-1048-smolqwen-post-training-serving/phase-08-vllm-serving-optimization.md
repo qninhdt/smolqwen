@@ -1,7 +1,7 @@
 ---
 phase: 8
 title: "vLLM serving optimization"
-status: pending
+status: in-progress
 priority: P1
 effort: "5d"
 dependencies: [7]
@@ -198,10 +198,10 @@ differently-quantized rows share one hash.
 
 - [ ] `docker compose up` serves the merged SFT+RL checkpoint; a tools request returns a parsed tool call and a separate reasoning field.
 - [ ] Every path rejects unauthenticated requests through the tunnel — enumerate `/v1/chat/completions`, `/tokenize`, `/detokenize`, `/metrics`, `/version`, `/load` and assert each returns 401. `--api-key` alone does not achieve this.
-- [ ] The key never appears in argv, `docker-compose.yml`, or a committed notebook cell; CI asserts `.ipynb` outputs are empty.
-- [ ] The tunnel is created only after server and proxy are up with the key — no unauthenticated window on a public URL.
-- [ ] `bench` starts only after an **authenticated** readiness probe succeeds; a server whose weights failed to load fails the health check instead of producing an error table.
-- [ ] The tool-calling benchmark workload is documented as a custom dataset, with a note that vLLM's BFCL loader cannot sample multi-turn categories.
+- [x] The key never appears in argv, `docker-compose.yml`, or a committed notebook cell; CI asserts `.ipynb` outputs are empty.
+- [x] The tunnel is created only after server and proxy are up with the key — no unauthenticated window on a public URL.
+- [x] `bench` starts only after an **authenticated** readiness probe succeeds; a server whose weights failed to load fails the health check instead of producing an error table.
+- [x] The tool-calling benchmark workload is documented as a custom dataset, with a note that vLLM's BFCL loader cannot sample multi-turn categories.
 - [ ] Colab launcher runs the same image definition and prints a working base URL plus key; the server survives a kernel restart.
 - [ ] Baseline BF16 numbers recorded across concurrency levels: TTFT, TPOT, ITL, E2EL at p50/p95/p99, throughput, VRAM.
 - [ ] Config sweep completed via `vllm bench sweep serve` with a Pareto front from `plot_pareto`; chosen settings committed to both serving profiles with justifying numbers. No grid or Pareto logic reimplemented.
