@@ -1,10 +1,11 @@
 ---
 phase: 10
 title: "L4 validation"
-status: pending
+status: blocked
 priority: P1
 effort: "1.5d (gated on a Colab card)"
 dependencies: [4, 5, 6, 7]
+blockedBy: [no-l4-available]
 ---
 
 # Phase 10: L4 validation
@@ -14,6 +15,28 @@ dependencies: [4, 5, 6, 7]
 Settle on a real L4 every claim a CPU suite cannot: agreement with the baseline,
 throughput with its cost split, batch-composition stability with confounds
 separated, and the SFT envelope by live measurement.
+
+**This phase is now the only open work in the plan.** Every other phase's code is
+landed and its CPU criteria are green; nine criteria across Phases 2, 4, 5 and 6
+are GPU measurements and close here rather than in their own phase files:
+
+| From | Criterion | Step below |
+|---|---|---|
+| 2 | vLLM accepts this project's `all-linear` adapter (`test_vllm_adapter_capability.py`) | 2 |
+| 2 | Sleep/wake VRAM release, measured | 6 |
+| 4 | Agreement with the re-captured baseline, per-task disagreement list | 2 |
+| 5 | GRPO in-training eval cost within 10% of training wall time | 5 |
+| 6 | 32K envelope beside a sleeping engine | 6 |
+| 6 | Engine asleep during training steps (non-monotonic reading) | 6 |
+| 6 | SFT in-training eval cost within 10% | 6 |
+| 7 | Non-TTY progress rendering in a real Colab cell | 8 |
+| — | BFCL once, after all selection | 9 |
+
+The local development card is a 3.7 GB RTX 3050 and vllm is absent from CI by
+construction (`pyproject.toml:33-36`), so none of these can be approximated here.
+`tests/test_vllm_adapter_capability.py` and
+`tests/test_sft_bench_eval_memory_guard.py` are written and `gpu`-marked; they are
+the assertions, and this phase supplies the hardware.
 
 ## Requirements
 

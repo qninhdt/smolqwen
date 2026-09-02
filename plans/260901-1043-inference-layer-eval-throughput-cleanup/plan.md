@@ -1,12 +1,12 @@
 ---
 title: "Shared vLLM inference layer, batched evaluation, in-training benchmark eval"
 description: "Collapse three divergent inference paths into one vLLM-backed layer, make evaluation batched and GPU-bound, log held-out benchmark scores during SFT and GRPO through that same path, put rich logging on every CLI, and delete dead and wrapper code."
-status: pending
+status: in_progress
 priority: P1
 effort: "17.5 phase-days"
 tags: [inference, vllm, evaluation, throughput, observability, cleanup]
 created: 2026-09-01
-revised: 2026-09-01
+revised: 2026-09-03
 ---
 
 # Shared vLLM inference layer, batched evaluation, in-training benchmark eval
@@ -86,7 +86,24 @@ weight-transfer protocol of its own.
 | 7 | [Phase 7: Rich logging across every CLI](./phase-07-rich-logging-across-cli.md) | Done |
 | 8 | [Phase 8: Delete dead code and one-shot scripts](./phase-08-delete-dead-code-and-scripts.md) | Done |
 | 9 | [Phase 9: Artifact persistence to HF and W&B](./phase-09-artifact-persistence-hf-wandb.md) | Done |
-| 10 | [Phase 10: L4 validation](./phase-10-gpu-validation-on-l4.md) | Pending |
+| 10 | [Phase 10: L4 validation](./phase-10-gpu-validation-on-l4.md) | Blocked — needs an L4 |
+
+**Status: every CPU-implementable phase is done.** What remains is one card. Nine
+criteria across four phases are GPU measurements and are listed in
+`phase-10-gpu-validation-on-l4.md`, which is the single place they close:
+
+| Phase | Open criterion | Why CPU cannot answer it |
+|---|---|---|
+| 2 | vLLM accepts the `all-linear` adapter; sleep/wake VRAM release | vllm is absent from CI by construction; the local card is 3.7 GB |
+| 4 | Agreement with the re-captured baseline | needs real generation from real weights, and no checkpoint exists in this repo |
+| 5 | In-training eval cost within the 10% budget | needs a real training step to be a fraction *of* |
+| 6 | 32K envelope beside a sleeping engine; non-monotonic asleep reading; 10% cost | sleep-mode release is a runtime property |
+
+Deliberately not implemented, with the reason recorded in
+`phase-05-grpo-in-training-benchmark-eval.md`:
+`grpo/bench_heldout_minus_train_reward`. It subtracts two numbers logged on
+different cadences by different code paths, so computing it inside the callback
+would produce a plausible number whenever the cadences disagree.
 
 Dependencies: 2 needs 1. 3 needs 2. 4 needs 3. 5 needs 4. 6 needs 5 **and**
 plan `260831-0808` phase 4 marked complete. 8 needs 1. 7 needs 8 — both edit
