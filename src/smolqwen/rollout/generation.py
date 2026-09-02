@@ -56,8 +56,14 @@ class GenerationRequest:
 
 
 @dataclass(frozen=True)
-class GenerationResult:
-    """One turn's sampled assistant tokens, aligned 1:1 with `logprobs`."""
+class TurnTokens:
+    """One turn's sampled assistant tokens, aligned 1:1 with `logprobs`.
+
+    Named for what it holds, because `eval/policies.py` owns a `TurnTokens`
+    of its own that carries decoded *text* and a finish reason. Two classes with
+    one name across the two paths this plan unifies is the kind of collision that
+    reads as agreement in a diff.
+    """
 
     episode_id: str
     token_ids: tuple[int, ...]
@@ -66,19 +72,10 @@ class GenerationResult:
     prompt_tokens: int = 0
 
 
-@dataclass(frozen=True)
-class SamplingParams:
-    """The trainer's sampling state, snapshotted per call by `rollout_func`."""
-
-    temperature: float = 1.0
-    top_p: float = 1.0
-    max_new_tokens: int = 1024
-
-
 class GenerationBackend(Protocol):
     """Generate one turn for each request in the sub-batch, as one call."""
 
-    def generate(self, requests: Sequence[GenerationRequest]) -> list[GenerationResult]: ...
+    def generate(self, requests: Sequence[GenerationRequest]) -> list[TurnTokens]: ...
 
 
 # A deterministic policy: called with the episode's current messages and turn
@@ -96,8 +93,8 @@ class ScriptedPolicyBackend:
     re-render differs from its held tokens must still classify correctly.
     """
 
-    def generate(self, requests: Sequence[GenerationRequest]) -> list[GenerationResult]:
-        results: list[GenerationResult] = []
+    def generate(self, requests: Sequence[GenerationRequest]) -> list[TurnTokens]:
+        results: list[TurnTokens] = []
         for request in requests:
             context = self._contexts.get(request.episode_id)
             if context is None:
@@ -107,7 +104,7 @@ class ScriptedPolicyBackend:
             if len(token_ids) > request.max_new_tokens:
                 token_ids = token_ids[: request.max_new_tokens]
             results.append(
-                GenerationResult(
+                TurnTokens(
                     episode_id=request.episode_id,
                     token_ids=token_ids,
                     logprobs=tuple(SCRIPTED_LOGPROB for _ in token_ids),
@@ -172,7 +169,7 @@ class VllmColocateBackend:
         self._trainer = trainer
         self._generation = generation
 
-    def generate(self, requests: Sequence[GenerationRequest]) -> list[GenerationResult]:
+    def generate(self, requests: Sequence[GenerationRequest]) -> list[TurnTokens]:
         if not requests:
             return []
         import time
@@ -195,7 +192,7 @@ class VllmColocateBackend:
             )
         finally:
             self._generation.max_completion_length = original_max
-        results: list[GenerationResult] = []
+        results: list[TurnTokens] = []
         if logprob_rows is None:
             logprob_rows = [None] * len(completion_rows)
         if logprob_token_rows is None:
@@ -215,7 +212,7 @@ class VllmColocateBackend:
                     logprobs[: request.max_new_tokens],
                 )
             results.append(
-                GenerationResult(
+                TurnTokens(
                     episode_id=request.episode_id,
                     token_ids=tuple(token_ids),
                     logprobs=tuple(logprobs),

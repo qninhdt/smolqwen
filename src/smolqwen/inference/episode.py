@@ -29,7 +29,8 @@ EpisodeState = Literal["ready", "generating", "tool", "done"]
 
 TerminalReason = Literal[
     "final_answer",  # the model stopped calling tools
-    "step_cap",  # `max_env_steps` reached
+    "step_cap",  # `max_env_steps` reached, or the context window filled
+    "turn_cap",  # `max_generation_turns` reached without any environment step
     "unrecoverable",  # the environment cannot continue (create/score failed)
     "timeout",  # episode wall-clock budget spent
     "worker_crash",  # infrastructure failure; the episode is replaced, not scored
@@ -104,6 +105,10 @@ class Episode:
     messages: list[Message] = field(default_factory=list)
     observations: list[str] = field(default_factory=list)
     step_count: int = 0
+    # Generations issued for this episode. Distinct from `step_count`, which counts
+    # executed environment methods: a model emitting prose advances this and not
+    # that, and only one of the two bounds such an episode before its wall clock.
+    generation_count: int = 0
     invalid_call_count: int = 0
     terminal_reason: TerminalReason | None = None
     # The episode that this one replaced (`worker_crash`), for lineage only.
@@ -170,6 +175,7 @@ class Episode:
             "messages": [message.to_template_dict() for message in self.messages],
             "observations": list(self.observations),
             "step_count": self.step_count,
+            "generation_count": self.generation_count,
             "invalid_call_count": self.invalid_call_count,
             "terminal_reason": self.terminal_reason,
             "replaced_episode_id": self.replaced_episode_id,

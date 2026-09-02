@@ -7,7 +7,7 @@ from typing import Any
 
 from smolqwen.env.pool import Result
 from smolqwen.rollout.generation import ScriptedPolicyBackend
-from smolqwen.rollout.rollout_func import encode_ids, make_scheduler
+from smolqwen.rollout.rollout_func import encode_ids, make_turn_engine
 from tests.helpers import OfflineTokenizer
 from tests.rollout_fixtures import (
     FakeDispatcher,
@@ -30,7 +30,7 @@ def _episode(turns: list[str], *, step_behavior: Any = None, **config_overrides:
         ScriptedPolicyBackend(text_list_policy(turns), lambda text: encode_ids(tokenizer, text)),
         clock,
     )
-    scheduler = make_scheduler(
+    scheduler = make_turn_engine(
         backend=backend,
         dispatcher=dispatcher,
         tokenizer=tokenizer,

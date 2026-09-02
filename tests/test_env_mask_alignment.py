@@ -31,7 +31,7 @@ import pytest
 
 from smolqwen.data.render import render_prefix
 from smolqwen.rollout.generation import ScriptedPolicyBackend
-from smolqwen.rollout.rollout_func import encode_ids, make_scheduler
+from smolqwen.rollout.rollout_func import encode_ids, make_turn_engine
 from tests.helpers import OfflineTokenizer
 from tests.rollout_fixtures import (
     FakeDispatcher,
@@ -70,7 +70,7 @@ def _run_episode(
         ScriptedPolicyBackend(text_list_policy(texts), lambda text: encode_ids(tokenizer, text)),
         clock,
     )
-    scheduler = make_scheduler(
+    scheduler = make_turn_engine(
         backend=backend,
         dispatcher=dispatcher,
         tokenizer=tokenizer,

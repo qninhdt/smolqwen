@@ -7,7 +7,7 @@ from typing import Any
 
 from smolqwen.env.pool import Result
 from smolqwen.rollout.generation import ScriptedPolicyBackend
-from smolqwen.rollout.rollout_func import encode_ids, make_scheduler
+from smolqwen.rollout.rollout_func import encode_ids, make_turn_engine
 from tests.helpers import OfflineTokenizer
 from tests.rollout_fixtures import (
     FakeDispatcher,
@@ -39,7 +39,7 @@ def test_fast_episode_regenerates_before_slow_peer_finishes() -> None:
         clock,
         duration_s=0.005,
     )
-    scheduler = make_scheduler(
+    scheduler = make_turn_engine(
         backend=backend,
         dispatcher=dispatcher,
         tokenizer=tokenizer,
@@ -94,7 +94,7 @@ def test_polling_a_valid_slow_create_does_not_trip_a_cycle_guard() -> None:
         ),
         clock,
     )
-    scheduler = make_scheduler(
+    scheduler = make_turn_engine(
         backend=backend,
         dispatcher=dispatcher,
         tokenizer=tokenizer,

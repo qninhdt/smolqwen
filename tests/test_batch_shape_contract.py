@@ -21,7 +21,7 @@ from smolqwen.rollout.rollout_func import (
     encode_ids,
     initial_messages_for,
     make_rollout_func,
-    make_scheduler,
+    make_turn_engine,
 )
 from tests.helpers import OfflineTokenizer
 from tests.rollout_fixtures import (
@@ -48,7 +48,7 @@ def test_returned_rows_and_groups_match_input_positions() -> None:
         ),
         clock,
     )
-    scheduler = make_scheduler(
+    scheduler = make_turn_engine(
         backend=backend,
         dispatcher=dispatcher,
         tokenizer=tokenizer,

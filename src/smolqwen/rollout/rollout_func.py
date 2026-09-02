@@ -13,7 +13,7 @@ because nothing downstream would:
    instead of silently there.
 2. **Row count and order match the prompts exactly.** `_calculate_rewards`
    sizes from `len(prompts)` and zips `strict=True`; advantages come from a
-   positional `view(-1, num_generations)`. The scheduler guarantees this; the
+   positional `view(-1, num_generations)`. The turn engine guarantees this; the
    boundary re-asserts it before returning.
 3. **`len(logprobs) == len(completion_ids) == len(env_mask)` per row, NaN at
    observation positions.** A shorter `logprobs` array is right-padded with
@@ -38,7 +38,9 @@ from typing import Any
 from smolqwen.data.loader import Message, parse_message
 from smolqwen.inference.episode import Episode
 from smolqwen.inference.mask import EpisodeMaskBuilder
+from smolqwen.inference.turn_engine import TurnEngine, TurnEngineConfig
 from smolqwen.prompts import build_system_prompt
+from smolqwen.rollout.driver import EnvDispatcher, RolloutDriver, ScenarioBinding
 from smolqwen.rollout.generation import GenerationBackend, VllmColocateBackend
 from smolqwen.rollout.metrics import (
     GpuUtilizationSampler,
@@ -47,12 +49,6 @@ from smolqwen.rollout.metrics import (
     wandb_log_payload,
 )
 from smolqwen.rollout.profiler import profile_rollout
-from smolqwen.rollout.scheduler import (
-    EnvDispatcher,
-    RolloutScheduler,
-    ScenarioBinding,
-    SchedulerConfig,
-)
 
 # prompt rows are conversational message lists; TRL passes them through as-is
 Prompts = Sequence[Sequence[Mapping[str, Any]]]
@@ -114,46 +110,56 @@ def attach_prompt_messages(
     ]
 
 
-def make_scheduler(
+def make_turn_engine(
     *,
     backend: GenerationBackend,
     dispatcher: EnvDispatcher,
     tokenizer: Any,
-    config: SchedulerConfig,
+    config: TurnEngineConfig,
     wait_for: Callable[..., Any] | None = None,
-) -> RolloutScheduler:
-    """Wire the scheduler's render/decode seams to one tokenizer.
+) -> TurnEngine:
+    """Wire the shared turn engine's render/decode seams to one tokenizer.
 
-    `wait_for` overrides the blocking wait — the simulated-clock tests inject
-    their dispatcher's virtual wait here.
+    `max_in_flight` is forced to None here regardless of what the caller's config
+    says: TRL requires one returned row per prompt, positionally, so every position
+    must be live for the whole call. Windowed admission is evaluation's need, not
+    rollout's, and silently applying it here would change what TRL receives.
+
+    `wait_for` overrides the blocking wait — the simulated-clock tests inject their
+    dispatcher's virtual wait here.
     """
     from smolqwen.data.render import render_prefix
     from smolqwen.inference.decoding import decode_completion
 
-    def render_prefix_ids(messages: Sequence[Message], binding: ScenarioBinding) -> list[int]:
+    def render_prefix_ids(
+        messages: Sequence[Message], tools: Sequence[Mapping[str, Any]]
+    ) -> list[int]:
         text = render_prefix(
-            tokenizer, messages, tools=list(binding.tool_schemas), add_generation_prompt=True
+            tokenizer, messages, tools=[dict(tool) for tool in tools], add_generation_prompt=True
         )
         return encode_ids(tokenizer, text)
 
     def decode(ids: Sequence[int]) -> str:
         return decode_completion(tokenizer, list(ids))
 
-    return RolloutScheduler(
+    driver = RolloutDriver(dispatcher)
+    engine = TurnEngine(
         backend=backend,
-        dispatcher=dispatcher,
+        driver=driver,
         initial_messages=initial_messages_for,
         render_prefix_ids=render_prefix_ids,
         decode=decode,
-        config=config,
+        config=replace(config, max_in_flight=None),
         wait_for=wait_for,
     )
+    driver.attach(engine)
+    return engine
 
 
 def make_rollout_func(
     *,
     resolve_bindings: BindingResolver,
-    config: SchedulerConfig,
+    config: TurnEngineConfig,
     dispatcher: EnvDispatcher,
     tokenizer: Any,
     backend_factory: BackendFactory | None = None,
@@ -178,7 +184,7 @@ def make_rollout_func(
                     "alignment between prompts and scenarios is broken"
                 )
 
-        scheduler = make_scheduler(
+        engine = make_turn_engine(
             backend=backend_builder(trainer),
             dispatcher=dispatcher,
             tokenizer=tokenizer,
@@ -188,16 +194,16 @@ def make_rollout_func(
         gpu_sampler.start()
         started = time.monotonic()
         try:
-            episodes = scheduler.run(bindings)
+            episodes = engine.run(bindings)
         finally:
             gpu = gpu_sampler.stop()
         wall_s = time.monotonic() - started
         timeline = profile_rollout(
             episodes=episodes,
             wall_s=wall_s,
-            events=scheduler.events,
-            queue_depth=scheduler.queue_depth_samples,
-            stage_intervals=scheduler.stage_intervals,
+            events=engine.events,
+            queue_depth=engine.queue_depth_samples,
+            stage_intervals=engine.stage_intervals,
         )
         log = getattr(trainer, "log", None)
         if callable(log):
@@ -209,7 +215,7 @@ def make_rollout_func(
                     timeline,
                 )
             )
-        return assemble_output(episodes, scheduler)
+        return assemble_output(episodes, engine)
 
     return rollout_func
 
@@ -262,9 +268,7 @@ def assert_mask_alignment(
         )
 
 
-def assemble_output(
-    episodes: Sequence[Episode], scheduler: RolloutScheduler
-) -> dict[str, list[Any]]:
+def assemble_output(episodes: Sequence[Episode], engine: TurnEngine) -> dict[str, list[Any]]:
     """The TRL return dict, assembled from each episode's mask builder.
 
     Asserted here, not trusted: the three lengths and the NaN-at-masked-position
@@ -282,7 +286,7 @@ def assemble_output(
     group_indices: list[int] = []
     trajectories: list[dict[str, Any]] = []
     for episode in episodes:
-        builder = scheduler.episode_builder(episode.episode_id)
+        builder = engine.episode_builder(episode.episode_id)
         prompt_ids = list(builder.prompt_ids)
         completion_ids = list(builder.completion_ids)
         logprobs = list(builder.logprobs)

@@ -19,8 +19,8 @@ from smolqwen.env.pool import WorkerPool
 from smolqwen.env.registry import EnvSpec, load_env_specs
 from smolqwen.env.scenarios import Scenario, build_scenario_set
 from smolqwen.eval.adapters.envscaler_heldout import select_heldout_scenarios
+from smolqwen.inference.profiles import turn_engine_config
 from smolqwen.prompts import build_system_prompt
-from smolqwen.rollout.bench import scheduler_config_for
 from smolqwen.rollout.factory_env import make_environment_factories
 from smolqwen.rollout.metrics import LogpDifferenceStopCallback
 from smolqwen.rollout.rollout_func import Prompts, make_rollout_func
@@ -549,7 +549,7 @@ def build_grpo_trainer(
                 resolve_bindings=_make_resolver(
                     by_id, specs, num_generations=config.profile.num_generations
                 ),
-                config=scheduler_config_for(config),
+                config=turn_engine_config(config),
                 dispatcher=dispatcher,
                 tokenizer=tokenizer,
             )

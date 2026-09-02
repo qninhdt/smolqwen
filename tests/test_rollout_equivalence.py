@@ -7,7 +7,7 @@ import pytest
 from smolqwen.env.pool import WorkerPool
 from smolqwen.rollout.bench import check_equivalence, run_serial_factory_oracle_scripted
 from smolqwen.rollout.generation import ScriptedPolicyBackend
-from smolqwen.rollout.rollout_func import encode_ids, make_scheduler
+from smolqwen.rollout.rollout_func import encode_ids, make_turn_engine
 from smolqwen.rollout.scheduler import PoolDispatcher
 from tests.helpers import OfflineTokenizer
 from tests.rollout_fixtures import (
@@ -39,7 +39,7 @@ def test_scripted_policy_rewards_match_factory_oracle() -> None:
         )
         dispatcher = PoolDispatcher(pool)
         try:
-            scheduler = make_scheduler(
+            scheduler = make_turn_engine(
                 backend=ScriptedPolicyBackend(policy, lambda text: encode_ids(tokenizer, text)),
                 dispatcher=dispatcher,
                 tokenizer=tokenizer,

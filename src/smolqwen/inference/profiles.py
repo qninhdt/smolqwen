@@ -17,8 +17,10 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from typing import Any
 
 from smolqwen.config_models import EvalConfig, GrpoConfig, ServeConfig
+from smolqwen.inference.turn_engine import TurnEngineConfig
 
 
 @dataclass(frozen=True)
@@ -85,6 +87,36 @@ class RolloutProfile:
             enable_sleep_mode=config.vllm_enable_sleep_mode,
             enable_prefix_caching=config.vllm_enable_prefix_caching,
         )
+
+
+def turn_engine_config(config: GrpoConfig, **overrides: Any) -> TurnEngineConfig:
+    """Map a resolved `GrpoConfig` onto the shared engine's semantic knobs.
+
+    Lives here rather than in `training/grpo.py` because `rollout/bench.py` also
+    builds it, and `bench.py` already imports from `grpo.py` -- putting the mapping
+    there would close an import cycle.
+
+    `max_generation_turns` is derived from `max_env_steps` rather than given its own
+    config field: a well-behaved episode issues one generation per environment step
+    plus a final answer, and the extra head-room covers invalid calls that consume a
+    generation without executing anything. A model emitting only prose is what this
+    bound exists for, and it hits at `max_env_steps + 4` instead of running to the
+    wall clock.
+    """
+    profile = config.profile
+    defaults: dict[str, Any] = {
+        "generation_concurrency": profile.generation_concurrency,
+        "max_env_steps": profile.max_env_steps,
+        "max_generation_turns": profile.max_env_steps + 4,
+        "episode_timeout_s": config.episode_timeout_s,
+        "max_new_tokens_per_step": profile.max_new_tokens_per_step,
+        "max_model_len": config.vllm_max_model_len,
+        "temperature": config.temperature,
+        "top_p": config.top_p,
+        "fork_threshold_tokens": config.fork_threshold_tokens,
+    }
+    defaults.update(overrides)
+    return TurnEngineConfig(**defaults)
 
 
 @dataclass(frozen=True)

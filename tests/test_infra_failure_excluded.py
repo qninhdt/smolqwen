@@ -11,7 +11,7 @@ import pytest
 
 from smolqwen.env.pool import Result
 from smolqwen.rollout.generation import ScriptedPolicyBackend
-from smolqwen.rollout.rollout_func import encode_ids, make_scheduler
+from smolqwen.rollout.rollout_func import encode_ids, make_turn_engine
 from tests.helpers import OfflineTokenizer
 from tests.rollout_fixtures import (
     FakeDispatcher,
@@ -43,7 +43,7 @@ def _run(step_behavior: Any, *, episodes: int = 1) -> tuple[list[Any], Any]:
         ScriptedPolicyBackend(text_list_policy(turns), lambda text: encode_ids(tokenizer, text)),
         clock,
     )
-    scheduler = make_scheduler(
+    scheduler = make_turn_engine(
         backend=backend,
         dispatcher=dispatcher,
         tokenizer=tokenizer,
@@ -157,7 +157,7 @@ def test_failure_cleanup_awaits_and_destroys_a_late_successful_create() -> None:
 
     dispatcher = ThreadedDispatcher()
     tokenizer = OfflineTokenizer(token_size=1)
-    scheduler = make_scheduler(
+    scheduler = make_turn_engine(
         backend=FailingBackend(),
         dispatcher=dispatcher,
         tokenizer=tokenizer,
