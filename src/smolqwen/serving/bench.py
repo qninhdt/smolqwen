@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from smolqwen.config_models import ServeConfig
+from smolqwen.inference import client
 from smolqwen.serving.report import load_quality_result, write_serving_report
 from smolqwen.serving.server import config_metadata, serving_environment
 
@@ -173,28 +174,18 @@ def wait_for_readiness(
     monotonic: Any = time.monotonic,
 ) -> None:
     """Wait for the authenticated model-list path, not merely an open port."""
-    base_url = environment.get("SMOLQWEN_BASE_URL", f"http://127.0.0.1:{config.proxy_port}").rstrip(
-        "/"
-    )
-    deadline = monotonic() + config.readiness_timeout_s
-    last_error = "endpoint did not respond"
-    while monotonic() < deadline:
-        request = urllib.request.Request(
-            f"{base_url}/v1/models",
-            headers={"Authorization": f"Bearer {environment['VLLM_API_KEY']}"},
+    try:
+        client.wait_for_readiness(
+            base_url=client.readiness_base_url(environment, proxy_port=config.proxy_port),
+            api_key=environment["VLLM_API_KEY"],
+            timeout_s=config.readiness_timeout_s,
+            poll_interval_s=config.readiness_poll_interval_s,
+            opener=opener,
+            sleep=sleep,
+            monotonic=monotonic,
         )
-        try:
-            with opener(request, timeout=config.readiness_poll_interval_s) as response:
-                if int(response.status) == 200:
-                    return
-                last_error = f"HTTP {response.status}"
-        except (OSError, urllib.error.URLError) as exc:
-            last_error = str(exc)
-        sleep(config.readiness_poll_interval_s)
-    raise BenchError(
-        "authenticated model readiness did not succeed within "
-        f"{config.readiness_timeout_s:g}s: {last_error}"
-    )
+    except client.ReadinessError as exc:
+        raise BenchError(str(exc)) from exc
 
 
 def build_bench_command(

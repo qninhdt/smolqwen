@@ -8,7 +8,9 @@ import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol
-from urllib.request import Request, urlopen
+from urllib.request import urlopen
+
+from smolqwen.inference.client import ChatClient
 
 _COMMIT_SHA = re.compile(r"[0-9a-fA-F]{40}")
 
@@ -59,6 +61,12 @@ class HttpPolicy:
         revision = _require_revision_sha(revision)
         if not model:
             raise ValueError("HTTP evaluation requires a served model name")
+        self._client = ChatClient(
+            endpoint,
+            api_key=api_key,
+            timeout_s=timeout_s,
+            opener=opener,
+        )
         self.endpoint = endpoint.rstrip("/")
         self.revision = revision
         self.adapter_revision: str | None = None
@@ -70,15 +78,11 @@ class HttpPolicy:
         self.top_k = top_k
         self.seed = seed
         self.timeout_s = timeout_s
-        self._opener = opener
 
     @property
     def completion_url(self) -> str:
-        """Return the chat-completions URL for either a root or ``/v1`` base."""
-
-        if self.endpoint.endswith("/v1"):
-            return f"{self.endpoint}/chat/completions"
-        return f"{self.endpoint}/v1/chat/completions"
+        """The chat-completions URL, for either a root or a ``/v1`` base."""
+        return self._client.completion_url
 
     def generate(
         self, messages: Sequence[Mapping[str, Any]], tools: Sequence[Mapping[str, Any]]
@@ -95,17 +99,7 @@ class HttpPolicy:
             payload["top_k"] = self.top_k
         if self.seed is not None:
             payload["seed"] = self.seed
-        headers = {"Content-Type": "application/json"}
-        if self.api_key:
-            headers["Authorization"] = f"Bearer {self.api_key}"
-        request = Request(
-            self.completion_url,
-            data=json.dumps(payload).encode(),
-            headers=headers,
-            method="POST",
-        )
-        with self._opener(request, timeout=self.timeout_s) as response:
-            body = json.loads(response.read().decode())
+        body = self._client.chat(payload)
         choice = body["choices"][0]
         message = choice["message"]
         completion = str(message.get("content") or "")

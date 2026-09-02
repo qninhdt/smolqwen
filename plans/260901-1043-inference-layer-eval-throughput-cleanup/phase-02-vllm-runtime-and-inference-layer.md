@@ -1,7 +1,7 @@
 ---
 phase: 2
 title: "vLLM runtime, profiles, and the shared client"
-status: pending
+status: in_progress
 priority: P1
 effort: "2d"
 dependencies: [1]
@@ -72,12 +72,6 @@ actually trained.
 **Telemetry.** vLLM usage-stats collection is on by default and disabled only by
 `VLLM_NO_USAGE_STATS`, `VLLM_DO_NOT_TRACK`, or `DO_NOT_TRACK`. Zero occurrences
 exist repo-wide, while CI sets offline flags for HF, transformers, and W&B
-(`ci.yml:14-18`). This engine runs in-process for evaluation, so one line at the
-single construction point closes it.
-
-**Telemetry.** vLLM usage-stats collection is on by default and disabled only by
-`VLLM_NO_USAGE_STATS`, `VLLM_DO_NOT_TRACK`, or `DO_NOT_TRACK`. Zero occurrences
-exist repo-wide, while CI sets offline flags for HF, transformers, and W&B
 (`ci.yml:14-18`). Phase 6 puts this engine inside the trainer process that holds
 the HF token and W&B session — the boundary `test_worker_isolation_secrets.py`
 exists to defend. One line at the single construction point closes it.
@@ -103,8 +97,9 @@ plumbing in the repo, and it refuses an open port as readiness.
   profile; serving argv matches today's `build_serve_command` exactly
 - Create: `tests/test_inference_engine_contract.py` — surface against a fake;
   no heavy import at module scope; telemetry env set
-- Create: `tests/test_lora_gate.py` — `@pytest.mark.gpu`, adapter output differs
-  from base on a fixed probe
+- Create: `tests/test_vllm_adapter_capability.py` — `@pytest.mark.gpu`, adapter
+  output differs from base on a trained adapter; also carries the sleep/wake VRAM
+  measurement Phase 6 reads
 - Create: `tests/test_http_client_auth.py` — asserts `Authorization: Bearer` is
   sent; no such assertion exists today
 - Modify: `src/smolqwen/serving/server.py` — delegate argv to `ServeProfile`
@@ -131,33 +126,76 @@ plumbing in the repo, and it refuses an open port as readiness.
    measured VRAM before and after with `torch.cuda.reset_peak_memory_stats()` plus
    `memory_allocated()` — not `max_memory_allocated()`, which is monotonic and
    cannot show a release. Phase 6's memory arithmetic reads this number.
+   **Open — needs a card.** The test exists at
+   `tests/test_vllm_adapter_capability.py::test_sleep_releases_memory_and_waking_restores_generation`
+   and runs in Phase 10 step 1.
 6. Record the adapter branch: attempt `LoRARequest` against a real trained
    `all-linear` adapter when one exists, and write down which path adapter
    evaluation takes. Nothing blocks on the outcome — `TransformersPolicy` covers
    the refusal case — but Phase 6 wants the answer before it picks its loading
-   mechanism.
+   mechanism. **Open — needs a card.** Same file,
+   `test_an_all_linear_adapter_either_loads_or_raises`; the adapter it probes with
+   has non-zero `lora_B`, so an accepted-but-ignored adapter fails rather than
+   reading as agreement.
 
 ## Success Criteria
 
-- [ ] `python -c "import smolqwen.inference"` leaves torch and vllm out of
+- [x] `python -c "import smolqwen.inference"` leaves torch and vllm out of
       `sys.modules`
-- [ ] `test_serving_commands.py` passes with argv unchanged
-- [ ] `EvalProfile.from_config` reads the resolved `ProfileConfig`; no field is
+- [x] `test_serving_commands.py` passes with argv unchanged
+- [x] `EvalProfile.from_config` reads the resolved `ProfileConfig`; no field is
       declared twice
-- [ ] `--profile l4 --dry-run` still shows eval sizing from the profile YAML
+- [x] `--profile l4 --dry-run` still shows eval sizing from the profile YAML
 - [ ] Sleep/wake verified with a non-monotonic VRAM reading, and the released
       amount recorded for Phase 6
 - [ ] Adapter branch recorded (vLLM `LoRARequest` or `TransformersPolicy`)
-- [ ] `VLLM_NO_USAGE_STATS` set at every construction site, asserted by test
-- [ ] Bearer header asserted by test
-- [ ] `wait_for_readiness` and its test live in the inference layer
-- [ ] CPU suite green; `gpu`-marked tests deselected and listed as pending
+- [x] `VLLM_NO_USAGE_STATS` set at every construction site, asserted by test
+- [x] Bearer header asserted by test
+- [x] `wait_for_readiness` and its test live in the inference layer
+- [x] CPU suite green; `gpu`-marked tests deselected and listed as pending
+
+## Outcome
+
+`src/smolqwen/inference/` created: `profiles.py`, `engine.py`, `client.py`,
+`__init__.py`. Importing the package leaves torch and vllm out of `sys.modules`,
+asserted by a subprocess test rather than by inspection of the current process.
+
+`ServeProfile.command()` is `build_serve_command`'s body moved verbatim;
+`build_serve_command` delegates and `test_serving_commands.py` passes with argv
+unchanged. `EvalProfile.from_config` reads the resolved `ProfileConfig` and
+`DecodingConfig`, with a test asserting no field is declared on both sides and a
+negative control proving the two shipped profiles genuinely differ.
+
+`ProfileConfig` gained exactly two fields: `enforce_eager` and `max_lora_slots`.
+
+`wait_for_readiness` moved to `inference/client.py`; `serving/bench.py` delegates
+and translates `ReadinessError` to `BenchError`. `HttpPolicy` now composes
+`ChatClient`, so base-URL normalization and the bearer header have one owner and
+a test — neither had one before.
+
+Telemetry is set at both construction sites: `OfflineEngine.build()` before
+`import vllm`, and `serving_environment()` for the subprocess.
+
+**Two criteria remain open, and both need a card.** vllm is absent locally
+(`serve`/`colab` extras only; torch 2.11.0+cu130 is installed) and the local GPU
+is a 4 GB RTX 3050, below the plan's L4 floor.
+`tests/test_vllm_adapter_capability.py` is written and `gpu`-marked: 3 tests
+covering the adapter branch and the sleep/wake VRAM release, the second reading
+`memory_allocated()` after `reset_peak_memory_stats()` because
+`max_memory_allocated()` is monotonic and cannot show a release. Both numbers get
+recorded in Phase 10 step 1, and Phase 6 reads them before choosing how to load a
+checkpoint.
+
+CPU suite: 368 passed, 10 deselected (7 `dataset`, 3 `gpu`). `make check` and
+`make smoke` green.
 
 ## Risk Assessment
 
 The load-bearing assumption is that the offline `LLM` on this pin exposes
 sleep/wake and releases enough memory for Phase 6. vllm is not installed here
-(torch is 2.8.0, not the pinned 2.11.0), so step 5 is the first real measurement.
+(`serve`/`colab` extras only) and the local card is a 4 GB RTX 3050, below the
+plan's L4 floor, so step 5 is the first real measurement and it happens in
+Phase 10.
 
 - Signal it broke: `memory_allocated()` after `sleep()` stays near its pre-sleep
   value.

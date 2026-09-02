@@ -69,6 +69,13 @@ class ProfileConfig(StrictModel):
     env_worker_count: int = Field(default=4, ge=1)
     env_episodes_per_worker: int = Field(default=8, ge=1)
 
+    # Offline evaluation engine. Both are sizing, not semantics: `enforce_eager`
+    # trades CUDA graph capture memory for per-step latency, and the LoRA slot
+    # count is how many adapters the engine may hold resident at once. Neither
+    # changes what a benchmark measures.
+    enforce_eager: bool = False
+    max_lora_slots: int = Field(default=1, ge=1)
+
     @property
     def generation_batch_size(self) -> int:
         """TRL prompt-pool size for one synchronous `rollout_func` call."""

@@ -1,8 +1,7 @@
-"""Build and run the pinned vLLM OpenAI-compatible server command."""
+"""Run the pinned vLLM OpenAI-compatible server. Argv is owned by `inference`."""
 
 from __future__ import annotations
 
-import json
 import os
 import shlex
 import subprocess
@@ -10,6 +9,8 @@ from collections.abc import Mapping
 from typing import Any
 
 from smolqwen.config_models import ServeConfig
+from smolqwen.inference.engine import disable_telemetry
+from smolqwen.inference.profiles import ServeProfile
 
 
 class ServingError(RuntimeError):
@@ -18,58 +19,7 @@ class ServingError(RuntimeError):
 
 def build_serve_command(config: ServeConfig) -> list[str]:
     """Return argv only; the API key stays in the environment, never process args."""
-    command = [
-        "vllm",
-        "serve",
-        config.model_path,
-        "--host",
-        config.host,
-        "--port",
-        str(config.port),
-        "--served-model-name",
-        config.served_model_name,
-        "--max-model-len",
-        str(config.max_model_len),
-        "--dtype",
-        config.dtype,
-        "--reasoning-parser",
-        config.reasoning_parser,
-        "--enable-auto-tool-choice",
-        "--tool-call-parser",
-        config.tool_call_parser,
-        "--max-num-seqs",
-        str(config.max_num_seqs),
-        "--max-num-batched-tokens",
-        str(config.max_num_batched_tokens),
-        "--gpu-memory-utilization",
-        str(config.gpu_memory_utilization),
-    ]
-    command.append(
-        "--enable-prefix-caching" if config.enable_prefix_caching else "--no-enable-prefix-caching"
-    )
-    command.append(
-        "--enable-chunked-prefill"
-        if config.enable_chunked_prefill
-        else "--no-enable-chunked-prefill"
-    )
-    if config.model_revision:
-        command.extend(["--revision", config.model_revision])
-    if config.quantization:
-        command.extend(["--quantization", config.quantization])
-    if config.speculative_num_tokens is not None:
-        command.extend(
-            [
-                "--speculative-config",
-                json.dumps(
-                    {
-                        "method": "mtp",
-                        "num_speculative_tokens": config.speculative_num_tokens,
-                    },
-                    separators=(",", ":"),
-                ),
-            ]
-        )
-    return command
+    return ServeProfile(config).command()
 
 
 def serving_environment(source: Mapping[str, str] | None = None) -> dict[str, str]:
@@ -79,6 +29,7 @@ def serving_environment(source: Mapping[str, str] | None = None) -> dict[str, st
     if not key:
         raise ServingError("VLLM_API_KEY must be set; there is no default serving key")
     environment["OPENAI_API_KEY"] = key
+    disable_telemetry(environment)
     return environment
 
 

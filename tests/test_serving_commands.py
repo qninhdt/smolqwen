@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-import urllib.request
+import urllib.error
 from pathlib import Path
 
 import pytest
@@ -36,6 +36,18 @@ def test_serving_environment_requires_key_without_putting_it_in_argv() -> None:
         serving_environment({})
     environment = serving_environment({"VLLM_API_KEY": "secret"})
     assert environment["OPENAI_API_KEY"] == "secret"
+
+
+def test_serving_environment_opts_out_of_vllm_usage_stats() -> None:
+    """vLLM's usage-stats collection is default-on; this is the only opt-out.
+
+    CI already sets offline flags for HF, transformers and W&B (`ci.yml:14-18`) and
+    set none for vLLM, so the served process was the one path still reporting.
+    """
+    environment = serving_environment({"VLLM_API_KEY": "secret"})
+    assert environment["VLLM_NO_USAGE_STATS"] == "1"
+    assert environment["VLLM_DO_NOT_TRACK"] == "1"
+    assert environment["DO_NOT_TRACK"] == "1"
 
 
 def test_bench_command_uses_documented_percentiles_and_result_path(tmp_path: Path) -> None:
@@ -79,32 +91,25 @@ def test_dataset_path_and_concurrency_validation_fail_early(tmp_path: Path) -> N
         parse_concurrency("1,0")
 
 
-def test_readiness_probe_uses_the_key_on_a_model_path() -> None:
-    seen: list[object] = []
+def test_readiness_failure_reaches_the_caller_as_a_bench_error() -> None:
+    """The probe itself lives in `inference/client.py` with its own tests.
 
-    class Response:
-        status = 200
+    What `bench.py` still owns is the error translation, so that is what is
+    asserted here rather than re-testing the probe through a second surface.
+    """
+    clock = iter([0.0, 0.0, 2.0])
 
-        def __enter__(self) -> Response:
-            return self
+    def opener(_request: object, *, timeout: float) -> None:
+        raise urllib.error.URLError("connection refused")
 
-        def __exit__(self, *_args: object) -> None:
-            pass
-
-    def opener(request: object, *, timeout: float) -> Response:
-        seen.extend([request, timeout])
-        return Response()
-
-    wait_for_readiness(
-        ServeConfig(readiness_timeout_s=1.0, readiness_poll_interval_s=0.1),
-        environment={"VLLM_API_KEY": "secret", "SMOLQWEN_BASE_URL": "http://proxy:8080"},
-        opener=opener,
-        monotonic=lambda: 0.0,
-    )
-    request = seen[0]
-    assert isinstance(request, urllib.request.Request)
-    assert request.full_url == "http://proxy:8080/v1/models"
-    assert request.headers["Authorization"] == "Bearer secret"
+    with pytest.raises(BenchError, match="connection refused"):
+        wait_for_readiness(
+            ServeConfig(readiness_timeout_s=1.0, readiness_poll_interval_s=0.1),
+            environment={"VLLM_API_KEY": "secret", "SMOLQWEN_BASE_URL": "http://proxy:8080"},
+            opener=opener,
+            sleep=lambda _: None,
+            monotonic=lambda: next(clock),
+        )
 
 
 def test_sweep_delegates_combinations_resume_and_pareto_inputs_upstream(
