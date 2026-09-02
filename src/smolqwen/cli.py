@@ -235,20 +235,6 @@ def _resolve_for(args: argparse.Namespace) -> StrictModel:
     )
 
 
-def _not_implemented(phase: int, what: str) -> Callable[..., int]:
-    """A handler for a stage whose module has not landed yet.
-
-    Exiting non-zero with the owning phase named beats a stub that silently
-    succeeds and gets mistaken for a completed run.
-    """
-
-    def handler(*_: Any, **__: Any) -> int:
-        print(f"{what} is implemented in Phase {phase}", file=sys.stderr)
-        return 2
-
-    return handler
-
-
 def _cmd_probe(args: argparse.Namespace) -> int:
     from smolqwen.probe import format_probe, probe, write_probe
 

@@ -18,7 +18,6 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 STAGES = ("data", "sft", "grpo", "eval", "serve")
-Stage = Literal["data", "sft", "grpo", "eval", "serve"]
 PROFILES = ("l4", "a100")
 
 # budgets.json key -> the profile field it seeds. SFT max sequence length is not
@@ -127,7 +126,6 @@ class DataConfig(StrictModel):
     # step 1 fixes this against real excerpts, and Phase 6's rollout must append
     # the same shape -- the two render one newline apart on every observation.
     tool_result_shape: Literal["tool_role", "tool_response_user"] = "tool_role"
-    max_trajectories: int | None = None
     profile: ProfileConfig = ProfileConfig()
     tracking: TrackingConfig = TrackingConfig()
 

@@ -36,15 +36,6 @@ from smolqwen.inference.episode import Episode
 from smolqwen.inference.profiles import EvalProfile
 from smolqwen.inference.turn_engine import TurnEngine, TurnEngineConfig
 
-# Head-room over `max_env_steps` for turns that consume a generation without
-# executing an environment method: a completion marker, an invalid call, a
-# clarification. Matches the rollout side's derivation.
-GENERATION_TURN_HEADROOM = 4
-
-
-class BatchedEvalError(RuntimeError):
-    """Raised when batched evaluation cannot be configured coherently."""
-
 
 def pool_capacity_of(adapter: BenchmarkAdapter) -> int | None:
     """How many live episodes the adapter's environment layer can hold, if any.

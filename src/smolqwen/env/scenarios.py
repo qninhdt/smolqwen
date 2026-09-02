@@ -21,7 +21,6 @@ through it.
 from __future__ import annotations
 
 import json
-import random
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -139,17 +138,6 @@ class ScenarioSet:
 
     def task_ids(self) -> tuple[str, ...]:
         return tuple(scenario.task_id for scenario in self.scenarios)
-
-    def sample_ids(self, count: int, *, seed: int) -> tuple[str, ...]:
-        """A seeded sample of task ids, stable for a given `(count, seed)`.
-
-        Sorted before sampling so the result does not depend on file order, which
-        is what makes a Phase 7 difficulty profile reproducible.
-        """
-        ordered = sorted(self.task_ids())
-        if count >= len(ordered):
-            return tuple(ordered)
-        return tuple(random.Random(seed).sample(ordered, count))
 
     def manifest(self) -> dict[str, Any]:
         return {

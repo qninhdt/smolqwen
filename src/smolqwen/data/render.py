@@ -16,7 +16,6 @@ from smolqwen.data.loader import Message
 
 ToolResultShape = Literal["tool_role", "tool_response_user"]
 
-MASKED = 0
 SUPERVISED = 1
 IGNORE_INDEX = -100
 

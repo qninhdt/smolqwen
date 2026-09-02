@@ -13,7 +13,6 @@ import platform
 import sys
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any
 
 # Kernel libraries whose availability changes which optimizations Phase 3 can
 # enable. Import success is reported, never assumed.
@@ -146,5 +145,3 @@ def format_probe(report: ProbeReport) -> str:
     return "\n".join(lines)
 
 
-def probe_payload() -> dict[str, Any]:
-    return asdict(probe())

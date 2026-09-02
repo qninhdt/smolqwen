@@ -91,10 +91,6 @@ class AdapterDriver:
     def close(self, episode: Episode) -> Future[Any] | None:
         return None
 
-    def task_for(self, episode_id: str) -> EvalTask:
-        return self._tasks[episode_id]
-
-
 def completed_advance(step: StepResult, *, terminal_on_complete: str) -> Advance:
     """One `StepResult` as an `Advance`, preserving the role and the tool set.
 

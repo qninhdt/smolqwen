@@ -216,15 +216,6 @@ class Trajectory:
         """
         return f"{self.task_id}:{self.traj_type}"
 
-    @property
-    def is_conversation(self) -> bool:
-        """Conv vs Non-Conv, by the release's own `traj_type` label.
-
-        Not re-derived from the message list: RL is Non-Conv only, and a
-        classification that disagreed with the label would silently change which
-        trajectories the RL split draws from.
-        """
-        return self.traj_type == "conversation"
 
     @property
     def real_user_turns(self) -> int:

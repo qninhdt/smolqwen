@@ -45,11 +45,6 @@ def split_trajectory_ids(ids: Sequence[str], *, seed: int, val_fraction: float) 
     )
 
 
-def split_trajectories(trajectories: Iterable[str], *, seed: int, val_fraction: float) -> Split:
-    """Split trajectories by id, provided as an iterable of trajectory id strings."""
-    return split_trajectory_ids(list(trajectories), seed=seed, val_fraction=val_fraction)
-
-
 @dataclass(frozen=True)
 class EnvSplitManifest:
     sft_env_ids: tuple[str, ...]

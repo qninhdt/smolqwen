@@ -42,11 +42,6 @@ def run_server(config: ServeConfig, *, print_command: bool = False) -> int:
     return int(completed.returncode)
 
 
-def safe_command_text(command: list[str]) -> str:
-    """A reportable command string; secrets cannot appear because argv has none."""
-    return shlex.join(command)
-
-
 def config_metadata(config: ServeConfig) -> dict[str, Any]:
     return {
         "model": config.served_model_name,

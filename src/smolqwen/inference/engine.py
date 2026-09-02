@@ -136,10 +136,6 @@ class OfflineEngine:
         )
 
     @property
-    def is_built(self) -> bool:
-        return self._llm is not None
-
-    @property
     def is_sleeping(self) -> bool:
         return self._sleeping
 
@@ -349,25 +345,3 @@ def _token_completion(output: Any, index: int) -> TokenCompletion:
         logprobs=tuple(logprobs),
         finish_reason=None if first.finish_reason is None else str(first.finish_reason),
     )
-
-
-def offline_engine_for_eval(
-    model: str,
-    profile: EvalProfile,
-    *,
-    revision: str | None = None,
-    adapter: Mapping[str, str] | None = None,
-    enable_sleep_mode: bool = False,
-) -> OfflineEngine:
-    """Build an engine and register any adapters, in the order the engine needs."""
-    engine = OfflineEngine(
-        model,
-        profile,
-        revision=revision,
-        enable_lora=bool(adapter),
-        enable_sleep_mode=enable_sleep_mode,
-    )
-    engine.build()
-    for name, path in (adapter or {}).items():
-        engine.load_adapter(name, path)
-    return engine
