@@ -158,6 +158,35 @@ class OptimizationFlags(StrictModel):
     compile_exclude_patterns: Sequence[str] = ("linear_attn", "mixer", "conv1d")
 
 
+class BenchEvalConfig(StrictModel):
+    """In-training held-out benchmark eval. Shared by both training stages.
+
+    Every field has a default, so adding this block does not invalidate an existing
+    YAML: `extra="forbid"` rejects unknown *keys*, not new model fields.
+
+    `adapter` names the dev benchmark explicitly and is not read from
+    `EvalConfig.adapters`. That list holds both `bfcl_multi_turn` and
+    `envscaler_heldout`, so a callback iterating it would score BFCL at every
+    boundary -- and a benchmark used to pick checkpoints is a dev set, which would
+    void the final Base | SFT | SFT+RL comparison.
+
+    `task_limit` x eval frequency is what keeps the cost inside the 10% of training
+    wall time the budget allows. The measured per-boundary cost is logged, so the
+    setting is checkable rather than asserted.
+    """
+
+    enabled: bool = False
+    adapter: str = "envscaler_heldout"
+    # Boundaries between evals, in optimizer steps. 0 means "only at save
+    # boundaries", which is the cheapest useful cadence.
+    every_steps: int = Field(default=0, ge=0)
+    # Score once before the first optimizer step, so the curve has an anchor. A
+    # learning curve whose first point is at step 100 cannot show early movement.
+    baseline_at_step_zero: bool = True
+    task_limit: int = Field(default=16, ge=1)
+    timeout_s: float = Field(default=900.0, gt=0.0)
+
+
 class TrainingConfig(StrictModel):
     learning_rate: float = Field(default=1e-4, gt=0.0)
     num_train_epochs: float = Field(default=2.0, gt=0.0)
@@ -182,6 +211,7 @@ class SftConfig(StrictModel):
     lora: LoraConfig = LoraConfig()
     training: TrainingConfig = TrainingConfig()
     optimization: OptimizationFlags = OptimizationFlags()
+    bench_eval: BenchEvalConfig = BenchEvalConfig()
     profile: ProfileConfig = ProfileConfig()
     tracking: TrackingConfig = TrackingConfig()
 
@@ -269,6 +299,7 @@ class GrpoConfig(StrictModel):
     episode_timeout_s: float = Field(default=600.0, gt=0.0)
     fork_threshold_tokens: int = Field(default=1024, ge=1)
     rollout_path: Literal["async", "factory_oracle"] = "async"
+    bench_eval: BenchEvalConfig = BenchEvalConfig()
     profile: ProfileConfig = ProfileConfig()
     tracking: TrackingConfig = TrackingConfig()
 

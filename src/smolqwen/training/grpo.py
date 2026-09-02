@@ -14,7 +14,7 @@ from torch.utils.data import Sampler
 from transformers import TrainerCallback
 
 from smolqwen.artifacts import CheckpointStore, ResumeState
-from smolqwen.config_models import GrpoConfig
+from smolqwen.config_models import EvalConfig, GrpoConfig
 from smolqwen.env.pool import WorkerPool
 from smolqwen.env.registry import EnvSpec, load_env_specs
 from smolqwen.env.scenarios import Scenario, build_scenario_set
@@ -22,6 +22,7 @@ from smolqwen.eval.adapters.envscaler_heldout import select_heldout_scenarios
 from smolqwen.inference.profiles import turn_engine_config
 from smolqwen.prompts import build_system_prompt
 from smolqwen.rollout.factory_env import make_environment_factories
+from smolqwen.rollout.generation import VllmColocateBackend
 from smolqwen.rollout.metrics import LogpDifferenceStopCallback
 from smolqwen.rollout.rollout_func import Prompts, make_rollout_func
 from smolqwen.rollout.scheduler import PoolDispatcher, ScenarioBinding
@@ -299,6 +300,78 @@ def _grpo_args(
         push_to_hub=False,
         save_total_limit=2,
     )
+
+
+def _sync_weights(trainer: Any) -> None:
+    """Push the trainer's current weights into the colocated engine.
+
+    Required, not optional. At a callback boundary the optimizer step has already
+    been applied, and generation runs once per accumulation window, so the engine
+    can hold weights up to `grad_accum` optimizer steps old. That drift is invisible
+    in a score and would look exactly like a parity bug when `bench_*` is later
+    compared against `evaluate` at "the same revision".
+
+    Asserted rather than skipped when absent, matching `_assert_prefix_caching`: a
+    silently unsynced eval reports a number for the wrong weights.
+    """
+    generation = getattr(trainer, "vllm_generation", None)
+    sync = getattr(generation, "sync_weights", None)
+    if not callable(sync):
+        raise GrpoError(
+            "in-training benchmark eval requires the colocated vLLM engine's "
+            "sync_weights; without it the scored weights are up to grad_accum "
+            "optimizer steps stale and the number is unattributable"
+        )
+    sync()
+
+
+def _weight_version(trainer: Any, syncs: list[int]) -> str:
+    """Global step plus a sync counter: what weights a `bench_*` row measured.
+
+    The step alone is not enough -- two evals at the same step (a save boundary that
+    coincides with an interval) would be indistinguishable, and the whole point is
+    that the comparison against `evaluate` is falsifiable.
+    """
+    step = int(getattr(getattr(trainer, "state", None), "global_step", 0))
+    syncs.append(step)
+    return f"step-{step}.sync-{len(syncs)}"
+
+
+def build_bench_eval_callback(
+    config: GrpoConfig,
+    trainer: Any,
+    tokenizer: Any,
+    *,
+    tracker: Tracker | None = None,
+) -> Any | None:
+    """The in-training dev-eval callback, or None when it is disabled.
+
+    The eval config is resolved from the same YAML `evaluate` reads, so the adapter's
+    held-out selection and decoding are identical -- that is what makes one number
+    mean one thing. Only the dev adapter is named; `bench_eval.assert_dev_adapter`
+    refuses a test-set entry.
+    """
+    if not config.bench_eval.enabled:
+        return None
+    from smolqwen.config import resolve
+    from smolqwen.training.bench_eval import BenchEvalCallback, BenchEvalRunner
+
+    resolved = resolve("eval")
+    if not isinstance(resolved, EvalConfig):
+        raise GrpoError(f"expected EvalConfig from the eval stage, got {type(resolved).__name__}")
+
+    syncs: list[int] = []
+    runner = BenchEvalRunner(
+        eval_config=resolved,
+        bench_config=config.bench_eval,
+        engine_source=lambda: VllmColocateBackend(trainer),
+        tokenizer_source=lambda: tokenizer,
+        metric_prefix="grpo",
+        sink=(lambda payload: trainer.log(dict(payload))) if hasattr(trainer, "log") else None,
+        weight_version=lambda: _weight_version(trainer, syncs),
+        artifact_dir=config.output_dir,
+    )
+    return BenchEvalCallback(runner, before_each=lambda: _sync_weights(trainer))
 
 
 def _dataset_row(
@@ -595,6 +668,9 @@ def build_grpo_trainer(
                 margin=config.curriculum.zero_variance_stop_margin,
             )
         )
+        bench_eval = build_bench_eval_callback(config, trainer, tokenizer, tracker=run)
+        if bench_eval is not None:
+            trainer.add_callback(cast(Any, bench_eval))
         run.config.update(ledger(toggles))
     except Exception:
         _cleanup_failed_assembly(dispatcher, pool, run)

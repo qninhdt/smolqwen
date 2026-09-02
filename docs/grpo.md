@@ -69,6 +69,41 @@ Training logs verifier reward, held-out evaluation reward, sampled trajectories,
 and per-group reward variance. Trajectory rows include reasoning, calls,
 observations, checkpoint verdicts, invalid calls, and step count.
 
+### In-training dev eval
+
+The reward series above is computed over *training* scenarios under curriculum
+weighting — a biased sample by construction. `bench_eval` adds a held-out score on
+the same dev set `smolqwen evaluate` uses, through the same turn engine and the
+same aggregation, so one number means one thing in both places.
+
+```yaml
+bench_eval:
+  enabled: true          # off by default: it needs a card
+  adapter: envscaler_heldout
+  every_steps: 0         # 0 = save boundaries only
+  task_limit: 16
+```
+
+Three things about the resulting series are worth knowing before reading it:
+
+- **`grpo/bench_weight_version` rides alongside every score.** At a callback
+  boundary the optimizer step has already been applied, and generation runs once per
+  accumulation window, so the colocated engine can hold weights up to `grad_accum`
+  steps old. The callback calls `sync_weights()` explicitly and records
+  `step-N.sync-M`, which is what makes a later comparison against `evaluate` "at the
+  same revision" falsifiable rather than merely plausible.
+- **`grpo/bench_wall_s` is the cost, measured.** The budget is 10% of training wall
+  time; widen `every_steps` or lower `task_limit` if the recorded total exceeds it.
+  The setting is checked against this number, not asserted in a comment.
+- **The adapter is named, never inherited.** `configs/base/eval.yaml` lists BFCL too,
+  and BFCL is the test set. A benchmark used to select checkpoints is a dev set, so
+  scoring it here would void the final `Base | SFT | SFT+RL` comparison;
+  `bench_eval.assert_dev_adapter` refuses a test-set name.
+
+An eval failure logs `bench_failed`, releases its environments, and training
+continues. Releasing matters: a leaked episode set turns one recoverable failure
+into a pool at capacity at every later boundary.
+
 Two conditions stop training rather than silently accepting corrupt evidence:
 
 - TRL's sampling-logprob difference exceeds the configured alignment threshold.

@@ -97,3 +97,24 @@ episode_timeout_s: 600.0
 # Drift classifier threshold, upstream's default. Drift tallies are logged per
 # run; retune only against a measured distribution, never blind.
 fork_threshold_tokens: 1024
+
+# In-training dev eval. Disabled by default: it needs a card, and a CPU dry-run
+# must not try to build a generation engine.
+#
+# Cost sizing against the 10% of training wall time the budget allows. With
+# save_steps: 20 and max_steps: 200 there are 10 save boundaries plus the step-0
+# baseline, so 11 evals. At 16 tasks and up to 20 turns each the per-boundary cost
+# is what `grpo/bench_wall_s` records -- the setting is checkable from that number
+# rather than asserted here. Widen `every_steps` or lower `task_limit` if the
+# recorded total exceeds the budget.
+#
+# `adapter` names the dev benchmark explicitly. `eval.yaml` lists BFCL too, and a
+# benchmark used to select checkpoints is a dev set -- scoring the test set here
+# would void the final Base | SFT | SFT+RL comparison.
+bench_eval:
+  enabled: false
+  adapter: envscaler_heldout
+  every_steps: 0
+  baseline_at_step_zero: true
+  task_limit: 16
+  timeout_s: 900.0
