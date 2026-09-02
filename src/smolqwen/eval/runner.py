@@ -6,11 +6,13 @@ import json
 import time
 from collections.abc import Mapping, Sequence
 from importlib.metadata import PackageNotFoundError, version
+from pathlib import Path
 from typing import Any
 
 from smolqwen.config_models import EvalConfig
 from smolqwen.eval.adapters import create_adapter
 from smolqwen.eval.adapters.base import BenchmarkAdapter
+from smolqwen.eval.checkpoints import resolve as resolve_checkpoint
 from smolqwen.eval.manifest import EvalManifest
 from smolqwen.eval.metrics import TaskMetrics
 from smolqwen.eval.policies import Policy, load_policy
@@ -173,13 +175,43 @@ def _evaluate_named_adapter(
             close()
 
 
+def _checkpoint_store(config: EvalConfig, args: Any) -> Any:
+    """A store only when the checkpoint is a Hub id and a repo is configured.
+
+    Constructed lazily so a local-directory evaluation never touches the Hub API,
+    and never needs a token to run.
+    """
+    checkpoint = getattr(args, "checkpoint", None)
+    if not checkpoint or Path(checkpoint).is_dir() or args.endpoint:
+        return None
+    repo_id = config.tracking.hub_repo_id or checkpoint
+    from smolqwen.artifacts import CheckpointStore
+
+    return CheckpointStore(repo_id, Path(config.tracking.local_artifact_dir) / "eval-checkpoints")
+
+
 def run_evaluation(config: EvalConfig, args: Any) -> int:
-    policy = load_policy(
+    # Config validation before weight resolution: an empty adapter list is a typo,
+    # and discovering it after a multi-gigabyte checkpoint download wastes the
+    # download. Nothing here touches the network or the GPU.
+    adapter_names = (args.adapter,) if args.adapter else tuple(config.adapters)
+    if not adapter_names:
+        raise ValueError("evaluation requires at least one benchmark adapter")
+
+    resolved = resolve_checkpoint(
         checkpoint=args.checkpoint,
         revision=args.revision,
-        endpoint=args.endpoint,
         adapter=args.adapter_path,
         adapter_revision=args.adapter_revision,
+        endpoint=args.endpoint,
+        store=_checkpoint_store(config, args),
+    )
+    policy = load_policy(
+        checkpoint=resolved.path,
+        revision=resolved.revision,
+        endpoint=args.endpoint,
+        adapter=resolved.adapter_path,
+        adapter_revision=resolved.adapter_revision,
         model=config.http_model,
         max_new_tokens=config.decoding.max_new_tokens,
         temperature=config.decoding.temperature,
@@ -190,9 +222,6 @@ def run_evaluation(config: EvalConfig, args: Any) -> int:
     )
     adapter_invariants: dict[str, Mapping[str, Any]] = {}
     metrics: dict[str, dict[str, float]] = {}
-    adapter_names = (args.adapter,) if args.adapter else tuple(config.adapters)
-    if not adapter_names:
-        raise ValueError("evaluation requires at least one benchmark adapter")
     tag = args.tag or "evaluation"
     trajectory_paths: dict[str, str] = {}
     for adapter_name in adapter_names:
@@ -218,7 +247,7 @@ def run_evaluation(config: EvalConfig, args: Any) -> int:
         backend=backend,
         adapter_invariants=adapter_invariants,
         recorded_free={
-            "checkpoint": args.checkpoint,
+            **resolved.to_recorded(),
             "endpoint": args.endpoint,
             "served_model": config.http_model if args.endpoint else None,
             "dtype": getattr(args, "served_dtype", None)
@@ -231,7 +260,6 @@ def run_evaluation(config: EvalConfig, args: Any) -> int:
             "chunked_prefill": getattr(args, "chunked_prefill", None),
             "prefix_caching": getattr(args, "prefix_caching", None),
             "library_versions": _library_versions(),
-            "adapter_revision": getattr(policy, "adapter_revision", None),
             # What generation actually used, so a row is self-describing without
             # the caller having asserted it on the command line.
             "generation_concurrency": config.profile.generation_concurrency,

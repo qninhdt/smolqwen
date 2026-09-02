@@ -89,8 +89,7 @@ def _diagnostics_section(metrics: dict[str, dict[str, float]]) -> list[str]:
         named = sorted(
             name
             for name in values
-            if not name.endswith(DENOMINATOR_SUFFIX)
-            and f"{name}{DENOMINATOR_SUFFIX}" in values
+            if not name.endswith(DENOMINATOR_SUFFIX) and f"{name}{DENOMINATOR_SUFFIX}" in values
         )
         for name in named:
             denominator = int(values[f"{name}{DENOMINATOR_SUFFIX}"])
