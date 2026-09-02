@@ -143,5 +143,3 @@ def format_probe(report: ProbeReport) -> str:
     for name, importable in sorted(report.kernel_imports.items()):
         lines.append(f"  {name:16} {'ok' if importable else 'missing'}")
     return "\n".join(lines)
-
-

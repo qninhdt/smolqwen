@@ -85,6 +85,13 @@ def test_train_grpo_without_a_profile_names_the_required_preflight(
 
 
 def test_parser_exposes_pinned_revision_on_evaluate() -> None:
+    """The revision stays mandatory; the eight serving-detail flags are gone.
+
+    The in-process engine knows its own dtype, KV budget, batching and caching and
+    records what it used, so asserting those on the command line only created a way
+    to record something other than what ran. `--serving-backend` survives because
+    the served process is a separate one this command cannot inspect.
+    """
     parser = build_parser()
     args = parser.parse_args(
         [
@@ -93,25 +100,16 @@ def test_parser_exposes_pinned_revision_on_evaluate() -> None:
             "org/repo",
             "--revision",
             "abc123",
-            "--served-dtype",
-            "float8_e4m3fn",
             "--serving-backend",
             "vllm",
-            "--quantization",
-            "fp8",
-            "--max-num-seqs",
-            "64",
-            "--chunked-prefill",
-            "--no-prefix-caching",
         ]
     )
     assert args.revision == "abc123"
-    assert args.served_dtype == "float8_e4m3fn"
     assert args.serving_backend == "vllm"
-    assert args.quantization == "fp8"
-    assert args.max_num_seqs == 64
-    assert args.chunked_prefill is True
-    assert args.prefix_caching is False
+
+    for removed in ("--served-dtype", "--quantization", "--max-num-seqs", "--chunked-prefill"):
+        with pytest.raises(SystemExit):
+            parser.parse_args(["evaluate", "--revision", "abc123", removed, "x"])
 
 
 def test_prepare_sft_parser_accepts_only_positive_worker_count() -> None:
@@ -121,14 +119,17 @@ def test_prepare_sft_parser_accepts_only_positive_worker_count() -> None:
         parser.parse_args(["prepare-sft", "--workers", "0"])
 
 
-def test_bench_and_sweep_report_a_missing_key_without_traceback(
+def test_serving_reports_a_missing_key_without_a_traceback(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     tmp_path: Path,
 ) -> None:
+    """The assertion that survived the benchmark wrapper's deletion.
+
+    `serve` is the remaining subcommand that needs the key, and a missing key must
+    still exit 2 with the variable named rather than raising through argparse.
+    """
     monkeypatch.delenv("VLLM_API_KEY", raising=False)
     override = f"output_dir={tmp_path}"
-    assert main(["bench", "--profile", "l4", "--dataset", "random", "--override", override]) == 2
-    assert "VLLM_API_KEY" in capsys.readouterr().err
-    assert main(["sweep", "--profile", "l4", "--override", override]) == 2
+    assert main(["serve", "--profile", "l4", "--override", override]) == 2
     assert "VLLM_API_KEY" in capsys.readouterr().err

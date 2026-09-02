@@ -17,6 +17,7 @@ from smolqwen.eval.manifest import EvalManifest
 from smolqwen.eval.metrics import TaskMetrics
 from smolqwen.eval.policies import Policy, load_policy
 from smolqwen.eval.report import write_report
+from smolqwen.eval.serving_pairing import load_quality_result
 from smolqwen.eval.trajectories import TrajectoryRecord, write_trajectories
 
 
@@ -271,5 +272,24 @@ def run_evaluation(config: EvalConfig, args: Any) -> int:
     json_path, markdown_path = write_report(
         config.output_dir, tag=tag, manifest=manifest, metrics=metrics
     )
+    reference = getattr(args, "require_serving_match", None)
+    if reference is not None:
+        _assert_serving_match(reference, manifest)
     print(json.dumps({"json": str(json_path), "markdown": str(markdown_path)}, sort_keys=True))
     return 0
+
+
+def _assert_serving_match(reference: Any, manifest: EvalManifest) -> None:
+    """Refuse a paired speed/quality row measured under a different serving config.
+
+    Compares `recorded_free`, not `invariant`. Two runs at different `max_num_seqs`
+    have identical invariants and are still different experiments, so the check
+    `assert_comparable` performs cannot establish this one.
+    """
+    from smolqwen.eval.serving_pairing import assert_quality_matches_serving
+
+    assert_quality_matches_serving(
+        dict(manifest.recorded_free),
+        load_quality_result(reference),
+        label=str(reference),
+    )

@@ -1,22 +1,14 @@
 from __future__ import annotations
 
 import json
-import urllib.error
 from pathlib import Path
 
 import pytest
 
 from smolqwen.config_models import EvalConfig, ServeConfig
 from smolqwen.eval.adapters.base import EvalTask
-from smolqwen.serving.bench import (
-    BenchError,
-    build_bench_command,
-    parse_concurrency,
-    wait_for_readiness,
-)
+from smolqwen.eval.workload import build_bfcl_agentic_workload
 from smolqwen.serving.server import ServingError, build_serve_command, serving_environment
-from smolqwen.serving.sweep import build_sweep_command, write_sweep_parameters
-from smolqwen.serving.workload import build_bfcl_agentic_workload
 
 
 def test_serve_argv_has_parsers_and_mtp_but_no_secret() -> None:
@@ -50,98 +42,12 @@ def test_serving_environment_opts_out_of_vllm_usage_stats() -> None:
     assert environment["DO_NOT_TRACK"] == "1"
 
 
-def test_bench_command_uses_documented_percentiles_and_result_path(tmp_path: Path) -> None:
-    result = tmp_path / "raw.json"
-    command = build_bench_command(
-        ServeConfig(),
-        dataset="random",
-        concurrency=4,
-        result_path=result,
-        dataset_path=None,
-    )
-    assert command[command.index("--percentile-metrics") + 1] == "ttft,tpot,itl,e2el"
-    assert command[command.index("--metric-percentiles") + 1] == "50,95,99"
-    assert command[command.index("--result-filename") + 1] == "raw.json"
-    assert command[command.index("--tokenizer") + 1] == ServeConfig().model_path
-    assert "--header" not in command
-
-
-def test_custom_benchmark_uses_the_pinned_vllm_skip_template_flag(tmp_path: Path) -> None:
-    command = build_bench_command(
-        ServeConfig(),
-        dataset="custom",
-        concurrency=1,
-        result_path=tmp_path / "raw.json",
-        dataset_path=tmp_path / "workload.jsonl",
-    )
-    assert "--skip-chat-template" in command
-    assert "--custom-skip-chat-template" not in command
-
-
-def test_dataset_path_and_concurrency_validation_fail_early(tmp_path: Path) -> None:
-    with pytest.raises(BenchError, match="dataset-path"):
-        build_bench_command(
-            ServeConfig(),
-            dataset="sharegpt",
-            concurrency=1,
-            result_path=tmp_path / "result.json",
-            dataset_path=None,
-        )
-    with pytest.raises(BenchError, match="positive"):
-        parse_concurrency("1,0")
-
-
-def test_readiness_failure_reaches_the_caller_as_a_bench_error() -> None:
-    """The probe itself lives in `inference/client.py` with its own tests.
-
-    What `bench.py` still owns is the error translation, so that is what is
-    asserted here rather than re-testing the probe through a second surface.
-    """
-    clock = iter([0.0, 0.0, 2.0])
-
-    def opener(_request: object, *, timeout: float) -> None:
-        raise urllib.error.URLError("connection refused")
-
-    with pytest.raises(BenchError, match="connection refused"):
-        wait_for_readiness(
-            ServeConfig(readiness_timeout_s=1.0, readiness_poll_interval_s=0.1),
-            environment={"VLLM_API_KEY": "secret", "SMOLQWEN_BASE_URL": "http://proxy:8080"},
-            opener=opener,
-            sleep=lambda _: None,
-            monotonic=lambda: next(clock),
-        )
-
-
-def test_sweep_delegates_combinations_resume_and_pareto_inputs_upstream(
-    tmp_path: Path,
-) -> None:
-    config = ServeConfig()
-    serve_params, bench_params = write_sweep_parameters(config, tmp_path / "params")
-    serve_rows = json.loads(serve_params.read_text(encoding="utf-8"))
-    assert {
-        "enable_chunked_prefill",
-        "enable_prefix_caching",
-        "max_num_seqs",
-        "max_num_batched_tokens",
-        "enforce_eager",
-        "gpu_memory_utilization",
-    } <= set(serve_rows[0])
-    command = build_sweep_command(
-        config,
-        serve_params=serve_params,
-        bench_params=bench_params,
-        output_dir=tmp_path / "results",
-        experiment_name="l4",
-        resume=True,
-    )
-    assert command[:4] == ["vllm", "bench", "sweep", "serve"]
-    assert "--resume" in command
-    assert "--strict-params" in command
-
-
 def test_bfcl_agentic_workload_records_shape_without_claiming_quality(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """Why this survives the wrapper deletion: `--dataset-name random` measures
+    token throughput on synthetic prompts, which says nothing about an agentic
+    request's prefill shape or its tool-schema overhead."""
     task = EvalTask(
         "case-1",
         "multi_turn_base",
@@ -165,7 +71,7 @@ def test_bfcl_agentic_workload_records_shape_without_claiming_quality(
             assert kwargs["tools"] == list(task.tools)
             return "rendered agent request"
 
-    monkeypatch.setattr("smolqwen.serving.workload.BfclMultiTurnAdapter", FakeAdapter)
+    monkeypatch.setattr("smolqwen.eval.workload.BfclMultiTurnAdapter", FakeAdapter)
     config = EvalConfig(
         adapter_options={
             "bfcl_multi_turn": {

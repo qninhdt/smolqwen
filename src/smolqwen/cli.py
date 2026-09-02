@@ -10,16 +10,18 @@ dependencies.
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 from smolqwen.config import resolve, resolved_summary
 from smolqwen.config_models import (
     PROFILES,
     ConfigError,
     DataConfig,
+    EvalConfig,
     GrpoConfig,
     ServeConfig,
     SftConfig,
@@ -38,9 +40,8 @@ SUBCOMMAND_STAGES: dict[str, str] = {
     "rollout-bench": "grpo",
     "train-grpo": "grpo",
     "evaluate": "eval",
+    "build-workload": "eval",
     "serve": "serve",
-    "bench": "serve",
-    "sweep": "serve",
 }
 
 
@@ -169,57 +170,35 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="actual serving engine recorded in the manifest, for example vllm",
     )
-    evaluate.add_argument("--served-dtype", default=None, help="served dtype recorded in manifest")
+    # The eight serving-detail flags this used to carry are gone. The in-process
+    # engine knows its own dtype, KV budget, batching and caching and records them,
+    # so asserting them on the command line only created a way to record something
+    # other than what ran. `--serving-backend` stays because the served process is a
+    # separate one whose engine this command cannot inspect.
     evaluate.add_argument(
-        "--quantization", default=None, help="quantization scheme recorded in manifest"
-    )
-    evaluate.add_argument(
-        "--speculative-decoding",
+        "--require-serving-match",
+        type=Path,
         default=None,
-        help="speculative-decoding config recorded in manifest",
-    )
-    evaluate.add_argument(
-        "--kv-budget",
-        default=None,
-        help="KV-cache budget (for example 0.25 or 8GiB) recorded in manifest",
-    )
-    evaluate.add_argument("--max-num-seqs", type=int, default=None)
-    evaluate.add_argument("--max-num-batched-tokens", type=int, default=None)
-    evaluate.add_argument(
-        "--chunked-prefill",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-        help="record whether the served endpoint uses chunked prefill",
-    )
-    evaluate.add_argument(
-        "--prefix-caching",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-        help="record whether the served endpoint uses prefix caching",
+        help=(
+            "an evaluation report whose recorded serving config must match this run's; "
+            "refuses a paired speed/quality row measured under a different config"
+        ),
     )
 
     serve = subparsers.add_parser("serve", help="launch the vLLM endpoint")
     _add_common(serve)
     serve.add_argument("--print-command", action="store_true", help="print argv and exit")
 
-    bench = subparsers.add_parser("bench", help="run vllm bench serve against a live endpoint")
-    _add_common(bench)
-    bench.add_argument("--dataset", default="sharegpt")
-    bench.add_argument("--dataset-path", type=Path, default=None)
-    bench.add_argument("--concurrency", default="1,4,16")
-    bench.add_argument("--quality-report", type=Path, default=None)
-    bench.add_argument(
-        "--quality-reference",
-        type=Path,
-        action="append",
-        default=[],
-        help="reference evaluation report whose invariant manifest must match",
+    workload = subparsers.add_parser(
+        "build-workload", help="write BFCL-shaped benchmark traffic for vllm bench serve"
     )
-
-    sweep = subparsers.add_parser("sweep", help="drive vllm bench sweep serve and read the front")
-    _add_common(sweep)
-    sweep.add_argument("--resume", action="store_true", default=True)
-    sweep.add_argument("--experiment-name", default=None)
+    _add_common(workload)
+    workload.add_argument(
+        "--output",
+        type=Path,
+        default=Path("artifacts/serving/bfcl-agentic.jsonl"),
+        help="where to write the rendered prompts",
+    )
 
     return parser
 
@@ -249,56 +228,48 @@ def _cmd_probe(args: argparse.Namespace) -> int:
 def _cmd_profile_data(args: argparse.Namespace, config: StrictModel) -> int:
     from smolqwen.data.cli_actions import run_profile_data
 
-    return run_profile_data(_as_data_config(config))
+    return run_profile_data(_as(config, DataConfig))
 
 
 def _cmd_prepare_sft(args: argparse.Namespace, config: StrictModel) -> int:
     from smolqwen.data.cli_actions import run_prepare_sft
 
-    return run_prepare_sft(_as_data_config(config), workers=args.workers)
+    return run_prepare_sft(_as(config, DataConfig), workers=args.workers)
 
 
-def _as_data_config(config: StrictModel) -> DataConfig:
-    if not isinstance(config, DataConfig):
-        raise TypeError(f"expected DataConfig, got {type(config).__name__}")
-    return config
+ConfigT = TypeVar("ConfigT", bound=StrictModel)
 
 
-def _as_sft_config(config: StrictModel) -> SftConfig:
-    if not isinstance(config, SftConfig):
-        raise TypeError(f"expected SftConfig, got {type(config).__name__}")
-    return config
+def _as(config: StrictModel, kind: type[ConfigT]) -> ConfigT:
+    """Narrow a resolved config to the stage model its handler needs.
 
-
-def _as_grpo_config(config: StrictModel) -> GrpoConfig:
-    if not isinstance(config, GrpoConfig):
-        raise TypeError(f"expected GrpoConfig, got {type(config).__name__}")
-    return config
-
-
-def _as_serve_config(config: StrictModel) -> ServeConfig:
-    if not isinstance(config, ServeConfig):
-        raise TypeError(f"expected ServeConfig, got {type(config).__name__}")
+    One generic in place of four character-identical functions. The check is real,
+    not decorative: `SUBCOMMAND_STAGES` maps a subcommand to a stage name, and a
+    wrong entry there would otherwise hand a handler the wrong model and fail deep
+    inside it on a missing attribute.
+    """
+    if not isinstance(config, kind):
+        raise TypeError(f"expected {kind.__name__}, got {type(config).__name__}")
     return config
 
 
 def _cmd_env_selftest(args: argparse.Namespace, config: StrictModel) -> int:
     from smolqwen.env.selftest import run_selftest
 
-    return run_selftest(_as_grpo_config(config), scenario_id=args.scenario_id)
+    return run_selftest(_as(config, GrpoConfig), scenario_id=args.scenario_id)
 
 
 def _cmd_train_sft(args: argparse.Namespace, config: StrictModel) -> int:
     from smolqwen.training.sft import run_train_sft
 
-    return run_train_sft(_as_sft_config(config), resume=args.resume)
+    return run_train_sft(_as(config, SftConfig), resume=args.resume)
 
 
 def _cmd_merge_adapter(args: argparse.Namespace, config: StrictModel) -> int:
     from smolqwen.training.merge import run_merge_adapter
 
     return run_merge_adapter(
-        _as_sft_config(config),
+        _as(config, SftConfig),
         adapter_dir=args.adapter_dir,
         output_dir=args.output_dir,
     )
@@ -325,7 +296,7 @@ def _cmd_profile_difficulty(args: argparse.Namespace, config: StrictModel) -> in
     from smolqwen.training.difficulty import DifficultyError
     from smolqwen.training.grpo import GrpoError, run_profile_difficulty
 
-    grpo = _as_grpo_config(config)
+    grpo = _as(config, GrpoConfig)
     update: dict[str, Any] = {}
     if args.checkpoint is not None:
         update["model_id"] = str(args.checkpoint)
@@ -345,7 +316,7 @@ def _cmd_train_grpo(args: argparse.Namespace, config: StrictModel) -> int:
     from smolqwen.training.grpo import GrpoError, run_train_grpo
 
     try:
-        return run_train_grpo(_as_grpo_config(config), resume=args.resume)
+        return run_train_grpo(_as(config, GrpoConfig), resume=args.resume)
     except (DifficultyError, GrpoError) as exc:
         print(f"GRPO error: {exc}", file=sys.stderr)
         return 2
@@ -355,32 +326,30 @@ def _cmd_serve(args: argparse.Namespace, config: StrictModel) -> int:
     from smolqwen.serving.server import ServingError, run_server
 
     try:
-        return run_server(_as_serve_config(config), print_command=args.print_command)
+        return run_server(_as(config, ServeConfig), print_command=args.print_command)
     except ServingError as exc:
         print(f"serving error: {exc}", file=sys.stderr)
         return 2
 
 
-def _cmd_bench(args: argparse.Namespace, config: StrictModel) -> int:
-    from smolqwen.serving.bench import BenchError, run_benchmarks
-    from smolqwen.serving.server import ServingError
+def _cmd_build_workload(args: argparse.Namespace, config: StrictModel) -> int:
+    """Render BFCL-shaped traffic for `vllm bench serve --dataset-name custom`.
 
-    try:
-        return run_benchmarks(_as_serve_config(config), args=args)
-    except (BenchError, ServingError) as exc:
-        print(f"benchmark error: {exc}", file=sys.stderr)
-        return 2
+    Kept because it is the only thing that makes a serving benchmark measure *this*
+    workload: `--dataset-name random` measures token throughput on synthetic prompts,
+    which says nothing about an agentic request's prefill shape or tool-schema
+    overhead. The upstream commands own execution; this owns the traffic.
+    """
+    from smolqwen.eval.workload import build_bfcl_agentic_workload
+    from smolqwen.tokenizer import load_tokenizer
 
-
-def _cmd_sweep(args: argparse.Namespace, config: StrictModel) -> int:
-    from smolqwen.serving.server import ServingError
-    from smolqwen.serving.sweep import SweepError, run_sweep
-
-    try:
-        return run_sweep(_as_serve_config(config), args=args)
-    except (SweepError, ServingError) as exc:
-        print(f"sweep error: {exc}", file=sys.stderr)
-        return 2
+    evaluation = _as(config, EvalConfig)
+    tokenizer = load_tokenizer(evaluation.http_model or "Qwen/Qwen3.5-2B")
+    workload, composition = build_bfcl_agentic_workload(
+        evaluation, tokenizer=tokenizer, output_path=args.output
+    )
+    print(json.dumps({"workload": str(workload), "composition": str(composition)}, sort_keys=True))
+    return 0
 
 
 DISPATCH: dict[str, Callable[[argparse.Namespace, StrictModel], int]] = {
@@ -394,8 +363,7 @@ DISPATCH: dict[str, Callable[[argparse.Namespace, StrictModel], int]] = {
     "profile-difficulty": _cmd_profile_difficulty,
     "train-grpo": _cmd_train_grpo,
     "serve": _cmd_serve,
-    "bench": _cmd_bench,
-    "sweep": _cmd_sweep,
+    "build-workload": _cmd_build_workload,
 }
 
 

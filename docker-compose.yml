@@ -54,13 +54,43 @@ services:
       timeout: 3s
       retries: 12
 
+  # Runs upstream's own benchmark against the proxied endpoint. The repo-local
+  # wrapper this replaced only renamed vLLM's result fields into a dataclass; the
+  # commands vLLM ships already own execution, resume, and the Pareto front.
+  #
+  # `--dataset-name custom` with a workload file is the point: `random` measures
+  # token throughput on synthetic prompts, which says nothing about an agentic
+  # request's prefill shape or its tool-schema overhead. Build the file first with
+  # `smolqwen build-workload`.
   bench:
     image: smolqwen-vllm:0.26.0
-    entrypoint: ["smolqwen"]
-    command: ["bench", "--profile", "${SMOLQWEN_PROFILE:-l4}", "--dataset", "random"]
+    entrypoint: ["vllm"]
+    command:
+      - bench
+      - serve
+      - --base-url
+      - http://vllm-server:8080
+      - --model
+      - smolqwen
+      - --dataset-name
+      - custom
+      - --dataset-path
+      - /opt/smolqwen/artifacts/serving/bfcl-agentic.jsonl
+      - --skip-chat-template
+      - --max-concurrency
+      - "${SMOLQWEN_CONCURRENCY:-4}"
+      - --percentile-metrics
+      - ttft,tpot,itl,e2el
+      - --metric-percentiles
+      - 50,95,99
+      - --save-result
+      - --result-dir
+      - /opt/smolqwen/artifacts/serving
     environment:
-      VLLM_API_KEY: ${VLLM_API_KEY:?VLLM_API_KEY must be set}
-      SMOLQWEN_BASE_URL: http://vllm-server:8080
+      # `vllm bench serve` reads the bearer key from the OpenAI variable.
+      OPENAI_API_KEY: ${VLLM_API_KEY:?VLLM_API_KEY must be set}
+      VLLM_NO_USAGE_STATS: "1"
+      DO_NOT_TRACK: "1"
     volumes:
       - ${MODEL_PATH:-./artifacts/models/qwen3.5-2b-sft-grpo-merged}:/opt/smolqwen/artifacts/models/qwen3.5-2b-sft-grpo-merged:ro
       - ./third_party:/opt/smolqwen/third_party:ro

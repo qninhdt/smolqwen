@@ -6,7 +6,6 @@ import os
 import shlex
 import subprocess
 from collections.abc import Mapping
-from typing import Any
 
 from smolqwen.config_models import ServeConfig
 from smolqwen.inference.engine import disable_telemetry
@@ -40,21 +39,3 @@ def run_server(config: ServeConfig, *, print_command: bool = False) -> int:
         return 0
     completed = subprocess.run(command, env=serving_environment(), check=False)
     return int(completed.returncode)
-
-
-def config_metadata(config: ServeConfig) -> dict[str, Any]:
-    return {
-        "model": config.served_model_name,
-        "dtype": config.dtype,
-        "quantization": config.quantization,
-        "speculative_decoding": (
-            None
-            if config.speculative_num_tokens is None
-            else {"method": "mtp", "num_speculative_tokens": config.speculative_num_tokens}
-        ),
-        "kv_budget": config.gpu_memory_utilization,
-        "max_num_seqs": config.max_num_seqs,
-        "max_num_batched_tokens": config.max_num_batched_tokens,
-        "chunked_prefill": config.enable_chunked_prefill,
-        "prefix_caching": config.enable_prefix_caching,
-    }

@@ -216,7 +216,6 @@ class Trajectory:
         """
         return f"{self.task_id}:{self.traj_type}"
 
-
     @property
     def real_user_turns(self) -> int:
         return sum(1 for message in self.messages if message.is_real_user_turn)
