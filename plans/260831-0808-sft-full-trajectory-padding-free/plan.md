@@ -6,7 +6,16 @@ owners: [phase-2-data, phase-3-sft]
 supersedes:
   - "Phase 2 per-user-turn segmentation decision"
   - "Phase 3 padded fixed-row batching contract"
+blocks: [260901-1043-inference-layer-eval-throughput-cleanup]
 ---
+
+> Blocks phase 6 of
+> [`260901-1043-inference-layer-eval-throughput-cleanup`](../260901-1043-inference-layer-eval-throughput-cleanup/plan.md),
+> which adds an in-training benchmark-eval callback to `training/sft.py`. Both
+> plans edit that file, and that plan's memory guard accepts against the 32K L4
+> token envelope this plan's phase 4 measures. It waits for that number.
+> `scripts/colab-l4-batch-sweep.py` is the instrument for that measurement, so
+> its deletion in that plan's phase 8 is gated on this plan recording the figure.
 
 # Full-trajectory reasoning SFT with padding-free batches
 

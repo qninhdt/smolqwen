@@ -9,6 +9,15 @@ dependencies: [1]
 
 # Phase 2: Data pipeline and trajectory profiler
 
+> **Superseded in part by [`260831-0808-sft-full-trajectory-padding-free`](../260831-0808-sft-full-trajectory-padding-free/plan.md).**
+> The per-user-turn segmentation decision recorded below no longer holds. One
+> accepted trajectory row is now one training record, not 40,842 segmented
+> records from 7,554 rows, and all historical assistant reasoning is preserved
+> rather than stripped. The train/validation split moves to task-id grouping so
+> the conversation and non-conversation variants of one task cannot leak across
+> partitions. The profiler measurements here were taken under the old
+> segmentation and are superseded by that plan's full-corpus measurement.
+
 ## Overview
 
 Turn 9,022 released teacher trajectories into Qwen3.5-rendered SFT samples whose

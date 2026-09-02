@@ -9,6 +9,18 @@ dependencies: [3, 4]
 
 # Phase 5: Evaluation harness and baseline results
 
+> **Revised by [`260901-1043-inference-layer-eval-throughput-cleanup`](../260901-1043-inference-layer-eval-throughput-cleanup/plan.md).**
+> The harness this phase built runs serially: `eval/runner.py:69` iterates tasks
+> one at a time and `policies.py:247` generates at batch size 1 through
+> HuggingFace, so the card sits near idle. That plan replaces the policy layer
+> with a batched in-process vLLM engine and merges this loop with Phase 6's
+> rollout scheduler into one turn engine. The adapter contract, manifest
+> invariant set, and reported metrics are preserved — `recorded_free` gains
+> backend, concurrency, and `enforce_eager`, and the report gains diagnostic
+> columns that split an all-or-nothing BFCL score into its failure conditions.
+> `TransformersPolicy` is removed; adapter-on-base evaluation moves to vLLM
+> `LoRARequest`.
+
 ## Delivery status
 
 The evaluation implementation is complete and CPU-verified. Base/SFT result

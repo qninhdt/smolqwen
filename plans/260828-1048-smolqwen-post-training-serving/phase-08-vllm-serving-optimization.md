@@ -9,6 +9,24 @@ dependencies: [7]
 
 # Phase 8: vLLM serving optimization
 
+> **Revised by [`260901-1043-inference-layer-eval-throughput-cleanup`](../260901-1043-inference-layer-eval-throughput-cleanup/plan.md).**
+> `src/smolqwen/serving/bench.py` and `sweep.py` are deleted. Both shell out to
+> commands vLLM already ships: `sweep.py`'s own docstring says it delegates
+> execution and Pareto logic upstream, and `bench.py`'s bulk renames vLLM's
+> result fields into a 21-field dataclass. The two `vllm bench` invocations are
+> documented directly in `docs/serving.md` instead, so goal 6's numbers still
+> exist — from vLLM's own `--save-result` rather than from a wrapper. Two pieces
+> survive: the quality-pairing constraint becomes
+> `evaluate --require-invariant-match <ref.json>`, reusing
+> `eval/report.py:assert_comparable`; and `serving/workload.py` moves to
+> `eval/workload.py`, keeping BFCL-shaped benchmark traffic instead of
+> `--dataset-name random`. `serving/server.py` and the Compose/proxy boundary are
+> untouched. No quantization sweep is planned —
+> `configs/serving/{l4,a100}.yaml` keep `quantization: null` with the reason
+> recorded in those files. A defect this phase's duplication produced is recorded
+> there too: `sweep.py:75` rebuilt the `vllm serve` argv separately from
+> `server.py:19` and omitted five flags.
+
 ## Overview
 
 Serve the final checkpoint as an ordinary OpenAI-compatible LLM endpoint, then
