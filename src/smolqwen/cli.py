@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any, TypeVar
@@ -27,6 +26,7 @@ from smolqwen.config_models import (
     SftConfig,
     StrictModel,
 )
+from smolqwen.console import configure_logging, report_error
 
 # subcommand -> which stage config it resolves. `probe` is absent: it reads no
 # config, because it must run on a fresh VM before anything is set up.
@@ -52,6 +52,20 @@ def _positive_int(value: str) -> int:
     return parsed
 
 
+def _add_logging(parser: argparse.ArgumentParser) -> None:
+    """Verbosity for every command, `probe` included.
+
+    On the top-level parser these would have to precede the subcommand, which is the
+    opposite of how anyone types it, so each subparser gets its own pair.
+    `SMOLQWEN_LOG_LEVEL` covers the Colab case where there is no place to add a flag.
+    """
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument("--verbose", action="store_true", help="debug-level logs on stderr")
+    group.add_argument(
+        "--quiet", action="store_true", help="errors only; stdout output is unaffected"
+    )
+
+
 def _add_common(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--config", type=Path, default=None, help="explicit base config path")
     parser.add_argument("--profile", choices=PROFILES, default=None, help="GPU sizing profile")
@@ -73,6 +87,7 @@ def _add_common(parser: argparse.ArgumentParser) -> None:
         default=None,
         help="path to budgets.json (defaults to artifacts/data/budgets.json)",
     )
+    _add_logging(parser)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -89,6 +104,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--output-dir", type=Path, default=Path("artifacts/probe"), help="where to write the JSON"
     )
     probe_parser.add_argument("--no-write", action="store_true", help="print only")
+    _add_logging(probe_parser)
 
     profile_data = subparsers.add_parser(
         "profile-data", help="measure the trajectory distribution and write budgets.json"
@@ -218,6 +234,9 @@ def _cmd_probe(args: argparse.Namespace) -> int:
     from smolqwen.probe import format_probe, probe, write_probe
 
     report = probe()
+    # The formatted table is what a human reads and what `notebooks/00-probe-gpu`
+    # shows, and no program parses it — but `test_cli_dry_run.py:73` captures it from
+    # stdout, so it stays there rather than moving to the logger.
     print(format_probe(report))
     if not args.no_write:
         path = write_probe(report, args.output_dir)
@@ -307,7 +326,7 @@ def _cmd_profile_difficulty(args: argparse.Namespace, config: StrictModel) -> in
     try:
         return run_profile_difficulty(grpo)
     except (DifficultyError, GrpoError) as exc:
-        print(f"GRPO error: {exc}", file=sys.stderr)
+        report_error(f"GRPO error: {exc}", exception=exc)
         return 2
 
 
@@ -318,7 +337,7 @@ def _cmd_train_grpo(args: argparse.Namespace, config: StrictModel) -> int:
     try:
         return run_train_grpo(_as(config, GrpoConfig), resume=args.resume)
     except (DifficultyError, GrpoError) as exc:
-        print(f"GRPO error: {exc}", file=sys.stderr)
+        report_error(f"GRPO error: {exc}", exception=exc)
         return 2
 
 
@@ -328,7 +347,7 @@ def _cmd_serve(args: argparse.Namespace, config: StrictModel) -> int:
     try:
         return run_server(_as(config, ServeConfig), print_command=args.print_command)
     except ServingError as exc:
-        print(f"serving error: {exc}", file=sys.stderr)
+        report_error(f"serving error: {exc}", exception=exc)
         return 2
 
 
@@ -371,16 +390,22 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 
+    # Before dispatch, so a stage module's own logger is already routed by the time
+    # its first import emits anything.
+    configure_logging(verbose=args.verbose, quiet=args.quiet)
+
     if args.command == "probe":
         return _cmd_probe(args)
 
     try:
         config = _resolve_for(args)
     except ConfigError as exc:
-        print(f"config error: {exc}", file=sys.stderr)
+        report_error(f"config error: {exc}", exception=exc)
         return 1
 
     if args.dry_run:
+        # Machine-readable: `notebooks/01-sft.ipynb` and `test_cli_dry_run.py` both
+        # read this from stdout.
         print(resolved_summary(config))
         return 0
 

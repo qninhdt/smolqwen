@@ -14,22 +14,12 @@ import os
 from collections import deque
 from collections.abc import Callable, Iterator
 from concurrent.futures import Future, ThreadPoolExecutor
-from contextlib import contextmanager
 from pathlib import Path
 from threading import get_ident, local
-from time import monotonic
 from typing import Any
 
-from rich.progress import (
-    BarColumn,
-    Progress,
-    TaskProgressColumn,
-    TextColumn,
-    TimeElapsedColumn,
-    TimeRemainingColumn,
-)
-
 from smolqwen.config_models import DataConfig, DatasetPin
+from smolqwen.console import console, logger, progress_task, status_table
 from smolqwen.data.convert_sft import (
     ConversionEvent,
     ConversionReport,
@@ -44,55 +34,7 @@ from smolqwen.data.render import render_training_sample, training_chat_template
 from smolqwen.data.splits import Split, build_env_split_manifest, split_trajectory_ids
 from smolqwen.tokenizer import load_tokenizer
 
-
-@contextmanager
-def _progress_task(description: str, *, total: int | None = None) -> Iterator[Callable[[], None]]:
-    """Render a progress task and emit periodic logs for non-TTY notebooks."""
-    progress = Progress(
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        TaskProgressColumn(),
-        TimeElapsedColumn(),
-        TimeRemainingColumn(),
-        transient=False,
-    )
-    task_id = progress.add_task(description, total=total)
-    started = monotonic()
-    completed_rows = 0
-    completed = False
-
-    def advance() -> None:
-        nonlocal completed_rows
-        completed_rows += 1
-        progress.advance(task_id)
-        if completed_rows == 1 or completed_rows % 250 == 0:
-            elapsed = monotonic() - started
-            rate = completed_rows / elapsed if elapsed else 0.0
-            count = (
-                f"{completed_rows}/{total} trajectories"
-                if total is not None
-                else f"{completed_rows} trajectories"
-            )
-            print(
-                f"{description}: {count} ({rate:.1f}/s, {elapsed:.0f}s elapsed)",
-                flush=True,
-            )
-
-    with progress:
-        try:
-            yield advance
-            completed = True
-        finally:
-            elapsed = monotonic() - started
-            progress.update(
-                task_id,
-                description=f"{description} {'complete' if completed else 'failed'}",
-            )
-            status = "complete" if completed else "failed"
-            print(
-                f"{description} {status}: {completed_rows} trajectories in {elapsed:.1f}s",
-                flush=True,
-            )
+LOG = logger(__name__)
 
 
 def _tokenizer(config: DataConfig) -> Any:
@@ -135,11 +77,11 @@ def run_profile_data(config: DataConfig) -> int:
     """`smolqwen profile-data`: profile trajectories, write budgets and env split."""
     output_dir = Path(config.output_dir)
 
-    print("profile-data: resolving pinned datasets", flush=True)
+    LOG.info("resolving pinned datasets")
     sft_path = _resolve_dataset(config.sft_trajectories)
     tokenizer = _tokenizer(config)
-    print("profile-data: rendering/tokenizing trajectories", flush=True)
-    with _progress_task("profile-data") as advance:
+    LOG.info("rendering/tokenizing trajectories")
+    with progress_task("profile-data") as advance:
         result = profile_dataset(
             tokenizer,
             sft_path,
@@ -150,7 +92,7 @@ def run_profile_data(config: DataConfig) -> int:
 
     # The env-split manifest depends only on the static metadata, so it is written
     # in the same pass. The RL scenario env-ids come from the RL scenario file.
-    print("profile-data: building environment split", flush=True)
+    LOG.info("building environment split")
     env_path = _resolve_dataset(config.env_metadata)
     rl_env_ids = _rl_scenario_env_ids(_resolve_dataset(config.rl_scenarios))
     manifest = build_env_split_manifest(
@@ -163,10 +105,17 @@ def run_profile_data(config: DataConfig) -> int:
         json.dumps(manifest.to_dict(), indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
 
-    print(format_profile_table(result))
-    print(f"wrote {profile_path}")
-    print(f"wrote {budgets_path}")
-    print(f"wrote {output_dir / 'env_split.json'}")
+    # The table is a human summary, so it goes to stderr with the rest of the
+    # progress. Every downstream reader takes the JSON files, not this text.
+    console().print(format_profile_table(result))
+    status_table(
+        "profile-data",
+        {
+            "profile": profile_path,
+            "budgets": budgets_path,
+            "env split": output_dir / "env_split.json",
+        },
+    )
     return 0
 
 
@@ -190,31 +139,28 @@ def run_prepare_sft(config: DataConfig, *, workers: int | None = None) -> int:
     output_dir = Path(config.output_dir)
     cap = config.max_seq_length
 
-    print("prepare-sft: resolving pinned dataset", flush=True)
+    LOG.info("resolving pinned dataset")
     sft_path = _resolve_dataset(config.sft_trajectories)
     tokenizer = _tokenizer(config)
     shape = config.tool_result_shape
     worker_count = _prepare_worker_count(workers)
 
     # Pass one: task groups for the seeded split. Paired row variants must stay together.
-    print("prepare-sft: pass 1/2 — collecting split ids", flush=True)
+    LOG.info("pass 1/2: collecting split ids")
     ids: list[str] = []
-    with _progress_task("prepare-sft split") as advance:
+    with progress_task("prepare-sft split") as advance:
         for trajectory in iter_trajectories(sft_path):
             ids.append(trajectory.task_id)
             advance()
     split = split_trajectory_ids(ids, seed=config.split_seed, val_fraction=config.val_fraction)
-    print(f"prepare-sft: pass 1/2 complete — {len(ids)} trajectories", flush=True)
+    LOG.info("pass 1/2 complete: %d trajectories", len(ids))
 
     # Pass two: render and route.
     report = ConversionReport()
     train_path = output_dir / "sft" / "train.jsonl"
     val_path = output_dir / "sft" / "val.jsonl"
-    print(
-        f"prepare-sft: pass 2/2 — rendering and writing shards with {worker_count} workers",
-        flush=True,
-    )
-    with _progress_task("prepare-sft render/write", total=len(ids)) as advance:
+    LOG.info("pass 2/2: rendering and writing shards with %d workers", worker_count)
+    with progress_task("prepare-sft render/write", total=len(ids)) as advance:
         stats = _write_shards(
             sft_path,
             split,
@@ -241,11 +187,18 @@ def run_prepare_sft(config: DataConfig, *, workers: int | None = None) -> int:
         + "\n",
         encoding="utf-8",
     )
-    print(
-        f"wrote {train_path} / {val_path}: converted {report.converted}, "
-        f"skipped {report.skipped}, malformed {stats.malformed}, samples {report.samples}"
+    status_table(
+        "prepare-sft",
+        {
+            "train": train_path,
+            "val": val_path,
+            "report": report_path,
+            "converted": report.converted,
+            "skipped": report.skipped,
+            "malformed": stats.malformed,
+            "samples": report.samples,
+        },
     )
-    print(f"wrote {report_path}")
     return 0
 
 

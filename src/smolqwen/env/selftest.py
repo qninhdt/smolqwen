@@ -27,8 +27,11 @@ from pathlib import Path
 from typing import Any
 
 from smolqwen.config_models import GrpoConfig
+from smolqwen.console import logger
 from smolqwen.env.pool import WorkerPool
 from smolqwen.env.scenarios import Scenario, load_scenarios
+
+LOG = logger(__name__)
 
 
 class SelfTestError(RuntimeError):
@@ -194,9 +197,18 @@ def run_selftest(
         "full": full.to_dict(),
         "ok": not problems,
     }
+    # stdout carries the report and nothing else, so `env-selftest | jq` works.
     print(json.dumps(report, indent=2))
     if problems:
         for problem in problems:
-            print(f"FAIL: {problem}")
+            LOG.error("selftest FAIL: %s", problem)
         return 1
+    LOG.info(
+        "selftest passed: %s (K=%d), initial %.4f < partial %.4f < full %.4f",
+        scenario.task_id,
+        scenario.check_count,
+        initial.reward,
+        partial.reward,
+        full.reward,
+    )
     return 0

@@ -83,7 +83,7 @@ weight-transfer protocol of its own.
 | 4 | [Phase 4: Batched evaluation runner](./phase-04-batched-eval-runner.md) | In progress — agreement needs a checkpoint |
 | 5 | [Phase 5: GRPO in-training benchmark eval](./phase-05-grpo-in-training-benchmark-eval.md) | Done — cost bound needs a card |
 | 6 | [Phase 6: SFT in-training benchmark eval](./phase-06-sft-in-training-benchmark-eval.md) | Pending |
-| 7 | [Phase 7: Rich logging across every CLI](./phase-07-rich-logging-across-cli.md) | Pending |
+| 7 | [Phase 7: Rich logging across every CLI](./phase-07-rich-logging-across-cli.md) | Done |
 | 8 | [Phase 8: Delete dead code and one-shot scripts](./phase-08-delete-dead-code-and-scripts.md) | Done |
 | 9 | [Phase 9: Artifact persistence to HF and W&B](./phase-09-artifact-persistence-hf-wandb.md) | Pending |
 | 10 | [Phase 10: L4 validation](./phase-10-gpu-validation-on-l4.md) | Pending |
@@ -269,6 +269,7 @@ these findings rather than patched; Phases 1 and 7-10 were corrected in place.
 |---|---------|-----|------|---------|
 | 38 | Every phase gated on "full suite green on CPU", but vllm is absent from CI (`pyproject.toml:33-36`) and `make test-ci` deselects `gpu`. The determinism test against a CPU fake passes unconditionally; the memory guard compared constant to constant; the engine contract test proves the wrapper, not `LLM.generate` | High | Accept | P2, P4, P6, P10 |
 | 39 | Phase 7 asserted three stdout emitters; there are at least six — `selftest.py:197`, `rollout/bench.py:290`, `grpo.py:668`, `merge.py:126`, plus `serve --print-command` (`server.py:87`). `notebooks/03-grpo.ipynb` and `01-sft.ipynb` consume two, and notebook changes are a non-goal | High | Accept | P7 |
+| 39a | Phase 7's own corrected table was also short: it missed `cli.py`'s `build-workload` JSON and `sft.py`'s final eval metrics, so the real count is ten. `01-sft.ipynb` reads `merge_report.json`, not `merge-adapter`'s stdout, so only one notebook consumes an emitter | High | Fixed | P7 |
 
 #### L — plan mechanics
 

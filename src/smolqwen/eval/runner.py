@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from smolqwen.config_models import EvalConfig
+from smolqwen.console import logger, progress_task, status_table
 from smolqwen.eval.adapters import create_adapter
 from smolqwen.eval.adapters.base import BenchmarkAdapter
 from smolqwen.eval.checkpoints import resolve as resolve_checkpoint
@@ -19,6 +20,8 @@ from smolqwen.eval.policies import Policy, load_policy
 from smolqwen.eval.report import write_report
 from smolqwen.eval.serving_pairing import load_quality_result
 from smolqwen.eval.trajectories import TrajectoryRecord, write_trajectories
+
+LOG = logger(__name__)
 
 
 def _library_versions() -> dict[str, str | None]:
@@ -70,89 +73,100 @@ def evaluate_adapter(
     adapter: BenchmarkAdapter,
     tasks: Sequence[Any] | None = None,
     records: list[TrajectoryRecord] | None = None,
+    label: str = "evaluation",
 ) -> dict[str, dict[str, float]]:
     """Advance every task to terminal, score it, and keep its trajectory.
 
     `records` collects one `TrajectoryRecord` per task when supplied. The history
     was previously built and discarded, which left an all-or-nothing `0.0`
     unattributable and a re-grade impossible.
+
+    Progress goes to stderr per task. This loop runs for hours and used to emit
+    nothing until the final JSON line, so a stalled run and a slow one looked
+    identical; `every=1` is right here because a task is a whole multi-turn episode,
+    not a cheap unit.
     """
+    task_list = list(tasks if tasks is not None else adapter.load_tasks())
     task_metrics: list[TaskMetrics] = []
-    for task in tasks if tasks is not None else adapter.load_tasks():
-        history: list[dict[str, Any]] = adapter.build_prompt(task, [])
-        tools = task.tools
-        generated_tokens = 0
-        truncated = False
-        generation_turns = 0
-        env_steps = 0
-        terminal_reason = "turn_cap"
-        # Collected as they are appended rather than filtered out of `history`
-        # afterwards: the opening user prompt is a `user` message too, and a filter
-        # by role would silently count it as the episode's first observation.
-        observations: list[str] = []
-        started = time.monotonic()
-        while generation_turns < config.max_steps_per_task:
-            result = policy.generate(history, tools)
-            generated_tokens += result.generated_tokens
-            truncated = truncated or result.truncated
-            step = adapter.step(task, result.completion)
-            generation_turns += 1
-            env_steps += step.env_steps
-            history.append({"role": "assistant", "content": result.completion})
-            if step.tool_observations is not None:
-                history.extend(
-                    {"role": "tool", "content": observation}
-                    for observation in step.tool_observations
-                )
-                observations.extend(step.tool_observations)
-            elif step.observation:
-                history.append({"role": step.observation_role, "content": step.observation})
-                observations.append(step.observation)
-            if step.tools is not None:
-                tools = step.tools
-            # A completion signal may have advanced the adapter to a new user
-            # turn.  Adapter-owned prompt construction appends that turn once.
-            history = adapter.build_prompt(task, history)
-            if step.complete:
-                terminal_reason = "final_answer"
-                break
-        wall_s = time.monotonic() - started
-        score = adapter.score(task)
-        invalid_calls = adapter.invalid_call_count(task)
-        task_metrics.append(
-            TaskMetrics(
-                category=task.category,
-                score=score.score,
-                invalid_calls=invalid_calls,
-                steps=env_steps,
-                generated_tokens=generated_tokens,
-                truncated=truncated,
-                exact_success=score.exact_success,
-                diagnostics=dict(score.diagnostics),
-            )
-        )
-        if records is not None:
-            records.append(
-                TrajectoryRecord(
-                    task_id=task.task_id,
+    with progress_task(label, total=len(task_list), unit="tasks", every=1) as advance:
+        for task in task_list:
+            history: list[dict[str, Any]] = adapter.build_prompt(task, [])
+            tools = task.tools
+            generated_tokens = 0
+            truncated = False
+            generation_turns = 0
+            env_steps = 0
+            terminal_reason = "turn_cap"
+            # Collected as they are appended rather than filtered out of `history`
+            # afterwards: the opening user prompt is a `user` message too, and a
+            # filter by role would silently count it as the episode's first
+            # observation.
+            observations: list[str] = []
+            started = time.monotonic()
+            while generation_turns < config.max_steps_per_task:
+                result = policy.generate(history, tools)
+                generated_tokens += result.generated_tokens
+                truncated = truncated or result.truncated
+                step = adapter.step(task, result.completion)
+                generation_turns += 1
+                env_steps += step.env_steps
+                history.append({"role": "assistant", "content": result.completion})
+                if step.tool_observations is not None:
+                    history.extend(
+                        {"role": "tool", "content": observation}
+                        for observation in step.tool_observations
+                    )
+                    observations.extend(step.tool_observations)
+                elif step.observation:
+                    history.append({"role": step.observation_role, "content": step.observation})
+                    observations.append(step.observation)
+                if step.tools is not None:
+                    tools = step.tools
+                # A completion signal may have advanced the adapter to a new user
+                # turn.  Adapter-owned prompt construction appends that turn once.
+                history = adapter.build_prompt(task, history)
+                if step.complete:
+                    terminal_reason = "final_answer"
+                    break
+            wall_s = time.monotonic() - started
+            score = adapter.score(task)
+            invalid_calls = adapter.invalid_call_count(task)
+            task_metrics.append(
+                TaskMetrics(
                     category=task.category,
-                    messages=[dict(message) for message in history],
-                    observations=observations,
                     score=score.score,
-                    exact_success=score.exact_success,
-                    completed=score.completed,
-                    failure_reason=score.failure_reason,
-                    failed_check_names=list(score.failed_check_names),
-                    diagnostics=dict(score.diagnostics),
-                    terminal_reason=terminal_reason,
-                    generation_turns=generation_turns,
-                    env_steps=env_steps,
+                    invalid_calls=invalid_calls,
+                    steps=env_steps,
                     generated_tokens=generated_tokens,
                     truncated=truncated,
-                    invalid_calls=invalid_calls,
-                    wall_s=wall_s,
+                    exact_success=score.exact_success,
+                    diagnostics=dict(score.diagnostics),
                 )
             )
+            if records is not None:
+                records.append(
+                    TrajectoryRecord(
+                        task_id=task.task_id,
+                        category=task.category,
+                        messages=[dict(message) for message in history],
+                        observations=observations,
+                        score=score.score,
+                        exact_success=score.exact_success,
+                        completed=score.completed,
+                        failure_reason=score.failure_reason,
+                        failed_check_names=list(score.failed_check_names),
+                        diagnostics=dict(score.diagnostics),
+                        terminal_reason=terminal_reason,
+                        generation_turns=generation_turns,
+                        env_steps=env_steps,
+                        generated_tokens=generated_tokens,
+                        truncated=truncated,
+                        invalid_calls=invalid_calls,
+                        wall_s=wall_s,
+                    )
+                )
+            running = sum(metric.score for metric in task_metrics) / len(task_metrics)
+            advance(f"{task.category} mean {running:.3f}")
     return adapter.summarize(task_metrics)
 
 
@@ -167,7 +181,7 @@ def _evaluate_named_adapter(
     try:
         invariants = adapter.manifest_invariants(tasks)
         return (
-            evaluate_adapter(config, policy, adapter, tasks=tasks, records=records),
+            evaluate_adapter(config, policy, adapter, tasks=tasks, records=records, label=name),
             invariants,
         )
     finally:
@@ -225,6 +239,16 @@ def run_evaluation(config: EvalConfig, args: Any) -> int:
     metrics: dict[str, dict[str, float]] = {}
     tag = args.tag or "evaluation"
     trajectory_paths: dict[str, str] = {}
+    status_table(
+        f"evaluation: {tag}",
+        {
+            "adapters": ", ".join(adapter_names),
+            "checkpoint": resolved.path or args.endpoint or "(config default)",
+            "revision": resolved.revision,
+            "source": resolved.source,
+            "max steps per task": config.max_steps_per_task,
+        },
+    )
     for adapter_name in adapter_names:
         records: list[TrajectoryRecord] = []
         adapter_metrics, invariants = _evaluate_named_adapter(
@@ -239,6 +263,12 @@ def run_evaluation(config: EvalConfig, args: Any) -> int:
         adapter_invariants[adapter_name] = invariants
         trajectory_paths[adapter_name] = str(
             write_trajectories(config.output_dir, tag=tag, adapter=adapter_name, records=records)
+        )
+        LOG.info(
+            "%s: %d categories scored, %d trajectories written",
+            adapter_name,
+            len(adapter_metrics),
+            len(records),
         )
     transport_backend = "http" if args.endpoint else "transformers"
     backend = getattr(args, "serving_backend", None) or transport_backend

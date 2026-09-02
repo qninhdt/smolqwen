@@ -30,6 +30,7 @@ from transformers import TrainerCallback
 
 from smolqwen.artifacts import CheckpointStore, ResumeState
 from smolqwen.config_models import SftConfig
+from smolqwen.console import console, logger
 from smolqwen.tokenizer import assert_text_only_processing_class, load_tokenizer
 from smolqwen.tracking import Tracker
 from smolqwen.training.collate import (
@@ -48,6 +49,8 @@ from smolqwen.training.optim import (
     resolve_liger,
 )
 from smolqwen.training.token_batching import TokenBudgetBatchSampler
+
+LOG = logger(__name__)
 
 
 class SftError(RuntimeError):
@@ -605,16 +608,20 @@ def run_train_sft(config: SftConfig, *, resume: bool = False) -> int:
     assert_padding_free_runtime()
     assembled = build_trainer(config, resume=resume)
     trainer = assembled.trainer
-    print(format_ledger(list(assembled.toggles)))
+    console().print(format_ledger(list(assembled.toggles)))
     train = assembled.train_stats
-    print(
-        f"train {train.samples} samples / {train.total_tokens} tokens "
-        f"({train.supervised_tokens} supervised)  val {assembled.eval_size} samples"
+    LOG.info(
+        "train %d samples / %d tokens (%d supervised); val %d samples",
+        train.samples,
+        train.total_tokens,
+        train.supervised_tokens,
+        assembled.eval_size,
     )
 
     trainer.train(resume_from_checkpoint=assembled.resume_from)
     trainer.save_model(config.output_dir)
     if assembled.eval_size:
+        # Machine-readable: one JSON line of final eval metrics on stdout.
         metrics = trainer.evaluate()
         print(
             json.dumps({key: float(value) for key, value in metrics.items() if _is_number(value)})

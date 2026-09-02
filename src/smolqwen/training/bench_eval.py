@@ -43,10 +43,13 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from smolqwen.config_models import BenchEvalConfig, EvalConfig
+from smolqwen.console import logger
 from smolqwen.eval.adapters import create_adapter
 from smolqwen.eval.adapters.base import BenchmarkAdapter, EvalTask
 from smolqwen.eval.batched import evaluate_batched
 from smolqwen.eval.trajectories import TrajectoryRecord, write_trajectories
+
+LOG = logger(__name__)
 
 # Benchmark names that must never be reachable from an in-training path. Spelled
 # the way a leak would spell them, matching `test_dev_test_integrity.py`.
@@ -182,6 +185,27 @@ class BenchEvalRunner:
         self.outcomes.append(outcome)
         if self._sink is not None:
             self._sink(self.log_payload(outcome))
+        if outcome.failed_reason is not None:
+            # Never raised, so it must be visible: a silently failing eval otherwise
+            # shows up only as `bench_failed=1` in a dashboard nobody is watching.
+            LOG.warning(
+                "%s bench eval failed at step %d after %.1fs: %s",
+                self.metric_prefix,
+                step,
+                outcome.wall_s,
+                outcome.failed_reason,
+            )
+        else:
+            LOG.info(
+                "%s bench eval step %d (%s): %d tasks in %.1fs -- %s",
+                self.metric_prefix,
+                step,
+                outcome.weight_version,
+                outcome.task_count,
+                outcome.wall_s,
+                ", ".join(f"{name}={value:.4g}" for name, value in sorted(outcome.metrics.items()))
+                or "no metrics",
+            )
         return outcome
 
     def log_payload(self, outcome: BenchEvalOutcome) -> dict[str, float]:

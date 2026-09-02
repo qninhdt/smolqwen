@@ -15,6 +15,7 @@ from transformers import TrainerCallback
 
 from smolqwen.artifacts import CheckpointStore, ResumeState
 from smolqwen.config_models import EvalConfig, GrpoConfig
+from smolqwen.console import console, logger
 from smolqwen.env.pool import WorkerPool
 from smolqwen.env.registry import EnvSpec, load_env_specs
 from smolqwen.env.scenarios import Scenario, build_scenario_set
@@ -44,6 +45,8 @@ from smolqwen.training.optim import (
     resolve_liger,
 )
 from smolqwen.training.reward import verifier_reward
+
+LOG = logger(__name__)
 
 
 class GrpoError(RuntimeError):
@@ -694,10 +697,11 @@ def build_grpo_trainer(
 def run_train_grpo(config: GrpoConfig, *, resume: bool = False) -> int:
     assembled = build_grpo_trainer(config, resume=resume)
     try:
-        print(format_ledger(list(assembled.toggles)))
-        print(
-            f"train {len(assembled.train_task_ids)} curriculum scenarios / "
-            f"eval {len(assembled.eval_task_ids)} held-out scenarios"
+        console().print(format_ledger(list(assembled.toggles)))
+        LOG.info(
+            "train %d curriculum scenarios / eval %d held-out scenarios",
+            len(assembled.train_task_ids),
+            len(assembled.eval_task_ids),
         )
         assembled.trainer.train(resume_from_checkpoint=assembled.resume_from)
         assembled.trainer.save_model(config.output_dir)
@@ -741,8 +745,10 @@ def run_profile_difficulty(config: GrpoConfig) -> int:
             seed=config.training.seed,
         )
         path = write_profile(profile, config.curriculum.difficulty_profile_path)
+        # Machine-readable: `notebooks/03-grpo.ipynb` reads these counts from stdout,
+        # and notebook changes are a non-goal -- this line cannot move to stderr.
         print(json.dumps(profile.to_dict()["counts"], sort_keys=True))
-        print(f"wrote {path}")
+        LOG.info("wrote %s", path)
         return 0
     finally:
         assembled.shutdown()

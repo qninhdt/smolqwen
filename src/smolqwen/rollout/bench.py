@@ -24,12 +24,12 @@ reward) and exercises the single-turn path of the mask builder.
 from __future__ import annotations
 
 import json
-import sys
 import time
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, cast
 
+from smolqwen.console import logger
 from smolqwen.data.loader import ToolCall
 from smolqwen.data.tool_call_xml import serialize_tool_call
 from smolqwen.env.parse import parse_turn
@@ -41,6 +41,8 @@ from smolqwen.inference.episode import Episode
 from smolqwen.inference.profiles import turn_engine_config
 from smolqwen.rollout.factory_env import make_environment_factories
 from smolqwen.rollout.scheduler import PoolDispatcher, ScenarioBinding
+
+LOG = logger(__name__)
 
 
 class BenchError(RuntimeError):
@@ -299,7 +301,7 @@ def run_bench(config: Any, *, args: Any) -> int:
     if not equivalence["ok"]:
         sections.append("Problems:\n" + "\n".join(f"- {p}" for p in equivalence["problems"]))
         write_ab_report(REPORT_PATH, sections)
-        print(f"equivalence FAILED; wrote {REPORT_PATH}", file=sys.stderr)
+        LOG.error("equivalence FAILED; wrote %s", REPORT_PATH)
         return 1
 
     rows = _run_scripted_ab(config, args)
@@ -319,7 +321,9 @@ def run_bench(config: Any, *, args: Any) -> int:
         "The scripted rows above are not presented as GPU measurements."
     )
     write_ab_report(REPORT_PATH, sections)
-    print(f"equivalence and scripted A/B passed; GPU trainer A/B pending — wrote {REPORT_PATH}")
+    LOG.info(
+        "equivalence and scripted A/B passed; GPU trainer A/B pending -- wrote %s", REPORT_PATH
+    )
     return 0
 
 
