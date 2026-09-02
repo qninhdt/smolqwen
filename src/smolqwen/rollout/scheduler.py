@@ -42,6 +42,7 @@ from smolqwen.data.loader import Message
 from smolqwen.env.parse import parse_turn
 from smolqwen.env.pool import Result, WorkerPool
 from smolqwen.env.scenarios import Scenario
+from smolqwen.inference.decoding import assistant_message, split_generation_continuation
 from smolqwen.rollout.episode import Episode, TerminalReason
 from smolqwen.rollout.generation import (
     GenerationBackend,
@@ -49,6 +50,19 @@ from smolqwen.rollout.generation import (
     GenerationResult,
 )
 from smolqwen.rollout.mask import EpisodeMaskBuilder
+
+__all__ = [
+    "LENGTH_MARGIN",
+    "MAX_REPLACEMENTS_PER_POSITION",
+    "POLL_INTERVAL_S",
+    "EnvDispatcher",
+    "PoolDispatcher",
+    "RolloutScheduler",
+    "ScenarioBinding",
+    "SchedulerConfig",
+    "SchedulerError",
+    "split_generation_continuation",
+]
 
 # How long a cycle may spend reaping before it dispatches again. Not a timeout
 # for any episode — only the granularity at which completions are noticed.
@@ -351,15 +365,13 @@ class RolloutScheduler:
         episode.record_timing("parse", parse_finished - parse_started)
         self.stage_intervals.append(("parse", parse_started, parse_finished))
 
-        reasoning, content = split_generation_continuation(text)
-        # `add_generation_prompt=True` already emitted the opening `<think>\n`.
-        # vLLM therefore returns only the continuation, normally
-        # `reasoning\n</think>\n\ncontent`. Store the semantic fields the chat
-        # template expects so the next full re-render reproduces the held model
-        # tokens. Treating the continuation as plain `content` makes the template
-        # synthesize a second reasoning block and silently demotes earlier model
-        # tokens to env-mask zero on every turn.
-        message = Message(role="assistant", content=content, reasoning_content=reasoning)
+        # `add_generation_prompt=True` already emitted the opening `<think>\n`, so
+        # vLLM returns only the continuation, normally
+        # `reasoning\n</think>\n\ncontent`. Storing the semantic fields the chat
+        # template expects is what makes the next full re-render reproduce the
+        # held model tokens; `inference/decoding.py` records the measurement
+        # showing a truncated turn stored as plain content drifts instead.
+        message = assistant_message(text)
         episode.messages.append(message)
         self._mirror_scripted(episode, message)
 
@@ -611,26 +623,6 @@ class RolloutScheduler:
 def _default_wait(futures: Any, timeout: float | None = None) -> set[Future[Any]]:
     done, _ = wait(list(futures), timeout=timeout)
     return done
-
-
-def split_generation_continuation(text: str) -> tuple[str, str]:
-    """Split a continuation generated after the template's opening `<think>`.
-
-    Qwen3.5's generation prompt ends in ``<think>\n``. The sampled text thus
-    contains the reasoning body and closing tag, but not the opening tag. A
-    backend returning a complete block is tolerated for deterministic tests and
-    alternate engines. If the block never closes (usually token truncation), the
-    whole continuation is retained as reasoning and the episode terminates as a
-    no-call turn.
-    """
-    from smolqwen.env.parse import split_reasoning
-
-    if "<think>" in text:
-        return split_reasoning(text)
-    if "</think>" in text:
-        reasoning, content = text.split("</think>", 1)
-        return reasoning.strip(), content.strip()
-    return text.strip(), ""
 
 
 class PoolDispatcher:

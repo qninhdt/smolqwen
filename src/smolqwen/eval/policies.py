@@ -11,6 +11,7 @@ from typing import Any, Protocol
 from urllib.request import urlopen
 
 from smolqwen.inference.client import ChatClient
+from smolqwen.inference.decoding import decode_completion
 
 _COMMIT_SHA = re.compile(r"[0-9a-fA-F]{40}")
 
@@ -273,7 +274,7 @@ class TransformersPolicy:
         generated = output[0, input_ids.shape[-1] :]
         tokens = int(generated.shape[-1])
         return GenerationResult(
-            completion=str(self._tokenizer.decode(generated, skip_special_tokens=True)),
+            completion=decode_completion(self._tokenizer, generated),
             generated_tokens=tokens,
             finish_reason="length" if tokens == self.max_new_tokens else "stop",
         )

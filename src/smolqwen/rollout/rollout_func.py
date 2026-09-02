@@ -127,6 +127,7 @@ def make_scheduler(
     their dispatcher's virtual wait here.
     """
     from smolqwen.data.render import render_prefix
+    from smolqwen.inference.decoding import decode_completion
 
     def render_prefix_ids(messages: Sequence[Message], binding: ScenarioBinding) -> list[int]:
         text = render_prefix(
@@ -135,7 +136,7 @@ def make_scheduler(
         return encode_ids(tokenizer, text)
 
     def decode(ids: Sequence[int]) -> str:
-        return str(tokenizer.decode(list(ids), skip_special_tokens=False))
+        return decode_completion(tokenizer, list(ids))
 
     return RolloutScheduler(
         backend=backend,
