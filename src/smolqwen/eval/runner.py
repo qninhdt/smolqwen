@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 from collections.abc import Mapping, Sequence
 from importlib.metadata import PackageNotFoundError, version
 from typing import Any
@@ -14,6 +15,7 @@ from smolqwen.eval.manifest import EvalManifest
 from smolqwen.eval.metrics import TaskMetrics
 from smolqwen.eval.policies import Policy, load_policy
 from smolqwen.eval.report import write_report
+from smolqwen.eval.trajectories import TrajectoryRecord, write_trajectories
 
 
 def _library_versions() -> dict[str, str | None]:
@@ -64,7 +66,14 @@ def evaluate_adapter(
     policy: Policy,
     adapter: BenchmarkAdapter,
     tasks: Sequence[Any] | None = None,
+    records: list[TrajectoryRecord] | None = None,
 ) -> dict[str, dict[str, float]]:
+    """Advance every task to terminal, score it, and keep its trajectory.
+
+    `records` collects one `TrajectoryRecord` per task when supplied. The history
+    was previously built and discarded, which left an all-or-nothing `0.0`
+    unattributable and a re-grade impossible.
+    """
     task_metrics: list[TaskMetrics] = []
     for task in tasks if tasks is not None else adapter.load_tasks():
         history: list[dict[str, Any]] = adapter.build_prompt(task, [])
@@ -73,6 +82,12 @@ def evaluate_adapter(
         truncated = False
         generation_turns = 0
         env_steps = 0
+        terminal_reason = "turn_cap"
+        # Collected as they are appended rather than filtered out of `history`
+        # afterwards: the opening user prompt is a `user` message too, and a filter
+        # by role would silently count it as the episode's first observation.
+        observations: list[str] = []
+        started = time.monotonic()
         while generation_turns < config.max_steps_per_task:
             result = policy.generate(history, tools)
             generated_tokens += result.generated_tokens
@@ -86,27 +101,55 @@ def evaluate_adapter(
                     {"role": "tool", "content": observation}
                     for observation in step.tool_observations
                 )
+                observations.extend(step.tool_observations)
             elif step.observation:
                 history.append({"role": step.observation_role, "content": step.observation})
+                observations.append(step.observation)
             if step.tools is not None:
                 tools = step.tools
             # A completion signal may have advanced the adapter to a new user
             # turn.  Adapter-owned prompt construction appends that turn once.
             history = adapter.build_prompt(task, history)
             if step.complete:
+                terminal_reason = "final_answer"
                 break
+        wall_s = time.monotonic() - started
         score = adapter.score(task)
+        invalid_calls = adapter.invalid_call_count(task)
         task_metrics.append(
             TaskMetrics(
                 category=task.category,
                 score=score.score,
-                invalid_calls=adapter.invalid_call_count(task),
+                invalid_calls=invalid_calls,
                 steps=env_steps,
                 generated_tokens=generated_tokens,
                 truncated=truncated,
                 exact_success=score.exact_success,
+                diagnostics=dict(score.diagnostics),
             )
         )
+        if records is not None:
+            records.append(
+                TrajectoryRecord(
+                    task_id=task.task_id,
+                    category=task.category,
+                    messages=[dict(message) for message in history],
+                    observations=observations,
+                    score=score.score,
+                    exact_success=score.exact_success,
+                    completed=score.completed,
+                    failure_reason=score.failure_reason,
+                    failed_check_names=list(score.failed_check_names),
+                    diagnostics=dict(score.diagnostics),
+                    terminal_reason=terminal_reason,
+                    generation_turns=generation_turns,
+                    env_steps=env_steps,
+                    generated_tokens=generated_tokens,
+                    truncated=truncated,
+                    invalid_calls=invalid_calls,
+                    wall_s=wall_s,
+                )
+            )
     return adapter.summarize(task_metrics)
 
 
@@ -114,12 +157,16 @@ def _evaluate_named_adapter(
     config: EvalConfig,
     policy: Policy,
     name: str,
+    records: list[TrajectoryRecord] | None = None,
 ) -> tuple[dict[str, dict[str, float]], Mapping[str, Any]]:
     adapter = create_adapter(name, config)
     tasks = adapter.load_tasks()
     try:
         invariants = adapter.manifest_invariants(tasks)
-        return evaluate_adapter(config, policy, adapter, tasks=tasks), invariants
+        return (
+            evaluate_adapter(config, policy, adapter, tasks=tasks, records=records),
+            invariants,
+        )
     finally:
         close = getattr(adapter, "close", None)
         if callable(close):
@@ -146,8 +193,13 @@ def run_evaluation(config: EvalConfig, args: Any) -> int:
     adapter_names = (args.adapter,) if args.adapter else tuple(config.adapters)
     if not adapter_names:
         raise ValueError("evaluation requires at least one benchmark adapter")
+    tag = args.tag or "evaluation"
+    trajectory_paths: dict[str, str] = {}
     for adapter_name in adapter_names:
-        adapter_metrics, invariants = _evaluate_named_adapter(config, policy, adapter_name)
+        records: list[TrajectoryRecord] = []
+        adapter_metrics, invariants = _evaluate_named_adapter(
+            config, policy, adapter_name, records=records
+        )
         duplicates = sorted(set(metrics) & set(adapter_metrics))
         if duplicates:
             raise ValueError(
@@ -155,6 +207,9 @@ def run_evaluation(config: EvalConfig, args: Any) -> int:
             )
         metrics.update(adapter_metrics)
         adapter_invariants[adapter_name] = invariants
+        trajectory_paths[adapter_name] = str(
+            write_trajectories(config.output_dir, tag=tag, adapter=adapter_name, records=records)
+        )
     transport_backend = "http" if args.endpoint else "transformers"
     backend = getattr(args, "serving_backend", None) or transport_backend
     manifest = build_manifest(
@@ -177,10 +232,16 @@ def run_evaluation(config: EvalConfig, args: Any) -> int:
             "prefix_caching": getattr(args, "prefix_caching", None),
             "library_versions": _library_versions(),
             "adapter_revision": getattr(policy, "adapter_revision", None),
+            # What generation actually used, so a row is self-describing without
+            # the caller having asserted it on the command line.
+            "generation_concurrency": config.profile.generation_concurrency,
+            "enforce_eager": config.profile.enforce_eager,
+            "max_context_tokens_used": config.profile.max_seq_length,
+            "trajectory_records": trajectory_paths,
         },
     )
     json_path, markdown_path = write_report(
-        config.output_dir, tag=args.tag or "evaluation", manifest=manifest, metrics=metrics
+        config.output_dir, tag=tag, manifest=manifest, metrics=metrics
     )
     print(json.dumps({"json": str(json_path), "markdown": str(markdown_path)}, sort_keys=True))
     return 0

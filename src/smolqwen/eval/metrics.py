@@ -1,9 +1,21 @@
-"""Secondary metrics that make an agentic score interpretable."""
+"""Secondary metrics that make an agentic score interpretable.
+
+The headline score answers "how often did it work". These answer "and when it did
+not, which part failed" -- which for an all-or-nothing benchmark is the whole
+question, since a bare `0.0` is attributable to nothing.
+
+Per-task diagnostics are *sparse* on purpose. A benchmark reports only the
+conditions it can resolve for a given task, so an averaged diagnostic carries its
+own denominator: `state_match_rate` over the tasks where state comparison was
+defined, not over every task. The denominator travels with the value as
+`<metric>_denominator`, because a rate over an unstated population invites exactly
+the misreading the diagnostic exists to prevent.
+"""
 
 from __future__ import annotations
 
-from collections.abc import Iterable
-from dataclasses import dataclass
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass, field
 
 
 @dataclass(frozen=True)
@@ -15,6 +27,9 @@ class TaskMetrics:
     generated_tokens: int
     truncated: bool
     exact_success: bool | None = None
+    # Sparse per-task conditions. An absent key means "not applicable to this
+    # task", never "zero" -- see `AdapterResult.diagnostics`.
+    diagnostics: Mapping[str, float] = field(default_factory=dict)
 
 
 def aggregate(tasks: Iterable[TaskMetrics]) -> dict[str, dict[str, float]]:
@@ -36,4 +51,26 @@ def aggregate(tasks: Iterable[TaskMetrics]) -> dict[str, dict[str, float]]:
             result[category]["exact_success_rate"] = sum(
                 bool(value.exact_success) for value in values if value.exact_success is not None
             ) / sum(value.exact_success is not None for value in values)
+        result[category].update(_aggregate_diagnostics(values))
     return result
+
+
+def _aggregate_diagnostics(values: list[TaskMetrics]) -> dict[str, float]:
+    """Mean each diagnostic over the tasks that reported it, denominator included.
+
+    `state_match_rate` averaged over all tasks would silently count every
+    never-completed task as a state mismatch, restoring the conflation
+    `completion_rate` removes. So the population is whichever tasks carried the key,
+    and its size is reported alongside.
+    """
+    totals: dict[str, float] = {}
+    counts: dict[str, int] = {}
+    for value in values:
+        for name, number in value.diagnostics.items():
+            totals[name] = totals.get(name, 0.0) + float(number)
+            counts[name] = counts.get(name, 0) + 1
+    aggregated: dict[str, float] = {}
+    for name, total in sorted(totals.items()):
+        aggregated[name] = total / counts[name]
+        aggregated[f"{name}_denominator"] = float(counts[name])
+    return aggregated

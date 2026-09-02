@@ -148,17 +148,48 @@ class EnvScalerHeldoutAdapter:
         return self._execute_calls(task, [(parsed.name, parsed.arguments)])
 
     def score(self, task: EvalTask) -> AdapterResult:
+        """`reward = passed / total` over K checks, with the per-check detail kept.
+
+        EnvScaler is not all-or-nothing, so the reward already moves continuously --
+        there is nothing to add there. What the aggregate discards is *which* checks
+        failed and how many failed with `NameError`, and those are the two signals
+        that separate "the model got the state wrong" from "the verifier could not
+        run". Both already cross the process boundary in the score payload.
+        """
         episode = self._episode(task)
         if not episode.created:
             self._ensure_created(task)
         try:
             if episode.failed:
-                return AdapterResult(0.0, False)
+                return AdapterResult(
+                    0.0, False, completed=False, failure_reason="episode_reported_failure"
+                )
             result = self._pool_or_raise().score(episode.episode_id)
             if not result.ok or not isinstance(result.value, Mapping):
-                return AdapterResult(0.0, False)
-            reward = float(result.value["reward"])
-            return AdapterResult(reward, reward == 1.0)
+                return AdapterResult(
+                    0.0,
+                    False,
+                    completed=False,
+                    failure_reason=f"verifier_unavailable:{result.reason}",
+                )
+            payload = result.value
+            reward = float(payload["reward"])
+            checks = payload.get("checks") or []
+            failed = tuple(
+                str(check.get("check_item", "")) for check in checks if not check.get("passed")
+            )
+            name_errors = float(payload.get("name_errors", 0))
+            return AdapterResult(
+                reward,
+                reward == 1.0,
+                diagnostics={
+                    "check_pass_count": float(payload.get("passed", 0)),
+                    "check_total": float(payload.get("total", 0)),
+                    "name_error_count": name_errors,
+                },
+                failure_reason=None if reward == 1.0 else "checks_failed",
+                failed_check_names=failed,
+            )
         finally:
             self._pool_or_raise().destroy(episode.episode_id)
 

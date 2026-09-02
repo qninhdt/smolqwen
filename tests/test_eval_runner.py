@@ -80,7 +80,7 @@ def test_run_evaluation_records_actual_serving_locator_and_backend(
     monkeypatch.setattr(
         runner,
         "_evaluate_named_adapter",
-        lambda *_: ({"fixture": {"score": 1.0}}, {"dataset_hash": "hash"}),
+        lambda *_args, **_kwargs: ({"fixture": {"score": 1.0}}, {"dataset_hash": "hash"}),
     )
 
     def write_report(
@@ -123,6 +123,10 @@ def test_run_evaluation_records_actual_serving_locator_and_backend(
     assert recorded["served_model"] == config.http_model
     assert recorded["checkpoint_revision"] == "a" * 40
     assert recorded["quantization"] == "fp8"
+    # What generation used, recorded rather than asserted on the command line.
+    assert recorded["generation_concurrency"] == config.profile.generation_concurrency
+    assert recorded["enforce_eager"] == config.profile.enforce_eager
+    assert recorded["trajectory_records"]["fixture"].endswith("served-fixture.jsonl")
 
 
 def test_run_evaluation_refuses_an_empty_adapter_selection(

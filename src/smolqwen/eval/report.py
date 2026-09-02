@@ -61,6 +61,7 @@ def write_report(
                 divider,
                 *rows,
                 "",
+                *_diagnostics_section(metrics),
                 f"Recorded-free: `{recorded}`",
                 "",
             ]
@@ -68,6 +69,42 @@ def write_report(
         encoding="utf-8",
     )
     return json_path, markdown_path
+
+
+# Aggregated diagnostics arrive paired with their population size, so the rate and
+# the denominator are rendered together.
+DENOMINATOR_SUFFIX = "_denominator"
+
+
+def _diagnostics_section(metrics: dict[str, dict[str, float]]) -> list[str]:
+    """Render each diagnostic with the population it was averaged over.
+
+    A rate over an unstated population invites the misreading the diagnostic exists
+    to prevent: `state_match_rate` is defined only for tasks BFCL could
+    state-compare, so `1.00 over 12` and `1.00 over 80` are different claims about
+    the same benchmark.
+    """
+    rows: list[str] = []
+    for category, values in sorted(metrics.items()):
+        named = sorted(
+            name
+            for name in values
+            if not name.endswith(DENOMINATOR_SUFFIX)
+            and f"{name}{DENOMINATOR_SUFFIX}" in values
+        )
+        for name in named:
+            denominator = int(values[f"{name}{DENOMINATOR_SUFFIX}"])
+            rows.append(f"| {category} | {name} | {values[name]:.4f} | {denominator} |")
+    if not rows:
+        return []
+    return [
+        "## Diagnostics",
+        "",
+        "| category | metric | value | tasks measured |",
+        "| --- | --- | ---: | ---: |",
+        *rows,
+        "",
+    ]
 
 
 def write_comparison_report(
