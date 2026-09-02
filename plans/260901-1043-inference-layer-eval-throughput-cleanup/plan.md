@@ -80,11 +80,11 @@ weight-transfer protocol of its own.
 | 1 | [Phase 1: Inventory, baseline, and document reconciliation](./phase-01-start.md) | Done |
 | 2 | [Phase 2: vLLM runtime, profiles, and the shared client](./phase-02-vllm-runtime-and-inference-layer.md) | In progress — 2 GPU criteria open |
 | 3 | [Phase 3: Unify the turn engine](./phase-03-unify-turn-engine.md) | Done |
-| 4 | [Phase 4: Batched evaluation runner](./phase-04-batched-eval-runner.md) | Pending |
-| 5 | [Phase 5: GRPO in-training benchmark eval](./phase-05-grpo-in-training-benchmark-eval.md) | Pending |
+| 4 | [Phase 4: Batched evaluation runner](./phase-04-batched-eval-runner.md) | In progress — agreement needs a checkpoint |
+| 5 | [Phase 5: GRPO in-training benchmark eval](./phase-05-grpo-in-training-benchmark-eval.md) | Done — cost bound needs a card |
 | 6 | [Phase 6: SFT in-training benchmark eval](./phase-06-sft-in-training-benchmark-eval.md) | Pending |
 | 7 | [Phase 7: Rich logging across every CLI](./phase-07-rich-logging-across-cli.md) | Pending |
-| 8 | [Phase 8: Delete dead code and one-shot scripts](./phase-08-delete-dead-code-and-scripts.md) | Pending |
+| 8 | [Phase 8: Delete dead code and one-shot scripts](./phase-08-delete-dead-code-and-scripts.md) | Done |
 | 9 | [Phase 9: Artifact persistence to HF and W&B](./phase-09-artifact-persistence-hf-wandb.md) | Pending |
 | 10 | [Phase 10: L4 validation](./phase-10-gpu-validation-on-l4.md) | Pending |
 

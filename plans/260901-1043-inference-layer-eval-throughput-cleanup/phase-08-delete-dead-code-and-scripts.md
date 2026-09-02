@@ -1,7 +1,7 @@
 ---
 phase: 8
 title: "Delete dead code and one-shot scripts"
-status: pending
+status: done
 priority: P2
 effort: "1d"
 dependencies: [1]
@@ -132,19 +132,51 @@ until someone followed the documented benchmark path.
 
 ## Success Criteria
 
-- [ ] `active_pool_multiplier`, `local_artifact_dir` still present; profiles load
-- [ ] `max_trajectories` removed
-- [ ] Nine flags gone with serving provenance preserved on `--endpoint`
-- [ ] `--require-serving-match` compares `recorded_free`, with a test that an
+- [x] `active_pool_multiplier`, `local_artifact_dir` still present; profiles load
+      (every stage x profile resolved after the cut)
+- [x] `max_trajectories` removed
+- [x] Eight flags gone with serving provenance preserved on `--endpoint`
+- [x] `--require-serving-match` compares `recorded_free`, with a test that an
       `invariant`-only comparison would have passed
-- [ ] Readiness probe and missing-key CLI assertion both still exercised
-- [ ] `eval/workload.py` reachable from the CLI, not test-only
-- [ ] Compose `bench` service resolved; `test_auth_all_paths.py` consistent
-- [ ] `colab-l4-smoke.py` no longer calls a deleted subcommand
-- [ ] Three scripts recorded as gated, not deleted
-- [ ] No dangling reference across all eight surfaces
-- [ ] `test_rollout_equivalence.py` green
-- [ ] CPU suite green
+- [x] Readiness probe and missing-key CLI assertion both still exercised
+- [x] `eval/workload.py` reachable from the CLI via `smolqwen build-workload`
+- [x] Compose `bench` service rewritten as `vllm bench serve`;
+      `test_auth_all_paths.py` asserts it targets the proxy and reads the key
+      variable that command honours
+- [x] `colab-l4-smoke.py` no longer calls a deleted subcommand
+- [x] Three scripts recorded as gated, not deleted
+- [x] No dangling reference across all eight surfaces
+- [x] `test_rollout_equivalence.py` green
+- [x] CPU suite green
+
+## Outcome
+
+1,183 lines deleted, 485 added. The audit reports **zero** unreferenced declarations
+out of 1,456, run immediately before each deletion rather than trusting the
+inventory written several phases earlier.
+
+Group A found two entries the Phase 1 inventory had not listed — `config_models.Stage`
+and `render.MASKED` — and five symbols this plan's own earlier phases introduced and
+never wired. Deleting those now matters: left in place, the next audit would read
+them as pre-existing debt.
+
+Group B: it is **eight** flags, not nine. `--serving-backend` survives, because the
+served process is a separate one whose engine `evaluate` cannot inspect; the other
+eight described facts the in-process engine now records itself.
+
+Group C: `colab-probe-status.py` deleted. The other three stay gated on plan
+`260831-0808` phase 4, which is `in_progress`.
+
+Group D deleted `bench.py` and `sweep.py` and kept all three things they carried:
+the readiness probe (moved in Phase 2), the `recorded_free` pairing guard (now
+`eval/serving_pairing.py`, with the negative control showing an `invariant`-only
+comparison accepting a pairing it refuses), and the workload builder (now
+`eval/workload.py` with a CLI entry point, so it is reachable rather than
+test-only).
+
+One consumer surface resolved beyond the plan's list: `config_metadata` in
+`serving/server.py` existed only to feed the deleted wrapper's fingerprint, and
+`vllm bench serve --save-result` records its own config.
 
 ## Risk Assessment
 

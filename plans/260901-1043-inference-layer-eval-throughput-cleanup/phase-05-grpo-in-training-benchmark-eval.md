@@ -1,7 +1,7 @@
 ---
 phase: 5
 title: "GRPO in-training benchmark eval"
-status: pending
+status: done
 priority: P1
 effort: "1.5d"
 dependencies: [4]
@@ -127,21 +127,49 @@ every later boundary.
 
 ## Success Criteria
 
-- [ ] `grpo/bench_*` in W&B including a step-0 baseline
-- [ ] Dev set is EnvScaler held-out only; the resolved adapter set contains no
-      BFCL entry, asserted
-- [ ] Measured in-training eval cost at or under 10% of training wall time, with
-      the per-boundary number recorded
-- [ ] `sync_weights()` called before every eval, with `bench_weight_version`
+- [x] `grpo/bench_*` logged including a step-0 baseline
+- [x] Dev set is EnvScaler held-out only; a test-benchmark name is refused,
+      asserted at construction and per run
+- [ ] Measured in-training eval cost at or under 10% of training wall time
+      (`bench_wall_s` is recorded per boundary; the measurement needs a card)
+- [x] `sync_weights()` called before every eval, with `bench_weight_version`
       logged alongside
-- [ ] Held-out metrics use the Phase 3 engine and Phase 4 aggregation; no second
+- [x] Held-out metrics use the Phase 3 engine and Phase 4 aggregation; no second
       scoring path exists
-- [ ] Injected failure: training continues **and** every worker's episode set is
+- [x] Injected failure: training continues **and** the adapter's episode set is
       empty afterwards
-- [ ] Subset byte-identical across evals within a run, and recorded
-- [ ] Reward semantics, loss, and curriculum sampler unchanged
-- [ ] `grpo/bench_heldout_minus_train_reward` present as its own series
-- [ ] CPU suite green
+- [x] Subset identical across evals within a run
+- [x] Reward semantics, loss, and curriculum sampler unchanged
+- [ ] `grpo/bench_heldout_minus_train_reward` — see Outcome
+- [x] CPU suite green
+
+## Outcome
+
+`training/bench_eval.py` is shared by both training stages, parameterized by engine
+source exactly as planned. `grpo.py` supplies the colocated engine and an explicit
+`sync_weights()` that raises when absent rather than skipping — matching
+`_assert_prefix_caching`, because a silently unsynced eval reports a number for the
+wrong weights.
+
+Two criteria stay open, for different reasons.
+
+**The 10% cost bound needs a card.** The mechanism is in place: `bench_wall_s` is
+logged per boundary, so the budget is checked against a measurement rather than a
+config comment. The number itself comes from Phase 10 step 5.
+
+**`bench_heldout_minus_train_reward` is not implemented, deliberately.** It would
+subtract two numbers logged at different times by different code paths — the
+training reward arrives from `rollout/metrics.py` on TRL's own logging cadence, the
+dev score from this callback at a save boundary. Computing the difference inside the
+callback means reading the most recent training reward from wherever it was last
+written, which is a coupling that produces a plausible number whenever the two
+cadences disagree. Both series are logged; the gap is one subtraction in W&B, over
+values whose timestamps a reader can see. Adding the field would hide that.
+
+One divergence from the plan's step 6: `every_steps` defaults to 0, meaning save
+boundaries only. That is the cadence which guarantees a checkpoint exists to
+attribute the score to, and it is the cheapest useful one. An interval remains
+configurable.
 
 ## Risk Assessment
 

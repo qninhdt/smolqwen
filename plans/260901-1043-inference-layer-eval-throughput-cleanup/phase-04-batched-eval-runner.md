@@ -1,7 +1,7 @@
 ---
 phase: 4
 title: "Batched evaluation runner"
-status: pending
+status: in_progress
 priority: P1
 effort: "2.5d"
 dependencies: [3]
@@ -169,20 +169,57 @@ observes. The flags then go without losing provenance.
 
 - [ ] Agreement within Phase 1's tolerance at concurrency 1, disagreement list
       published per task
-- [ ] Capacity test: 80 tasks against a 32-episode pool completes
-- [ ] One trajectory record per task, carrying the failing condition — a score is
+- [x] Capacity test: 80 tasks against a 32-episode pool completes
+- [x] One trajectory record per task, carrying the failing condition — a score is
       re-derivable from the record without re-running generation
-- [ ] `invariant` unchanged; concurrency, `enforce_eager`, observed serving
+- [x] `invariant` unchanged; concurrency, `enforce_eager`, observed serving
       config, and the generation path in `recorded_free`
-- [ ] `--endpoint` rows still carry serving provenance with the flags gone
-- [ ] Restricted denominators printed for `state_match_rate` and
+- [x] `--endpoint` rows still carry serving provenance with the flags gone
+- [x] Restricted denominators printed for `state_match_rate` and
       `result_match_rate`
-- [ ] `failed_check_names` and `name_error_count` surfaced; no metric that merely
+- [x] `failed_check_names` and `name_error_count` surfaced; no metric that merely
       renames `score`
-- [ ] `AdapterResult` extended with defaults; all 9 sites compile untouched
-- [ ] Adapter revision refused when unpinned, with a test
-- [ ] `TransformersPolicy` retained and still exercised for adapter-on-base
-- [ ] CPU suite green; `gpu` tests listed as pending
+- [x] `AdapterResult` extended with defaults; all 9 sites compile untouched
+- [x] Adapter revision refused when unpinned, with a test
+- [x] `TransformersPolicy` retained and still exercised for adapter-on-base
+- [x] CPU suite green; `gpu` tests listed as pending
+
+## Outcome
+
+Code complete. **The agreement criterion is the one open item and it cannot close
+here**: `evaluate` needs weights, and no checkpoint exists in this repo, so Phase 1
+recorded the command and deferred the baseline. Phase 10 step 2 is the first
+measurement, and it re-captures the baseline on the same card as the vLLM run so
+the comparison is not across two machines.
+
+`eval/batched.py` drives the adapters through the shared engine; `eval/driver.py`
+is the benchmark side of the driver protocol. The window is
+`min(generation_concurrency, pool_capacity)`, with a test that reads both numbers
+from the shipped configs and fails if a future edit makes the window stop mattering.
+
+Three corrections to this phase's plan:
+
+**`per_check_pass_rate` would have renamed `score`.** `verifier.py:246` already
+returns `round(passed / total, 4)` and `metrics.py` already averages it, so
+EnvScaler was never all-or-nothing. What the aggregate genuinely discarded is which
+checks failed and the `NameError` count — the signal separating "the state is
+wrong" from "the verifier could not run". Those are what got surfaced.
+
+**Diagnostics needed a denominator in the report, not just a restricted
+population.** `state_match_rate` of 1.00 over 12 tasks and over 80 are different
+claims about the same benchmark, so `aggregate` emits `<metric>_denominator` and the
+report renders the pair.
+
+**Checkpoint pinning had two holes, not one.** `resolve_eval_checkpoint` was tested
+but unreachable from `evaluate`; adapter pinning lived only in
+`TransformersPolicy.__init__`, which the vLLM adapter path does not enter.
+`eval/checkpoints.py` closes both at the boundary where weights enter and records
+which of local / pinned-Hub-pull / endpoint applied.
+
+The engine gained `generate_ids`: the turn engine renders and tokenizes itself, and
+re-tokenizing a decoded string would let a BPE seam move the boundary the mask
+builder depends on. A position whose logprob vLLM did not report stays NaN rather
+than shortening the row.
 
 ## Risk Assessment
 
