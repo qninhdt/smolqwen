@@ -1,7 +1,7 @@
 ---
 phase: 3
 title: "Unify the turn engine"
-status: pending
+status: done
 priority: P1
 effort: "4d"
 dependencies: [2]
@@ -147,16 +147,63 @@ on the engine thread, never a pool thread.
 
 ## Success Criteria
 
-- [ ] One turn-loop implementation
-- [ ] `grep -rc "class GenerationResult" src/` returns 1
-- [ ] Seven existing tests green; assertion diff empty, import diff only
-- [ ] Shared-loop test proves identical transcripts, including a
+- [x] One turn-loop implementation
+- [x] `grep -rc "class GenerationResult" src/` returns 1
+- [x] Seven existing tests green; assertion diff empty, import diff only
+- [x] Shared-loop test proves identical transcripts, including a
       completed-future driver
-- [ ] Admission test: tasks > pool capacity completes
-- [ ] Cleanup test: masks off, failure injected, every worker's episode set empty
-- [ ] Positional NaN/mask assertion replaces both existence checks
-- [ ] Rendering count per cycle equals generation width, not ready count
-- [ ] `scheduler_config_for` relocated with no import cycle
+- [x] Admission test: tasks > pool capacity completes
+- [x] Cleanup test: masks off, failure injected, every worker's episode set empty
+- [x] Positional NaN/mask assertion replaces both existence checks
+- [x] Rendering count per cycle equals generation width, not ready count
+- [x] `scheduler_config_for` relocated with no import cycle
+
+## Outcome
+
+`src/smolqwen/inference/turn_engine.py` is the only turn loop;
+`rollout/scheduler.py` keeps `PoolDispatcher` and re-exports the binding and
+config names its callers use. `rollout/driver.py` holds the rollout-specific
+driver: XML parsing, pool dispatch, verifier reward, crash replacement.
+
+Three corrections to this phase's plan, each from reading source:
+
+**The decode convention was decided by measurement, not by the plan's rule.** The
+plan said "the rollout convention wins because the mask depends on it." Neither
+half survives. Only `<|im_end|>` and `<|endoftext|>` are special tokens in
+Qwen3.5, so `skip_special_tokens` decides only whether the turn-end marker
+survives — and keeping it breaks eval's string-equality markers *and* doubles the
+marker in rollout's next render. What moves the mask is the message shape, and only
+for a truncated turn: 12 supervised tokens of 52 under the split shape against 8
+of 52 with one fork under raw content. Recorded in `inference/decoding.py` and
+pinned by `tests/test_decode_convention.py`.
+
+**The positional assertion is an implication, not a biconditional.** The plan
+specified `env_mask[i] == 0 ⟺ isnan(logprobs[i])`. The reverse direction is false
+on correct data: `generation.py` leaves a *sampled* token NaN when TRL supplied no
+candidate for its position, and that token is legitimately supervised. Only
+`mask == 0 → NaN` is asserted, with the NaN-but-supervised row as the negative
+control.
+
+**`max_generation_turns` is derived, not configured.** The plan mapped it from
+`max_steps_per_task`, which lives on `EvalConfig` and is unreachable from
+`GrpoConfig`. `turn_engine_config` derives it as `max_env_steps + 4` — one
+generation per step, plus a final answer, plus head-room for invalid calls that
+consume a generation without executing anything.
+
+One implementation detail the plan could not have anticipated: `Episode.state`
+defaults to `"ready"`, which was unreachable before windowed admission and now
+means an un-admitted position would be selected for generation with an empty
+message list. `_generate_ready` and `_dispatch_scoring` both filter on
+`slot.admitted` for that reason.
+
+Tests: `test_turn_engine_shared_loop.py` (3) drives one scripted episode through an
+asynchronous pool driver and a fully synchronous one and requires identical
+transcripts; `test_turn_engine_admission.py` (5) covers the window with its
+negative control, rollout's all-positions invariant, the cleanup leak with masks
+off, and the render count. The five existing rollout tests changed by import path
+and function name only.
+
+CPU suite: 376 passed, 16 deselected. `make check` and `make smoke` green.
 
 ## Risk Assessment
 
