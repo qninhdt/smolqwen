@@ -132,6 +132,14 @@ def build_parser() -> argparse.ArgumentParser:
     _add_common(merge)
     merge.add_argument("--adapter-dir", type=Path, default=None)
     merge.add_argument("--output-dir", type=Path, default=None)
+    merge.add_argument(
+        "--push",
+        action="store_true",
+        help=(
+            "upload the merged checkpoint to tracking.merged_hub_repo_id; "
+            "several GB, so opt-in rather than automatic"
+        ),
+    )
 
     selftest = subparsers.add_parser(
         "env-selftest", help="run a scripted episode end to end against a real scenario"
@@ -291,6 +299,7 @@ def _cmd_merge_adapter(args: argparse.Namespace, config: StrictModel) -> int:
         _as(config, SftConfig),
         adapter_dir=args.adapter_dir,
         output_dir=args.output_dir,
+        push=args.push,
     )
 
 

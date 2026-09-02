@@ -10,15 +10,22 @@ from __future__ import annotations
 
 import os
 import time
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Protocol
+
+from smolqwen.console import logger
+
+LOG = logger(__name__)
 
 
 class Run(Protocol):
     """The slice of a W&B run this module uses."""
 
     def log(self, data: Mapping[str, Any], *, step: int | None = ...) -> Any: ...
+
+    def log_artifact(self, artifact_or_path: Any, **kwargs: Any) -> Any: ...
 
     def finish(self) -> Any: ...
 
@@ -152,7 +159,64 @@ class Tracker:
         metrics.update(extra)
         self.log(metrics, step=step)
 
+    def log_artifact(
+        self,
+        path: Path | str,
+        *,
+        name: str,
+        artifact_type: str,
+        extra_paths: Sequence[Path | str] = (),
+    ) -> None:
+        """Upload one file (plus optional siblings) as a W&B artifact.
+
+        Reports and profiles only. Checkpoints go to the Hub -- duplicating
+        multi-gigabyte weights into W&B would be the actual quota problem, and
+        `artifacts.CheckpointStore` already owns that path.
+
+        Never raises. An artifact upload failing must not fail the evaluation or
+        training run that produced the file, which is still on disk either way.
+        `wandb` is imported lazily for the same reason `start()` does it.
+        """
+        if self._run is None:
+            return
+        files = [Path(path), *(Path(extra) for extra in extra_paths)]
+        missing = [str(candidate) for candidate in files if not candidate.is_file()]
+        if missing:
+            LOG.warning("not logging artifact %s: missing %s", name, ", ".join(missing))
+            return
+        try:
+            import wandb
+
+            artifact = wandb.Artifact(name=name, type=artifact_type)
+            for candidate in files:
+                artifact.add_file(str(candidate))
+            self._run.log_artifact(artifact)
+        except Exception as exc:  # pragma: no cover - depends on a live W&B backend
+            LOG.warning("artifact %s was not uploaded: %s: %s", name, type(exc).__name__, exc)
+
     def finish(self) -> None:
         if self._run is not None:
             self._run.finish()
             self._run = None
+
+
+def tracker_for(
+    tracking: Any,
+    *,
+    config: Mapping[str, Any] | None = None,
+    resume_run_id: str | None = None,
+) -> Tracker:
+    """A `Tracker` from any config carrying a `TrackingConfig`.
+
+    The three training call sites spelled this out identically, and `evaluate` and
+    `profile-data` had no tracker at all -- so a report or a budgets file had nowhere
+    to be logged. Named rather than inlined because "which W&B run does this command
+    attach to" should have one answer.
+    """
+    return Tracker(
+        project=tracking.wandb_project,
+        entity=tracking.wandb_entity,
+        run_name=tracking.run_name,
+        config=config,
+        resume_run_id=resume_run_id,
+    )

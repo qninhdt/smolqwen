@@ -85,7 +85,7 @@ weight-transfer protocol of its own.
 | 6 | [Phase 6: SFT in-training benchmark eval](./phase-06-sft-in-training-benchmark-eval.md) | Pending |
 | 7 | [Phase 7: Rich logging across every CLI](./phase-07-rich-logging-across-cli.md) | Done |
 | 8 | [Phase 8: Delete dead code and one-shot scripts](./phase-08-delete-dead-code-and-scripts.md) | Done |
-| 9 | [Phase 9: Artifact persistence to HF and W&B](./phase-09-artifact-persistence-hf-wandb.md) | Pending |
+| 9 | [Phase 9: Artifact persistence to HF and W&B](./phase-09-artifact-persistence-hf-wandb.md) | Done |
 | 10 | [Phase 10: L4 validation](./phase-10-gpu-validation-on-l4.md) | Pending |
 
 Dependencies: 2 needs 1. 3 needs 2. 4 needs 3. 5 needs 4. 6 needs 5 **and**

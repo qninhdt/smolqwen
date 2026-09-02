@@ -185,6 +185,7 @@ def test_difficulty_counts_json_stays_on_stdout(
     The trainer needs a GPU; the profiling loop, the classifier, and the writer do
     not, so only assembly is substituted.
     """
+    from smolqwen.tracking import Tracker
     from smolqwen.training import grpo as grpo_module
 
     task_ids = ("task-a", "task-b")
@@ -203,7 +204,10 @@ def test_difficulty_counts_json_stays_on_stdout(
         grpo_module,
         "build_grpo_trainer",
         lambda *_a, **_k: SimpleNamespace(
-            trainer=trainer, train_task_ids=task_ids, shutdown=lambda: None
+            trainer=trainer,
+            train_task_ids=task_ids,
+            tracker=Tracker(project="t", enabled=False),
+            shutdown=lambda: None,
         ),
     )
     profile_path = tmp_path / "difficulty.json"

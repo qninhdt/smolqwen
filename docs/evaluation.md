@@ -63,30 +63,62 @@ the generic runner only coordinates policies and reports. Add a module under
 select it through `adapters` or `--adapter`. Adapter-specific settings belong in
 the corresponding `adapter_options` entry.
 
-Each run writes `<tag>.json` and `<tag>.md` under `artifacts/evaluation/`. The
-manifest hashes decoding, system prompts, tool schemas, benchmark revision, and
-step limits. It also records execution-only details such as backend, dtype,
-quantization, speculative decoding, KV budget, batching, caching, and library
-versions. Use `write_comparison_report` (or `compare_reports`) from
-`smolqwen.eval.report` to join two or more report tags; invariant drift is
-rejected before a comparison artifact is written.
+Each run writes `<tag>.json` and `<tag>.md` under `artifacts/evaluation/`, plus one
+`<tag>-<adapter>.jsonl` trajectory file per adapter. The manifest hashes decoding,
+system prompts, tool schemas, benchmark revision, and step limits. It also records
+execution-only details such as backend, dtype, quantization, speculative decoding,
+KV budget, batching, caching, and library versions. Use `write_comparison_report`
+(or `compare_reports`) from `smolqwen.eval.report` to join two or more report tags;
+invariant drift is rejected before a comparison artifact is written.
 
-For an HTTP serving re-evaluation, record the serving fields on the command so
-the resulting row remains self-describing:
+For an HTTP serving re-evaluation, name the engine that served the request:
 
 ```sh
 smolqwen evaluate \
   --endpoint http://127.0.0.1:8000/v1 \
   --serving-backend vllm \
   --revision <served-checkpoint-sha> \
-  --tag fp8 \
-  --served-dtype float8_e4m3fn \
-  --quantization fp8 \
-  --max-num-seqs 64 \
-  --max-num-batched-tokens 8192 \
-  --chunked-prefill \
-  --prefix-caching
+  --tag fp8
 ```
+
+The serving-detail flags this command used to carry are gone. The in-process engine
+knows its own dtype, KV budget, batching and caching and records what it used, so
+asserting those on the command line only created a way to record something other
+than what ran. `--serving-backend` stays because the served process is a separate
+one this command cannot inspect. To refuse a paired speed/quality row measured
+under a different serving config, pass `--require-serving-match <report.json>`.
+
+## What survives the VM
+
+Colab reclaims VMs without warning, so `artifacts/` is a cache and anything only
+there does not exist. What is uploaded, and to where:
+
+| Artifact | Destination | Trigger |
+|---|---|---|
+| Eval report JSON + Markdown + trajectories | W&B artifact `eval-<tag>` | every `evaluate`, when `WANDB_API_KEY` is set |
+| `budgets.json`, dataset profile, env split | W&B artifact `data-budgets` | every `profile-data` |
+| Difficulty profile | W&B artifact `difficulty-profile` | every `profile-difficulty` |
+| LoRA adapter | HF `tracking.hub_repo_id` | every `save_steps` |
+| Merged full weights | HF `tracking.merged_hub_repo_id` | `merge-adapter --push` |
+
+Reports and profiles go to W&B; weights go to the Hub. Duplicating multi-gigabyte
+checkpoints into W&B would be the actual quota problem, and `CheckpointStore`
+already owns that path.
+
+`merged_hub_repo_id` is a **separate** repo from `hub_repo_id`, not a default of
+it. Both stores upload to their repo root, so one repo would interleave
+adapter-only and merged-full revisions in a single history — after which a pinned
+revision no longer tells a reader which kind it is. The merged push is opt-in
+because a 2B bf16 checkpoint is several GB and a slow uplink can outlast the VM.
+
+Endpoints are redacted before anything is written. `recorded_free.endpoint` keeps
+its scheme, port and path but loses its hostname unless the host is loopback or
+private — the Colab serving path is a public `trycloudflare.com` name, and a report
+recording it verbatim publishes a routable ingress to a GPU box the moment it is
+uploaded. Userinfo is stripped unconditionally.
+
+Every path above no-ops without credentials. No `WANDB_API_KEY` means no artifact
+and no crash; no `hub_repo_id` means a local-only run.
 
 Do not publish `base_vs_sft` until both pinned checkpoint reports exist and
 `write_comparison_report` accepts their invariant manifests. Run on an L4/A100

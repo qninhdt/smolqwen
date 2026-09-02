@@ -15,7 +15,7 @@ from transformers import TrainerCallback
 
 from smolqwen.artifacts import CheckpointStore, ResumeState
 from smolqwen.config_models import EvalConfig, GrpoConfig
-from smolqwen.console import console, logger
+from smolqwen.console import console, logger, progress_task
 from smolqwen.env.pool import WorkerPool
 from smolqwen.env.registry import EnvSpec, load_env_specs
 from smolqwen.env.scenarios import Scenario, build_scenario_set
@@ -732,12 +732,19 @@ def run_profile_difficulty(config: GrpoConfig) -> int:
             for _ in range(config.curriculum.profile_rollouts):
                 prompts.append(rows_by_id[task_id]["prompt"])
                 owners.append(task_id)
-        for offset in range(0, len(prompts), batch_width):
-            batch_prompts = prompts[offset : offset + batch_width]
-            batch_owners = owners[offset : offset + batch_width]
-            output = trainer.rollout_func(batch_prompts, trainer)
-            for task_id, value in zip(batch_owners, output["rollout_reward"], strict=True):
-                rewards[task_id].append(float(value))
+        # This loop is the longest unreported wait in the pipeline -- a few hundred
+        # scenarios times `profile_rollouts` generations, with one JSON line at the
+        # end and nothing before it.
+        with progress_task(
+            "profile-difficulty", total=len(prompts), unit="rollouts", every=batch_width
+        ) as advance:
+            for offset in range(0, len(prompts), batch_width):
+                batch_prompts = prompts[offset : offset + batch_width]
+                batch_owners = owners[offset : offset + batch_width]
+                output = trainer.rollout_func(batch_prompts, trainer)
+                for task_id, value in zip(batch_owners, output["rollout_reward"], strict=True):
+                    rewards[task_id].append(float(value))
+                    advance()
         profile = profile_rewards(
             rewards,
             model_id=config.model_id,
@@ -745,9 +752,14 @@ def run_profile_difficulty(config: GrpoConfig) -> int:
             seed=config.training.seed,
         )
         path = write_profile(profile, config.curriculum.difficulty_profile_path)
+        counts = profile.to_dict()["counts"]
+        # The profile gates every later GRPO run (`read_profile` refuses a missing
+        # one) and costs a full profiling pass to rebuild.
+        assembled.tracker.log_artifact(path, name="difficulty-profile", artifact_type="curriculum")
+        assembled.tracker.log({f"difficulty/{band}": float(n) for band, n in counts.items()})
         # Machine-readable: `notebooks/03-grpo.ipynb` reads these counts from stdout,
         # and notebook changes are a non-goal -- this line cannot move to stderr.
-        print(json.dumps(profile.to_dict()["counts"], sort_keys=True))
+        print(json.dumps(counts, sort_keys=True))
         LOG.info("wrote %s", path)
         return 0
     finally:

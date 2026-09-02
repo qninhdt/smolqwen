@@ -1,7 +1,7 @@
 ---
 phase: 9
 title: "Artifact persistence to HF and W&B"
-status: pending
+status: done
 priority: P3
 effort: "1d"
 dependencies: [7]
@@ -113,17 +113,62 @@ cache (`artifacts.py:127-133`) and copy gigabytes before uploading.
 
 ## Success Criteria
 
-- [ ] Eval reports, `budgets.json`, difficulty profiles, comparison tables land as
+- [x] Eval reports, `budgets.json`, difficulty profiles, comparison tables land as
       W&B artifacts when a key is present
-- [ ] `merge-adapter` pushes the merged model when configured and the flag is set,
+- [x] `merge-adapter` pushes the merged model when configured and the flag is set,
       through its own store
-- [ ] No artifact contains a routable ingress URL or any userinfo, asserted
-- [ ] `evaluate` and `profile-data` create their own tracker rather than assuming
+- [x] No artifact contains a routable ingress URL or any userinfo, asserted
+- [x] `evaluate` and `profile-data` create their own tracker rather than assuming
       one
-- [ ] `CheckpointStore.push`'s no-op-when-unconfigured contract unchanged;
+- [x] `CheckpointStore.push`'s no-op-when-unconfigured contract unchanged;
       `test_checkpoint_pinning.py:110-116` passes untouched
-- [ ] Every path works with no `WANDB_API_KEY` and no `HF_TOKEN`
-- [ ] CPU suite green
+- [x] Every path works with no `WANDB_API_KEY` and no `HF_TOKEN`
+- [x] CPU suite green
+
+## Outcome
+
+Done. `Tracker.log_artifact` uploads a file plus named siblings and never raises —
+an upload failure must not fail the run that produced the file, which is still on
+disk either way. `tracker_for` replaces the identical `Tracker(...)` block the two
+training stages spelled out and gives `evaluate` and `profile-data` the run they
+had none of.
+
+**Redaction moved into `EvalManifest.__post_init__`, not the runner.** The plan put
+it in `runner.py` before the manifest is built, which is one call site — and every
+other path that constructs a manifest (a rehydrated report, a test, a future
+caller) would have been unredacted. Doing it in the constructor makes it
+unforgettable and idempotent, so `from_dict` on a stored report cannot reintroduce
+a hostname.
+
+The redaction rule is narrower than "strip the host": loopback, private and
+link-local addresses survive intact, because they are not reachable off-host and
+"this was measured against the local proxy on 8080" is provenance a reader needs.
+Public hosts keep scheme, port and path and lose their name, which is what lets two
+rows still be compared as "both went through a tunnel". Userinfo goes
+unconditionally, including on the loopback branch — `hostname` is rebuilt rather
+than passed through, so a `user:pw@` prefix cannot survive there. A value with no
+scheme (`host:8000`) becomes `redacted` outright: nothing about it can be asserted
+non-routable.
+
+`tracking.merged_hub_repo_id` is a new field rather than a default of
+`hub_repo_id`. Both stores upload to their repo root, so one repo would interleave
+adapter-only and merged-full revisions in a single history — after which a pinned
+revision no longer says which kind it is and `resolve_eval_checkpoint` would load
+whichever was pushed last. `--push` stays opt-in for the reason the plan gave, and
+logs the directory size before starting so a slow uplink is a visible choice.
+
+Comparison tables are not logged. `write_comparison_report` has no CLI entry point
+— nothing in `src/` calls it, only `docs/evaluation.md` and tests — so there was no
+command at which to attach the upload. Adding one was not in scope. The per-run
+reports it reads are uploaded, which is what makes the comparison reproducible.
+
+`profile-difficulty` also gained the progress bar it was missing: a few hundred
+scenarios times `profile_rollouts` generations, previously with one JSON line at
+the end and nothing before it.
+
+Two follow-ons from the tracker's widened protocol: `Run` now declares
+`log_artifact`, so the fake in `test_resume_sampler_cursor.py` needed the method.
+No production behavior changed.
 
 ## Risk Assessment
 

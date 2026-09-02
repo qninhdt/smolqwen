@@ -59,6 +59,9 @@ def test_checkpoint_persists_cursor_and_wandb_run_id(tmp_path: Path) -> None:
         def log(self, data: Any, *, step: int | None = None) -> None:
             return None
 
+        def log_artifact(self, artifact_or_path: Any, **_: Any) -> Any:
+            return artifact_or_path
+
         def finish(self) -> None:
             return None
 

@@ -20,6 +20,7 @@ from smolqwen.eval.policies import Policy, load_policy
 from smolqwen.eval.report import write_report
 from smolqwen.eval.serving_pairing import load_quality_result
 from smolqwen.eval.trajectories import TrajectoryRecord, write_trajectories
+from smolqwen.tracking import Tracker, tracker_for
 
 LOG = logger(__name__)
 
@@ -249,64 +250,102 @@ def run_evaluation(config: EvalConfig, args: Any) -> int:
             "max steps per task": config.max_steps_per_task,
         },
     )
-    for adapter_name in adapter_names:
-        records: list[TrajectoryRecord] = []
-        adapter_metrics, invariants = _evaluate_named_adapter(
-            config, policy, adapter_name, records=records
-        )
-        duplicates = sorted(set(metrics) & set(adapter_metrics))
-        if duplicates:
-            raise ValueError(
-                f"evaluation adapters produced duplicate metric categories: {duplicates}"
+    # `evaluate` had no tracker at all, so the report it spends hours producing
+    # existed only on a VM that gets reclaimed. Disabled without `WANDB_API_KEY`,
+    # which is the same degradation every other stage already relies on.
+    tracker = tracker_for(config.tracking, config=config.model_dump(mode="json"))
+    tracker.start()
+    try:
+        for adapter_name in adapter_names:
+            records: list[TrajectoryRecord] = []
+            adapter_metrics, invariants = _evaluate_named_adapter(
+                config, policy, adapter_name, records=records
             )
-        metrics.update(adapter_metrics)
-        adapter_invariants[adapter_name] = invariants
-        trajectory_paths[adapter_name] = str(
-            write_trajectories(config.output_dir, tag=tag, adapter=adapter_name, records=records)
+            duplicates = sorted(set(metrics) & set(adapter_metrics))
+            if duplicates:
+                raise ValueError(
+                    f"evaluation adapters produced duplicate metric categories: {duplicates}"
+                )
+            metrics.update(adapter_metrics)
+            adapter_invariants[adapter_name] = invariants
+            trajectory_paths[adapter_name] = str(
+                write_trajectories(
+                    config.output_dir, tag=tag, adapter=adapter_name, records=records
+                )
+            )
+            LOG.info(
+                "%s: %d categories scored, %d trajectories written",
+                adapter_name,
+                len(adapter_metrics),
+                len(records),
+            )
+        transport_backend = "http" if args.endpoint else "transformers"
+        backend = getattr(args, "serving_backend", None) or transport_backend
+        manifest = build_manifest(
+            config,
+            revision=policy.revision,
+            backend=backend,
+            adapter_invariants=adapter_invariants,
+            recorded_free={
+                **resolved.to_recorded(),
+                "endpoint": args.endpoint,
+                "served_model": config.http_model if args.endpoint else None,
+                "dtype": getattr(args, "served_dtype", None)
+                or ("bfloat16" if transport_backend == "transformers" else None),
+                "quantization": getattr(args, "quantization", None),
+                "speculative_decoding": getattr(args, "speculative_decoding", None),
+                "kv_budget": getattr(args, "kv_budget", None),
+                "max_num_seqs": getattr(args, "max_num_seqs", None),
+                "max_num_batched_tokens": getattr(args, "max_num_batched_tokens", None),
+                "chunked_prefill": getattr(args, "chunked_prefill", None),
+                "prefix_caching": getattr(args, "prefix_caching", None),
+                "library_versions": _library_versions(),
+                # What generation actually used, so a row is self-describing without
+                # the caller having asserted it on the command line.
+                "generation_concurrency": config.profile.generation_concurrency,
+                "enforce_eager": config.profile.enforce_eager,
+                "max_context_tokens_used": config.profile.max_seq_length,
+                "trajectory_records": trajectory_paths,
+            },
         )
-        LOG.info(
-            "%s: %d categories scored, %d trajectories written",
-            adapter_name,
-            len(adapter_metrics),
-            len(records),
+        json_path, markdown_path = write_report(
+            config.output_dir, tag=tag, manifest=manifest, metrics=metrics
         )
-    transport_backend = "http" if args.endpoint else "transformers"
-    backend = getattr(args, "serving_backend", None) or transport_backend
-    manifest = build_manifest(
-        config,
-        revision=policy.revision,
-        backend=backend,
-        adapter_invariants=adapter_invariants,
-        recorded_free={
-            **resolved.to_recorded(),
-            "endpoint": args.endpoint,
-            "served_model": config.http_model if args.endpoint else None,
-            "dtype": getattr(args, "served_dtype", None)
-            or ("bfloat16" if transport_backend == "transformers" else None),
-            "quantization": getattr(args, "quantization", None),
-            "speculative_decoding": getattr(args, "speculative_decoding", None),
-            "kv_budget": getattr(args, "kv_budget", None),
-            "max_num_seqs": getattr(args, "max_num_seqs", None),
-            "max_num_batched_tokens": getattr(args, "max_num_batched_tokens", None),
-            "chunked_prefill": getattr(args, "chunked_prefill", None),
-            "prefix_caching": getattr(args, "prefix_caching", None),
-            "library_versions": _library_versions(),
-            # What generation actually used, so a row is self-describing without
-            # the caller having asserted it on the command line.
-            "generation_concurrency": config.profile.generation_concurrency,
-            "enforce_eager": config.profile.enforce_eager,
-            "max_context_tokens_used": config.profile.max_seq_length,
-            "trajectory_records": trajectory_paths,
-        },
-    )
-    json_path, markdown_path = write_report(
-        config.output_dir, tag=tag, manifest=manifest, metrics=metrics
-    )
-    reference = getattr(args, "require_serving_match", None)
-    if reference is not None:
-        _assert_serving_match(reference, manifest)
+        reference = getattr(args, "require_serving_match", None)
+        if reference is not None:
+            _assert_serving_match(reference, manifest)
+        _log_report(tracker, tag=tag, paths=(json_path, markdown_path), metrics=metrics)
+        # The trajectory files ride along because the report's `trajectory_records`
+        # field names them: uploading the report alone leaves those pointers dangling
+        # at paths on a reclaimed VM.
+        tracker.log_artifact(
+            json_path,
+            name=f"eval-{tag}",
+            artifact_type="evaluation",
+            extra_paths=[markdown_path, *trajectory_paths.values()],
+        )
+    finally:
+        tracker.finish()
     print(json.dumps({"json": str(json_path), "markdown": str(markdown_path)}, sort_keys=True))
     return 0
+
+
+def _log_report(
+    tracker: Tracker,
+    *,
+    tag: str,
+    paths: tuple[Path, Path],
+    metrics: Mapping[str, Mapping[str, float]],
+) -> None:
+    """Send the headline scalars to the run, so a report has a chart beside it."""
+    tracker.log(
+        {
+            f"eval/{tag}/{category}/{name}": float(value)
+            for category, values in metrics.items()
+            for name, value in values.items()
+        }
+    )
+    LOG.info("wrote %s and %s", *paths)
 
 
 def _assert_serving_match(reference: Any, manifest: EvalManifest) -> None:

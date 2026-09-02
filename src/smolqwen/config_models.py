@@ -88,6 +88,12 @@ class TrackingConfig(StrictModel):
     wandb_entity: str | None = None
     run_name: str | None = None
     hub_repo_id: str | None = None
+    # A *separate* repo for merged full weights, deliberately not defaulted to
+    # `hub_repo_id`. Both stores upload to their repo root, so sharing one would
+    # interleave adapter-only and merged-full revisions in a single history --
+    # after which a pinned revision no longer tells a reader which kind it is, and
+    # `resolve_eval_checkpoint` would load whichever happened to be pushed last.
+    merged_hub_repo_id: str | None = None
     local_artifact_dir: str = "artifacts"
 
 

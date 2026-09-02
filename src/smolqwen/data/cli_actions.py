@@ -33,6 +33,7 @@ from smolqwen.data.profiler import format_profile_table, profile_dataset, write_
 from smolqwen.data.render import render_training_sample, training_chat_template
 from smolqwen.data.splits import Split, build_env_split_manifest, split_trajectory_ids
 from smolqwen.tokenizer import load_tokenizer
+from smolqwen.tracking import tracker_for
 
 LOG = logger(__name__)
 
@@ -101,9 +102,21 @@ def run_profile_data(config: DataConfig) -> int:
         input_sha256=config.env_metadata.sha256,
         input_revision=config.env_metadata.revision,
     )
-    (output_dir / "env_split.json").write_text(
+    split_path = output_dir / "env_split.json"
+    split_path.write_text(
         json.dumps(manifest.to_dict(), indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
+
+    # `budgets.json` decides every later sequence-length and batch decision, and it
+    # costs a full tokenizing pass over 701 MB to reproduce. It only ever existed on
+    # the VM that produced it.
+    with tracker_for(config.tracking, config=config.model_dump(mode="json")) as tracker:
+        tracker.log_artifact(
+            budgets_path,
+            name="data-budgets",
+            artifact_type="dataset-profile",
+            extra_paths=[profile_path, split_path],
+        )
 
     # The table is a human summary, so it goes to stderr with the rest of the
     # progress. Every downstream reader takes the JSON files, not this text.
@@ -113,7 +126,7 @@ def run_profile_data(config: DataConfig) -> int:
         {
             "profile": profile_path,
             "budgets": budgets_path,
-            "env split": output_dir / "env_split.json",
+            "env split": split_path,
         },
     )
     return 0
