@@ -374,7 +374,7 @@ def build_bench_eval_callback(
         weight_version=lambda: _weight_version(trainer, syncs),
         artifact_dir=config.output_dir,
     )
-    return BenchEvalCallback(runner, before_each=lambda: _sync_weights(trainer))
+    return BenchEvalCallback(runner, before_each=lambda _step: _sync_weights(trainer))
 
 
 def _dataset_row(

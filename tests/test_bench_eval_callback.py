@@ -264,14 +264,15 @@ def test_the_callback_anchors_the_curve_at_step_zero(monkeypatch: pytest.MonkeyP
     from "started there"."""
     runner = make_runner(monkeypatch)
     synced: list[int] = []
-    callback = BenchEvalCallback(runner, before_each=lambda: synced.append(1))
+    callback = BenchEvalCallback(runner, before_each=synced.append)
     state = SimpleNamespace(global_step=0)
 
     callback.on_train_begin(None, state, SimpleNamespace())
 
     assert [outcome.step for outcome in runner.outcomes] == [0]
-    # The explicit sync happens before every eval, including the baseline.
-    assert synced == [1]
+    # The seam receives the boundary's step and runs before every eval, baseline
+    # included: GRPO syncs weights there, SFT names the checkpoint to score.
+    assert synced == [0]
 
 
 def test_the_callback_skips_every_boundary_when_disabled(
@@ -292,11 +293,37 @@ def test_a_save_boundary_evaluates_and_syncs_first(monkeypatch: pytest.MonkeyPat
         monkeypatch, bench=BenchEvalConfig(enabled=True, task_limit=2, baseline_at_step_zero=False)
     )
     order: list[str] = []
-    callback = BenchEvalCallback(runner, before_each=lambda: order.append("sync"))
+    callback = BenchEvalCallback(
+        runner,
+        before_each=lambda step: order.append(f"prepare:{step}"),
+        after_each=lambda step: order.append(f"release:{step}"),
+    )
 
     callback.on_train_begin(None, SimpleNamespace(global_step=0), SimpleNamespace())
     assert runner.outcomes == [], "baseline was disabled but still ran"
 
     callback.on_save(None, SimpleNamespace(global_step=20), SimpleNamespace())
     assert [outcome.step for outcome in runner.outcomes] == [20]
-    assert order == ["sync"]
+    assert order == ["prepare:20", "release:20"]
+
+
+def test_the_release_seam_runs_even_when_the_eval_boundary_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """SFT's `sleep()` lives here, so it must not be skipped by a failure.
+
+    The runner catches its own exceptions, but the seams around it are ordinary code:
+    an engine left awake after a failed boundary holds VRAM the next training step
+    needs, turning one recoverable failure into an OOM one step later.
+    """
+    runner = make_runner(monkeypatch)
+    released: list[int] = []
+
+    def raise_on_prepare(step: int) -> None:
+        raise RuntimeError("wake_up failed")
+
+    callback = BenchEvalCallback(runner, before_each=raise_on_prepare, after_each=released.append)
+
+    with pytest.raises(RuntimeError, match="wake_up failed"):
+        callback.on_save(None, SimpleNamespace(global_step=20), SimpleNamespace())
+    assert released == [20]

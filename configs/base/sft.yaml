@@ -53,3 +53,19 @@ optimization:
     - linear_attn
     - mixer
     - conv1d
+
+# In-training held-out dev eval, scored from the checkpoint TRL just wrote. Off by
+# default: it needs a card, and it builds a vLLM engine before the trainer so the
+# trainer sizes itself against what remains.
+#
+# `every_steps: 0` is save-boundaries-only, and here that is not merely the cheapest
+# cadence -- it is the only correct one. The scored weights are `checkpoint-N` on
+# disk, which exists only at a save boundary; an interval eval would have nothing to
+# score. `save_steps` is 100 above, so this is every 100 optimizer steps.
+bench_eval:
+  enabled: false
+  adapter: envscaler_heldout
+  every_steps: 0
+  baseline_at_step_zero: true
+  task_limit: 16
+  timeout_s: 900.0

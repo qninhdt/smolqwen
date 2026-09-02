@@ -280,13 +280,18 @@ class BenchEvalCallback:
         self,
         runner: BenchEvalRunner,
         *,
-        before_each: Callable[[], None] | None = None,
+        before_each: Callable[[int], None] | None = None,
+        after_each: Callable[[int], None] | None = None,
     ) -> None:
         self.runner = runner
-        # GRPO's explicit `sync_weights()` goes here. It is a seam rather than a
-        # branch because a checkpoint-based caller has nothing to sync -- the weights
-        # it scores are already on disk.
+        # GRPO's explicit `sync_weights()` goes here; SFT's is "which checkpoint
+        # directory does this boundary score". A seam rather than a branch, because
+        # the two stages differ only in where the weights come from.
         self._before_each = before_each
+        # SFT's `sleep()`. It runs in a `finally`, because an engine left awake after
+        # a failed eval holds VRAM the next training step needs -- which would turn
+        # one recoverable failure into an OOM one step later.
+        self._after_each = after_each
 
     @property
     def config(self) -> BenchEvalConfig:
@@ -312,6 +317,10 @@ class BenchEvalCallback:
         return control
 
     def _evaluate(self, step: int) -> None:
-        if self._before_each is not None:
-            self._before_each()
-        self.runner.run(step)
+        try:
+            if self._before_each is not None:
+                self._before_each(step)
+            self.runner.run(step)
+        finally:
+            if self._after_each is not None:
+                self._after_each(step)

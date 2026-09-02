@@ -22,11 +22,13 @@ from __future__ import annotations
 
 import math
 import os
+import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
 from smolqwen.inference.profiles import EvalProfile
+from smolqwen.rollout.generation import GenerationRequest, TurnTokens
 
 # Set before `import vllm`, because usage-stats collection is decided at import.
 TELEMETRY_ENV = {
@@ -345,3 +347,47 @@ def _token_completion(output: Any, index: int) -> TokenCompletion:
         logprobs=tuple(logprobs),
         finish_reason=None if first.finish_reason is None else str(first.finish_reason),
     )
+
+
+class OfflineEngineBackend:
+    """`GenerationBackend` over an `OfflineEngine`, for the shared turn engine.
+
+    The engine speaks prompts-and-completions; the turn engine speaks
+    `GenerationRequest`/`TurnTokens`. This is the whole adaptation, and it is a
+    class rather than a lambda because it also carries the adapter name: an
+    in-training eval scores the checkpoint TRL just wrote, which reaches vLLM as a
+    `LoRARequest` registered under a name.
+
+    `max_new_tokens` comes from each request, not from the profile: the turn engine
+    computes a per-episode budget from how much context that episode has left, and
+    a batch of requests at different depths must not all be generated at the widest
+    one's budget.
+    """
+
+    def __init__(self, engine: OfflineEngine, *, adapter: str | None = None) -> None:
+        self.engine = engine
+        self.adapter = adapter
+
+    def generate(self, requests: Sequence[GenerationRequest]) -> list[TurnTokens]:
+        if not requests:
+            return []
+        started = time.monotonic()
+        # One batched call at the widest budget, then each row truncated back to its
+        # own -- the same trade `VllmColocateBackend` makes, for the same reason: the
+        # engine takes one budget per call.
+        completions = self.engine.generate_ids(
+            [request.prompt_ids for request in requests],
+            max_new_tokens=max(request.max_new_tokens for request in requests),
+            adapter=self.adapter,
+        )
+        elapsed = time.monotonic() - started
+        return [
+            TurnTokens(
+                episode_id=request.episode_id,
+                token_ids=completion.token_ids[: request.max_new_tokens],
+                logprobs=completion.logprobs[: request.max_new_tokens],
+                duration_s=elapsed,
+                prompt_tokens=len(request.prompt_ids),
+            )
+            for request, completion in zip(requests, completions, strict=True)
+        ]

@@ -82,7 +82,7 @@ weight-transfer protocol of its own.
 | 3 | [Phase 3: Unify the turn engine](./phase-03-unify-turn-engine.md) | Done |
 | 4 | [Phase 4: Batched evaluation runner](./phase-04-batched-eval-runner.md) | In progress — agreement needs a checkpoint |
 | 5 | [Phase 5: GRPO in-training benchmark eval](./phase-05-grpo-in-training-benchmark-eval.md) | Done — cost bound needs a card |
-| 6 | [Phase 6: SFT in-training benchmark eval](./phase-06-sft-in-training-benchmark-eval.md) | Pending |
+| 6 | [Phase 6: SFT in-training benchmark eval](./phase-06-sft-in-training-benchmark-eval.md) | In progress — 4 GPU criteria open |
 | 7 | [Phase 7: Rich logging across every CLI](./phase-07-rich-logging-across-cli.md) | Done |
 | 8 | [Phase 8: Delete dead code and one-shot scripts](./phase-08-delete-dead-code-and-scripts.md) | Done |
 | 9 | [Phase 9: Artifact persistence to HF and W&B](./phase-09-artifact-persistence-hf-wandb.md) | Done |
@@ -92,6 +92,13 @@ Dependencies: 2 needs 1. 3 needs 2. 4 needs 3. 5 needs 4. 6 needs 5 **and**
 plan `260831-0808` phase 4 marked complete. 8 needs 1. 7 needs 8 — both edit
 `cli.py`, and deleting first means Phase 7 rewrites four error handlers instead
 of six. 9 needs 7 for its logger. 10 needs 4, 5, 6, 7.
+
+Phase 6's gate on plan `260831-0808` resolved on evidence rather than on its status
+field: that plan's phase 4 still reads `in_progress`, but everything it lists as
+remaining is a GPU measurement, and the `sft.py` code the gate protected is landed
+(commit `06c4a28` — token-budget sampler, padding-free collator, supervised-token
+normalization). The file-overlap risk is therefore gone. The remaining overlap is
+that both plans want the same L4, which serializing the plans does not fix.
 
 No phase blocks on vLLM's LoRA support. `TransformersPolicy` stays as the
 adapter-on-base path, so whether vLLM accepts this project's `all-linear` adapter

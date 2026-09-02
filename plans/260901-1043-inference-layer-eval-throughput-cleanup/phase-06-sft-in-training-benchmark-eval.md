@@ -1,7 +1,7 @@
 ---
 phase: 6
 title: "SFT in-training benchmark eval"
-status: pending
+status: in_progress
 priority: P2
 effort: "1.5d"
 dependencies: [5]
@@ -140,22 +140,77 @@ holding the HF token and the W&B session.
 
 ## Success Criteria
 
-- [ ] `sft/bench_*` in W&B with a step-0 baseline
-- [ ] Dev set is EnvScaler held-out only; no BFCL entry resolves here
+- [x] `sft/bench_*` in W&B with a step-0 baseline
+- [x] Dev set is EnvScaler held-out only; no BFCL entry resolves here
 - [ ] Measured envelope with eval enabled equals plan `260831-0808`'s recorded
       figure, from a live `memory_allocated()` reading after
       `reset_peak_memory_stats()`
 - [ ] Engine asleep during training steps, shown by a non-monotonic reading
-- [ ] The scored adapter is TRL's `checkpoint-N`; no new weight-transfer code and
+- [x] The scored adapter is TRL's `checkpoint-N`; no new weight-transfer code and
       no scratch directory exist
-- [ ] Eval fires only at boundaries where `checkpoint-N` exists, and never skips
+- [x] Eval fires only at boundaries where `checkpoint-N` exists, and never skips
       silently
-- [ ] Dev scores recorded beside each checkpoint, so selection is reproducible
+- [x] Dev scores recorded beside each checkpoint, so selection is reproducible
 - [ ] Measured eval cost at or under 10% of training wall time
-- [ ] Injected failure: training continues, environments released
-- [ ] `VLLM_NO_USAGE_STATS` asserted in the trainer path
-- [ ] The three plan-B tests pass at its post-phase-4 revision
-- [ ] CPU suite green; `gpu` tests pending
+- [x] Injected failure: training continues, environments released
+- [x] `VLLM_NO_USAGE_STATS` asserted in the trainer path
+- [x] The three plan-B tests pass at its post-phase-4 revision
+- [x] CPU suite green; `gpu` tests pending
+
+## Outcome
+
+Code complete. **Four criteria are GPU measurements and stay open**: the envelope,
+the non-monotonic asleep reading, the 10% cost, and by extension the sleep/wake
+release those depend on. `tests/test_sft_bench_eval_memory_guard.py` holds the
+assertions; Phase 10 supplies the L4. The local card is a 3.7 GB RTX 3050, an order
+of magnitude below the floor.
+
+**The `blockedBy` gate resolved on evidence, not on a status field.** Plan
+`260831-0808` still reads `in_progress`, and its phase 4 is what this depended on --
+but its own status section names what remains, and every item is a *GPU measurement*
+(the 9,022-row artifact regeneration, fused-kernel equivalence, the 32K probes). The
+code that gate existed to protect is landed: `sft.py` carries the token-budget
+sampler, the padding-free collator, and supervised-token normalization
+(`num_items_in_batch` at `sft.py:374`), committed as `06c4a28`. So the file-overlap
+risk the gate guarded against is gone; the remaining overlap is that both plans want
+the same card, which serialization does not fix.
+
+`training/checkpoint_eval.py` owns the engine lifecycle; `sft.py` gained the
+registration and a `finally` that shuts the engine down. `bench_eval.py` needed one
+change: `before_each` now takes the step, and an `after_each` was added. GRPO's seam
+is `sync_weights()`; SFT's is "which checkpoint does this boundary score" and
+"sleep". Both run around the same runner.
+
+**Two things the plan specified that were wrong, corrected from source:**
+
+**The step-0 anchor and the present-checkpoint assertion contradict each other.**
+The plan asked for both -- "add the step-0 baseline so the SFT chart has the same
+anchor as GRPO's" and "assert the directory is present rather than returning early on
+absence". At step 0 TRL has saved nothing, so there is no `checkpoint-0` and the
+assertion would fail the anchor at every run. GRPO's anchor works because its
+colocated engine holds live weights with an untrained adapter. The SFT equivalent is
+the base model with no adapter -- which is also the `base` arm of the final table, so
+the anchor is a number that already means something rather than an artifact of when
+the callback fired. Step 0 takes that path; every other boundary raises on a missing
+directory, as specified.
+
+**A reused adapter name would have served stale weights.** The plan said "load
+adapter from checkpoint-N" without saying under what name.
+`OfflineEngine.load_adapter` derives vLLM's integer LoRA id from
+`len(self._adapters) + 1`, and vLLM caches weights by that id -- so registering every
+boundary as one name would hand vLLM the same id with a new path from step 200
+onward, serving step 100's weights forever. The curve would be flat and every number
+in it plausible. A fresh `checkpoint-<step>` name per boundary is what makes the id
+fresh, and `test_sft_bench_eval_boundary.py` asserts the ids are distinct.
+
+Two smaller things worth recording. `eval_config_for` replaces the resolved eval
+config's `profile` subtree with the SFT run's: `resolve("eval")` takes no `--profile`,
+so an engine sized at `ProfileConfig` defaults would have run beside a trainer sized
+by `--profile l4`. And `OfflineEngineBackend` (in `inference/engine.py`) is the
+adaptation from the engine's prompts-and-completions surface to the turn engine's
+`GenerationRequest`/`TurnTokens` -- it generates at the widest request's budget and
+truncates each row back to its own, the same trade `VllmColocateBackend` makes for
+the same reason.
 
 ## Risk Assessment
 

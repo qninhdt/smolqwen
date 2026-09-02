@@ -243,6 +243,10 @@ class Assembled:
     train_stats: ShardStats
     eval_stats: ShardStats | None
     resume_from: str | None
+    # The sleeping vLLM engine backing in-training dev eval, when it is enabled.
+    # Carried here so `run_train_sft` can shut it down after training, and so a
+    # smoke test can assert it was built before the trainer.
+    bench_engine: Any | None = None
 
     @property
     def train_size(self) -> int:
@@ -532,6 +536,7 @@ def build_trainer(
     tracker: Tracker | None = None,
     store: CheckpointStore | None = None,
     dataset_dir: Path | str | None = None,
+    bench_engine: Any | None = None,
 ) -> Assembled:
     """Assemble the trainer without starting it, so a smoke test can inspect it."""
     shards = load_shards(
@@ -548,6 +553,13 @@ def build_trainer(
         pad_token_id = tokenizer.eos_token_id
     if pad_token_id is None:
         raise SftError(f"{config.model_id} tokenizer has neither a pad nor an eos token id")
+
+    # Before the trainer exists, and before any model weights are resident:
+    # `gpu_memory_utilization` sizes vLLM's KV pool against *total* GPU memory, so an
+    # engine built after the trainer either OOMs or reserves against a figure it
+    # cannot honour. Built here and immediately slept, the trainer then sizes itself
+    # against what remains.
+    engine = _bench_engine(config, engine=bench_engine)
 
     attn = resolve_attn_implementation(config.optimization.attn_implementation)
     liger = resolve_liger(config.optimization.liger_fused_linear_cross_entropy)
@@ -592,6 +604,12 @@ def build_trainer(
     throughput.bind_trainer(trainer)
     trainer.add_callback(throughput)
     trainer.add_callback(CheckpointPushCallback(checkpoint_store, run))
+    if engine is not None:
+        from smolqwen.training.checkpoint_eval import build_bench_eval_callback
+
+        # Registered after `CheckpointPushCallback`, so at `on_save` the checkpoint
+        # exists and has already been backed up before anything scores it.
+        trainer.add_callback(build_bench_eval_callback(config, trainer, tokenizer, engine=engine))
     run.config.update(ledger(toggles))
 
     return Assembled(
@@ -600,7 +618,24 @@ def build_trainer(
         train_stats=shards.train_stats,
         eval_stats=shards.eval_stats,
         resume_from=resume_from,
+        bench_engine=engine,
     )
+
+
+def _bench_engine(config: SftConfig, *, engine: Any | None = None) -> Any | None:
+    """The sleeping eval engine, or None when in-training eval is off.
+
+    Failing to build it is fatal rather than a warning: `bench_eval.enabled` is an
+    explicit request for a dev curve, and a run that silently produced none while
+    reporting success is the outcome the flag exists to prevent.
+    """
+    if engine is not None:
+        return engine
+    if not config.bench_eval.enabled:
+        return None
+    from smolqwen.training.checkpoint_eval import CheckpointEngine
+
+    return CheckpointEngine.build(config)
 
 
 def run_train_sft(config: SftConfig, *, resume: bool = False) -> int:
@@ -618,14 +653,23 @@ def run_train_sft(config: SftConfig, *, resume: bool = False) -> int:
         assembled.eval_size,
     )
 
-    trainer.train(resume_from_checkpoint=assembled.resume_from)
-    trainer.save_model(config.output_dir)
-    if assembled.eval_size:
-        # Machine-readable: one JSON line of final eval metrics on stdout.
-        metrics = trainer.evaluate()
-        print(
-            json.dumps({key: float(value) for key, value in metrics.items() if _is_number(value)})
-        )
+    try:
+        trainer.train(resume_from_checkpoint=assembled.resume_from)
+        trainer.save_model(config.output_dir)
+        if assembled.eval_size:
+            # Machine-readable: one JSON line of final eval metrics on stdout.
+            # `eval_loss` here is teacher-forced likelihood on `val.jsonl`; the
+            # `sft/bench_*` series is generation under the real tool harness. They
+            # measure different things and are not expected to move together.
+            metrics = trainer.evaluate()
+            print(
+                json.dumps(
+                    {key: float(value) for key, value in metrics.items() if _is_number(value)}
+                )
+            )
+    finally:
+        if assembled.bench_engine is not None:
+            assembled.bench_engine.shutdown()
     return 0
 
 
