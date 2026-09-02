@@ -77,7 +77,7 @@ weight-transfer protocol of its own.
 
 | # | Phase | Status |
 |---|-------|--------|
-| 1 | [Phase 1: Inventory, baseline, and document reconciliation](./phase-01-start.md) | Pending |
+| 1 | [Phase 1: Inventory, baseline, and document reconciliation](./phase-01-start.md) | Done |
 | 2 | [Phase 2: vLLM runtime, profiles, and the shared client](./phase-02-vllm-runtime-and-inference-layer.md) | Pending |
 | 3 | [Phase 3: Unify the turn engine](./phase-03-unify-turn-engine.md) | Pending |
 | 4 | [Phase 4: Batched evaluation runner](./phase-04-batched-eval-runner.md) | Pending |

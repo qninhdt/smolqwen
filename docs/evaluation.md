@@ -5,6 +5,41 @@ and policy boundary for local Transformers, adapter-on-base, merged, and
 OpenAI-compatible HTTP runs. A run must provide an explicit `--revision`; the
 evaluation path never resolves a moving branch tip.
 
+## Dev and test
+
+The pipeline is `data → baseline → SFT + dev eval → RL + dev eval → test
+benchmark → serving`, and the two evaluation sets have different jobs:
+
+| Set | Adapter | Role |
+|---|---|---|
+| **dev** | `envscaler_heldout` | Selects checkpoints, drives the learning curve, may be scored as often as useful |
+| **test** | `bfcl_multi_turn` | Runs **once**, after all training and checkpoint selection, and influences no decision |
+
+The dev set is the held-out EnvScaler slice that GRPO excludes from training
+(`grpo.py:435-441`). That exclusion and the eval-side slice are sized by
+*independent* config keys — `curriculum.heldout_env_count` /
+`heldout_scenarios_per_env` in `configs/base/grpo.yaml` and
+`adapter_options.envscaler_heldout.env_count` / `scenarios_per_env` in
+`configs/base/eval.yaml`. Both hold 10/8 today, which makes the separation a
+coincidence rather than a property, so `tests/test_dev_test_integrity.py`
+computes both id sets from the shipped configs and asserts the dev set is a
+subset of what training excludes. Raise either key and that test fails rather
+than the run silently scoring environments it trained on.
+
+The split is by **task id**, not by environment: the 10 dev environments keep
+their other 42 scenarios in training. So a dev score measures generalization to
+unseen scenarios, not to unseen environments.
+
+Because BFCL is the test set, no in-training callback may score it. A BFCL number
+that moved during a run would have selected something, and the final
+`Base | SFT | SFT+RL` table would no longer be a held-out comparison.
+
+One caveat on reading BFCL at all: it scores by comparing final environment state
+against a recorded ground truth, all-or-nothing per task, so a task fails on any
+state divergence including one caused by an error in the recorded answer. An
+unchanged or regressed BFCL number is not automatically a model deficiency, and a
+report must say which it is rather than assuming.
+
 ```sh
 smolqwen evaluate \
   --checkpoint artifacts/models/qwen3.5-2b-sft-merged \

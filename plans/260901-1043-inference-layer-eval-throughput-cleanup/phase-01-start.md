@@ -1,7 +1,7 @@
 ---
 phase: 1
 title: "Inventory, baseline, and document reconciliation"
-status: pending
+status: done
 priority: P1
 effort: "1d"
 dependencies: []
@@ -168,24 +168,44 @@ instead, which is already tracked.
 
 ## Success Criteria
 
-- [ ] Audit reports `active_pool_multiplier` and `local_artifact_dir` live, and
+- [x] Audit reports `active_pool_multiplier` and `local_artifact_dir` live, and
       `max_trajectories` dead
-- [ ] `grpo.py:162 on_save` allowlisted alongside the other framework hooks
-- [ ] All seven symbol candidates re-checked, each with its consumer set recorded
-- [ ] `docker-compose.yml` and `test_auth_all_paths.py` present in the consumer
+- [x] `grpo.py:162 on_save` allowlisted alongside the other framework hooks
+- [x] All seven symbol candidates re-checked, each with its consumer set recorded
+- [x] `docker-compose.yml` and `test_auth_all_paths.py` present in the consumer
       enumeration for the compose `bench` service
-- [ ] **GRPO training ids and EnvScaler dev ids proven disjoint by test, from the
+- [x] **GRPO training ids and EnvScaler dev ids proven disjoint by test, from the
       shipped configs — not by two files holding matching numbers**
-- [ ] **No in-training eval configuration can resolve a BFCL adapter, asserted**
-- [ ] Dev-adapter selection placed on `GrpoConfig`/`SftConfig` or
+- [x] **No in-training eval configuration can resolve a BFCL adapter, asserted**
+- [x] Dev-adapter selection placed on `GrpoConfig`/`SftConfig` or
       `adapter_options`, never as a named `EvalConfig` field
       (`test_adapter_protocol.py:28-35`)
-- [ ] Tolerance and disagreement budget registered, expressed in tasks
-- [ ] Baseline committed under the plan's reports directory, or its command
+- [x] Tolerance and disagreement budget registered, expressed in tasks
+- [x] Baseline committed under the plan's reports directory, or its command
       recorded and Phase 4's criterion deferred to Phase 10
-- [ ] Master plan phases 2, 3, 5, 8 and goal 6 reconciled
-- [ ] Exactly one blocking edge between the two plans
-- [ ] `docs/evaluation.md` states the dev/test boundary and the benchmark caveat
+- [x] Master plan phases 2, 3, 5, 8 and goal 6 reconciled
+- [x] Exactly one blocking edge between the two plans
+- [x] `docs/evaluation.md` states the dev/test boundary and the benchmark caveat
+
+## Outcome
+
+Audit: 1,296 declarations — 1,235 live, 10 unreferenced, 51 framework-invoked.
+`active_pool_multiplier` reports live from all four sites, `local_artifact_dir`
+from its test, `max_trajectories` dead on every surface. Two candidates the
+previous inventory never listed also read dead: `config_models.py:21 Stage` and
+`data/render.py:19 MASKED`.
+
+Both `on_save` declarations are allowlisted, not just the one the earlier draft
+named.
+
+`tests/test_dev_test_integrity.py` — 5 tests, 4 on CPU, 1 `dataset`-marked
+against the real 2,550-scenario release. Mutation-checked: raising
+`eval.yaml`'s `env_count` to 12 fails two of them, naming the leaked task ids.
+
+Baseline deferred to Phase 10 step 2 with the command recorded — no checkpoint
+exists, and the local card is a 4 GB RTX 3050, below the single-L4 floor.
+
+Reports: `reports/deletion-inventory.md`, `reports/tolerance.md`.
 
 ## Risk Assessment
 
