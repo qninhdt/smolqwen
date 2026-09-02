@@ -12,6 +12,7 @@ to another task's score with every downstream metric still looking plausible.
 
 from __future__ import annotations
 
+import math
 import sys
 from dataclasses import dataclass, field
 from types import ModuleType, SimpleNamespace
@@ -48,12 +49,19 @@ class FakeOutput:
     text: str
     token_ids: tuple[int, ...] = (1, 2, 3)
     finish_reason: str | None = "stop"
+    # One `{token_id: Logprob}` map per position, as vLLM returns when the sampling
+    # params ask for logprobs. The second position deliberately omits its own token,
+    # so the NaN-rather-than-drop path is exercised.
+    logprobs: tuple[Any, ...] | None = None
 
     @property
     def outputs(self) -> list[SimpleNamespace]:
         return [
             SimpleNamespace(
-                text=self.text, token_ids=self.token_ids, finish_reason=self.finish_reason
+                text=self.text,
+                token_ids=self.token_ids,
+                finish_reason=self.finish_reason,
+                logprobs=self.logprobs,
             )
         ]
 
@@ -100,6 +108,7 @@ def fake_vllm(monkeypatch: pytest.MonkeyPatch) -> list[FakeLLM]:
         top_k: int
         max_tokens: int
         seed: int | None
+        logprobs: int | None = None
 
     vllm = ModuleType("vllm")
     vllm.LLM = llm_factory  # type: ignore[attr-defined]
@@ -212,7 +221,70 @@ def test_an_empty_prompt_list_does_not_reach_the_engine(fake_vllm: list[FakeLLM]
     engine = OfflineEngine("m", PROFILE)
     engine.build()
     assert engine.generate([]) == []
+    assert engine.generate_ids([]) == []
     assert fake_vllm[0].calls == []
+
+
+def test_token_generation_passes_ids_through_and_asks_for_logprobs(
+    fake_vllm: list[FakeLLM],
+) -> None:
+    """The turn engine renders and tokenizes itself, so ids go in and ids come out.
+
+    Re-tokenizing a decoded string would let a BPE seam move the prompt/completion
+    boundary the mask builder depends on, which is why there is a separate entry
+    point rather than a decode-and-re-encode round trip.
+    """
+    engine = OfflineEngine("m", PROFILE)
+    engine.build()
+
+    completions = engine.generate_ids([[1, 2, 3], [4, 5]])
+
+    call = fake_vllm[0].calls[0]
+    assert call["prompts"] == [{"prompt_token_ids": [1, 2, 3]}, {"prompt_token_ids": [4, 5]}]
+    # `logprobs=0` is the sampled token's own logprob with no alternatives.
+    assert call["sampling_params"].logprobs == 0
+    assert len(completions) == 2
+    assert completions[0].token_ids == (1, 2, 3)
+
+
+def test_a_position_whose_logprob_is_missing_stays_nan_rather_than_shortening_the_row(
+    fake_vllm: list[FakeLLM],
+) -> None:
+    """A short row is right-padded downstream and shifts every later position.
+
+    vLLM returns one `{token_id: Logprob}` map per position. A position whose own
+    sampled token is absent from its map has no logprob to report, and NaN is the
+    value that marks "not observed" without changing the row's length.
+    """
+    logprob_rows = (
+        {1: SimpleNamespace(logprob=-0.5)},
+        {99: SimpleNamespace(logprob=-9.9)},  # the sampled token 2 is absent
+        {3: SimpleNamespace(logprob=-0.25)},
+    )
+
+    def generate(**request: Any) -> list[FakeOutput]:
+        fake_vllm[0].calls.append(request)
+        return [FakeOutput(prompt="", text="t", logprobs=logprob_rows)]
+
+    engine = OfflineEngine("m", PROFILE)
+    engine.build()
+    fake_vllm[0].generate = generate  # type: ignore[method-assign]
+
+    completion = engine.generate_ids([[7]])[0]
+
+    assert len(completion.logprobs) == len(completion.token_ids) == 3
+    assert completion.logprobs[0] == -0.5
+    assert math.isnan(completion.logprobs[1])
+    assert completion.logprobs[2] == -0.25
+
+
+def test_a_short_token_batch_raises(fake_vllm: list[FakeLLM]) -> None:
+    engine = OfflineEngine("m", PROFILE)
+    engine.build()
+    fake_vllm[0].generate = lambda **_: []  # type: ignore[method-assign]
+
+    with pytest.raises(EngineError, match="0 outputs for 2 prompts"):
+        engine.generate_ids([[1], [2]])
 
 
 def test_a_reordered_batch_raises_rather_than_misattributing_a_score(

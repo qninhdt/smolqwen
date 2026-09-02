@@ -475,6 +475,8 @@ class TurnEngine:
     def _on_generation(self, slot: _Slot, result: TurnTokens, elapsed: float) -> None:
         episode = slot.episode
         episode.record_timing("generation", elapsed)
+        episode.generated_tokens += len(result.token_ids)
+        episode.truncated = episode.truncated or bool(getattr(result, "truncated", False))
         parse_started = self._clock()
         text = self._decode(result.token_ids)
         advance = self._driver.interpret(episode, text)

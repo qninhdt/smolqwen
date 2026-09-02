@@ -119,6 +119,14 @@ class Episode:
     completion_ids: list[int] = field(default_factory=list)
     logprobs: list[float] = field(default_factory=list)
     prompt_completion_boundary: int = 0
+    # Sampled tokens across every turn, counted as they arrive. Not derivable from
+    # `completion_ids`, which only the mask path fills -- evaluation builds no mask,
+    # and a silent zero there would read as a model that emitted nothing while
+    # `average_generated_tokens` is a reported metric.
+    generated_tokens: int = 0
+    # Whether any turn hit its token budget. vLLM reports this per turn; the
+    # HuggingFace path had to infer it from a width comparison.
+    truncated: bool = False
     stage_timings: dict[str, list[float]] = field(default_factory=dict)
 
     # --- mask ---

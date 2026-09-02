@@ -20,6 +20,7 @@ property, measured on a card, not asserted here.
 
 from __future__ import annotations
 
+import math
 import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -61,6 +62,26 @@ class Completion:
     text: str
     generated_tokens: int
     finish_reason: str | None
+
+    @property
+    def truncated(self) -> bool:
+        return self.finish_reason == "length"
+
+
+@dataclass(frozen=True)
+class TokenCompletion:
+    """One prompt's sampled token ids and their logprobs, for the turn engine.
+
+    Shaped like `rollout/generation.py`'s `TurnTokens` because the turn engine
+    consumes exactly that: token ids to hand the mask builder, and one logprob per
+    token. A missing logprob stays NaN rather than shortening the row -- a short row
+    would be right-padded downstream and shift every later position.
+    """
+
+    episode_id: str
+    token_ids: tuple[int, ...]
+    logprobs: tuple[float, ...]
+    finish_reason: str | None = None
 
     @property
     def truncated(self) -> bool:
@@ -130,7 +151,12 @@ class OfflineEngine:
         return self._llm
 
     def sampling_params(self, *, max_new_tokens: int | None = None) -> Any:
-        """Greedy by default, from the resolved decoding config."""
+        """Greedy by default, from the resolved decoding config.
+
+        `logprobs=0` asks vLLM for the sampled token's own logprob and no
+        alternatives, which is what the turn engine needs and the cheapest form of
+        the request.
+        """
         from vllm import SamplingParams
 
         profile = self.profile
@@ -140,6 +166,7 @@ class OfflineEngine:
             top_k=profile.top_k,
             max_tokens=max_new_tokens or profile.max_new_tokens,
             seed=profile.seed,
+            logprobs=0,
         )
 
     def generate(
@@ -174,6 +201,38 @@ class OfflineEngine:
                 "positional alignment with tasks cannot be assumed"
             )
         return [_completion(output, index, prompts[index]) for index, output in enumerate(outputs)]
+
+    def generate_ids(
+        self,
+        prompt_ids: Sequence[Sequence[int]],
+        *,
+        max_new_tokens: int | None = None,
+        adapter: str | None = None,
+    ) -> list[TokenCompletion]:
+        """Generate from pre-tokenized prompts, returning token ids and logprobs.
+
+        The turn engine renders and tokenizes itself -- the mask builder needs the
+        exact prefix ids the template produced, and re-tokenizing a decoded string
+        would let a BPE seam move the boundary. So the engine takes ids in and gives
+        ids back; text decoding stays at the one seam `inference/decoding.py` owns.
+        """
+        if not prompt_ids:
+            return []
+        engine = self._engine()
+        request: dict[str, Any] = {
+            "prompts": [{"prompt_token_ids": list(ids)} for ids in prompt_ids],
+            "sampling_params": self.sampling_params(max_new_tokens=max_new_tokens),
+        }
+        if adapter is not None:
+            request["lora_request"] = self._adapter_request(adapter)
+        outputs = engine.generate(**request)
+
+        if len(outputs) != len(prompt_ids):
+            raise EngineError(
+                f"engine returned {len(outputs)} outputs for {len(prompt_ids)} prompts; "
+                "positional alignment with tasks cannot be assumed"
+            )
+        return [_token_completion(output, index) for index, output in enumerate(outputs)]
 
     def sleep(self, level: int = 1) -> None:
         """Offload weights to CPU and discard the KV cache.
@@ -260,6 +319,34 @@ def _completion(output: Any, index: int, prompt: str) -> Completion:
     return Completion(
         text=str(first.text),
         generated_tokens=len(first.token_ids),
+        finish_reason=None if first.finish_reason is None else str(first.finish_reason),
+    )
+
+
+def _token_completion(output: Any, index: int) -> TokenCompletion:
+    """One vLLM `RequestOutput` as token ids plus per-token logprobs.
+
+    vLLM returns `logprobs` as a list of `{token_id: Logprob}` maps, one per
+    position, and only when the sampling params asked for them. A position whose
+    sampled token is absent from its own map stays NaN: the alternative, dropping
+    it, would shorten the row and shift every later logprob against the wrong token.
+    """
+    candidates = getattr(output, "outputs", ())
+    if not candidates:
+        raise EngineError(f"output at position {index} carries no completion")
+    first = candidates[0]
+    token_ids = tuple(int(token) for token in first.token_ids)
+    rows = getattr(first, "logprobs", None) or ()
+    logprobs: list[float] = []
+    for position, token_id in enumerate(token_ids):
+        row = rows[position] if position < len(rows) else None
+        entry = row.get(token_id) if isinstance(row, Mapping) else None
+        value = getattr(entry, "logprob", entry)
+        logprobs.append(float(value) if isinstance(value, int | float) else math.nan)
+    return TokenCompletion(
+        episode_id=str(index),
+        token_ids=token_ids,
+        logprobs=tuple(logprobs),
         finish_reason=None if first.finish_reason is None else str(first.finish_reason),
     )
 
