@@ -43,13 +43,13 @@ from smolqwen.env.parse import parse_turn
 from smolqwen.env.pool import Result, WorkerPool
 from smolqwen.env.scenarios import Scenario
 from smolqwen.inference.decoding import assistant_message, split_generation_continuation
-from smolqwen.rollout.episode import Episode, TerminalReason
+from smolqwen.inference.episode import Episode, TerminalReason
+from smolqwen.inference.mask import EpisodeMaskBuilder
 from smolqwen.rollout.generation import (
     GenerationBackend,
     GenerationRequest,
     GenerationResult,
 )
-from smolqwen.rollout.mask import EpisodeMaskBuilder
 
 __all__ = [
     "LENGTH_MARGIN",

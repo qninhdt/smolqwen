@@ -37,7 +37,7 @@ from __future__ import annotations
 import math
 from collections.abc import Sequence
 
-from smolqwen.rollout.episode import DriftKind, DriftTally, MaskSpan
+from smolqwen.inference.episode import DriftKind, DriftTally, MaskSpan
 
 FORK_THRESHOLD_TOKENS = 1024  # upstream `fork_threshold_tokens` default
 

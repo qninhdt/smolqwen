@@ -135,7 +135,7 @@ def mask_over(tokenizer: Any, completions: list[str], *, split_shape: bool) -> t
     the real drift path, not a simulation of it.
     """
     from smolqwen.data.render import render_prefix
-    from smolqwen.rollout.mask import EpisodeMaskBuilder
+    from smolqwen.inference.mask import EpisodeMaskBuilder
 
     messages = [Message("system", "S"), Message("user", "Q")]
 

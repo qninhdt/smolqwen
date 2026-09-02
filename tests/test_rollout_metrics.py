@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from smolqwen.config_models import ProfileConfig
-from smolqwen.rollout.episode import Episode
+from smolqwen.inference.episode import Episode
 from smolqwen.rollout.metrics import (
     LOGP_DIFFERENCE_METRIC,
     LogpDifferenceStopCallback,

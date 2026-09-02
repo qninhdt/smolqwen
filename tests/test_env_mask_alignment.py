@@ -207,7 +207,7 @@ def test_transitions_are_clean_under_the_committed_message_shape() -> None:
 
 def test_a_truncated_drift_realigns_the_mask_not_just_the_tokens() -> None:
     """A REALIGN demotes the drifted tail to context and NaN logprobs."""
-    from smolqwen.rollout.mask import EpisodeMaskBuilder
+    from smolqwen.inference.mask import EpisodeMaskBuilder
 
     builder = EpisodeMaskBuilder([1, 2, 3, 4])
     builder.append_response([5, 6, 7, 8], [-1.0, -1.1, -1.2, -1.3])
@@ -228,7 +228,7 @@ def test_a_truncated_drift_realigns_the_mask_not_just_the_tokens() -> None:
 
 
 def test_a_fork_is_forced_to_realign_and_counted_as_fork() -> None:
-    from smolqwen.rollout.mask import EpisodeMaskBuilder
+    from smolqwen.inference.mask import EpisodeMaskBuilder
 
     builder = EpisodeMaskBuilder([1, 2, 3], fork_threshold_tokens=2)
     builder.append_response([4, 5], [-1.0, -1.0])
@@ -242,7 +242,7 @@ def test_a_fork_is_forced_to_realign_and_counted_as_fork() -> None:
 
 def test_assemble_output_rejects_a_mask_that_would_train_on_observations() -> None:
     """The boundary asserts all-ones masks and missing NaNs before TRL sees them."""
-    from smolqwen.rollout.episode import Episode
+    from smolqwen.inference.episode import Episode
     from smolqwen.rollout.rollout_func import RolloutFuncError, assemble_output
 
     episode = Episode(episode_id="e", scenario_id="s", group_index=0)

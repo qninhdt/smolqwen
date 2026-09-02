@@ -21,7 +21,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from smolqwen.rollout.episode import DriftTally, Episode
+from smolqwen.inference.episode import DriftTally, Episode
 from smolqwen.rollout.profiler import TimelineProfile
 
 LOGP_DIFFERENCE_METRIC = "sampling/sampling_logp_difference/max"

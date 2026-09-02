@@ -35,7 +35,7 @@ import math
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 
-from smolqwen.rollout.episode import Episode
+from smolqwen.inference.episode import Episode
 
 STAGES = (
     "generation",

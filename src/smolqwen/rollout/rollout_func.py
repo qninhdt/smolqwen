@@ -36,8 +36,8 @@ from dataclasses import replace
 from typing import Any
 
 from smolqwen.data.loader import Message, parse_message
+from smolqwen.inference.episode import Episode
 from smolqwen.prompts import build_system_prompt
-from smolqwen.rollout.episode import Episode
 from smolqwen.rollout.generation import GenerationBackend, VllmColocateBackend
 from smolqwen.rollout.metrics import (
     GpuUtilizationSampler,

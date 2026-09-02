@@ -37,7 +37,7 @@ from smolqwen.env.pool import WorkerPool
 from smolqwen.env.registry import EnvSpec, load_env_specs
 from smolqwen.env.scenarios import Scenario, load_scenarios
 from smolqwen.env.selftest import DEFAULT_SCENARIO_ID, DEFAULT_SCRIPT
-from smolqwen.rollout.episode import Episode
+from smolqwen.inference.episode import Episode
 from smolqwen.rollout.factory_env import make_environment_factories
 from smolqwen.rollout.scheduler import PoolDispatcher, ScenarioBinding, SchedulerConfig
 
