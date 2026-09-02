@@ -37,6 +37,7 @@ from typing import Any
 
 from smolqwen.data.loader import Message, parse_message
 from smolqwen.inference.episode import Episode
+from smolqwen.inference.mask import EpisodeMaskBuilder
 from smolqwen.prompts import build_system_prompt
 from smolqwen.rollout.generation import GenerationBackend, VllmColocateBackend
 from smolqwen.rollout.metrics import (
@@ -213,14 +214,62 @@ def make_rollout_func(
     return rollout_func
 
 
+def assert_mask_alignment(
+    episode: Episode,
+    builder: EpisodeMaskBuilder,
+    logprobs: Sequence[float],
+    env_mask: Sequence[int],
+) -> None:
+    """Every masked position carries NaN, checked positionally rather than by count.
+
+    The previous form asked whether *any* NaN existed and whether the mask was
+    *all* ones, both gated on `episode.observations`. A mask shifted one token
+    across every observation satisfied both, and if the fork path ever stopped
+    appending to `observations` the two checks became no-ops on every episode.
+
+    The implication runs one way only. `mask == 0` means the sampler never
+    produced that token, so its logprob must be NaN. The converse does not hold:
+    `generation.py:246` leaves a *sampled* token NaN when TRL supplied no
+    candidate for its position, and that token is legitimately supervised. So
+    asserting the biconditional would fail on a correct batch.
+
+    The second check reads the builder's spans, which are the stored form the
+    flattened mask is derived from. Comparing the two catches a mask that is
+    self-consistent but disagrees with the bookkeeping that produced it.
+    """
+    misaligned = [
+        index
+        for index, flag in enumerate(env_mask)
+        if flag == 0 and not math.isnan(logprobs[index])
+    ]
+    if misaligned:
+        raise RolloutFuncError(
+            f"{episode.episode_id}: {len(misaligned)} masked position(s) carry a real "
+            f"logprob, first at {misaligned[0]}; TRL would apply an importance ratio "
+            "to a token the sampler never produced"
+        )
+    boundary = builder.boundary
+    supervised_from_spans = sum(
+        span.end - max(span.start, boundary)
+        for span in builder.spans
+        if span.supervised and span.end > boundary
+    )
+    if supervised_from_spans != sum(env_mask):
+        raise RolloutFuncError(
+            f"{episode.episode_id}: spans mark {supervised_from_spans} supervised tokens "
+            f"but the mask marks {sum(env_mask)}; span bookkeeping and the flattened "
+            "mask disagree"
+        )
+
+
 def assemble_output(
     episodes: Sequence[Episode], scheduler: RolloutScheduler
 ) -> dict[str, list[Any]]:
     """The TRL return dict, assembled from each episode's mask builder.
 
-    Asserted here, not trusted: the three lengths and the NaN-at-observation
-    contract are the silent-corruption boundary, so a violation fails before
-    TRL ever sees the batch.
+    Asserted here, not trusted: the three lengths and the NaN-at-masked-position
+    contract are the silent-corruption boundary, so a violation fails before TRL
+    ever sees the batch.
     """
     prompt_rows: list[list[Any]] = []
     completion_rows: list[list[Any]] = []
@@ -244,17 +293,7 @@ def assemble_output(
                 f"{len(completion_ids)}, logprobs {len(logprobs)}, mask "
                 f"{len(env_mask)}; TRL would right-pad and misalign the IS ratio"
             )
-        if episode.observations and not any(math.isnan(value) for value in logprobs):
-            raise RolloutFuncError(
-                f"{episode.episode_id}: {len(episode.observations)} observations "
-                "but no NaN logprob; observation positions must be NaN so TRL "
-                "maps them to ratio 1"
-            )
-        if episode.observations and all(env_mask):
-            raise RolloutFuncError(
-                f"{episode.episode_id}: observations present but env_mask is "
-                "all ones; the mask would train the model on tool output"
-            )
+        assert_mask_alignment(episode, builder, logprobs, env_mask)
         episode.prompt_ids = prompt_ids
         episode.completion_ids = completion_ids
         episode.logprobs = logprobs
