@@ -182,6 +182,8 @@ observes. The flags then go without losing provenance.
 - [x] `AdapterResult` extended with defaults; all 9 sites compile untouched
 - [x] Adapter revision refused when unpinned, with a test
 - [x] `TransformersPolicy` retained and still exercised for adapter-on-base
+- [x] **`evaluate` generates through the engine, asserted against the command**
+      (added after this phase was wrongly closed — see Outcome)
 - [x] CPU suite green; `gpu` tests listed as pending
 
 ## Outcome
@@ -196,6 +198,39 @@ the comparison is not across two machines.
 is the benchmark side of the driver protocol. The window is
 `min(generation_concurrency, pool_capacity)`, with a test that reads both numbers
 from the shipped configs and fails if a future edit makes the window stop mattering.
+
+### Correction: this phase was recorded complete while step 3 was never done
+
+Found 2026-09-03, after Phases 5-9 had all closed on top of it. Step 3 above says
+*"Rewire `runner.py` onto the turn engine"*. That did not happen. `evaluate_batched`
+was written and tested against a scripted backend, and its only caller was
+`training/bench_eval.py` — so `smolqwen evaluate`, the command every reported number
+comes from, still went `run_evaluation → load_policy → TransformersPolicy →
+model.generate()` at batch size 1. Goal 2 of the plan was false for two days while
+this file said "code complete".
+
+Two process failures, not one:
+
+**The success criteria could not detect it.** Every box above is about a *unit* —
+the window, the records, the diagnostics, the pinning — and each passed. None asked
+which path the **command** takes. `tests/test_eval_generation_path.py` is that
+assertion, and it fails on the pre-fix runner.
+
+**Phase 8 deleted the fix.** Phase 2 wrote `offline_engine_for_eval` to be exactly
+this wiring. The dead-symbol audit found it with zero consumers across all eight
+surfaces and deleted it in `990670c`. Zero consumers was evidence that step 3 was
+outstanding; it was read as evidence the helper was dead. A property-aware audit
+still cannot tell "unused" from "not yet wired" — the only thing that can is a test
+naming the consumer, which is what the audit's own inventory should have demanded
+for a symbol introduced by a still-open phase.
+
+What landed with the fix: `generation_for` selects the path and records it in
+`recorded_free.generation_path`, with three logged fallbacks to `TransformersPolicy`
+(endpoint, vllm absent, adapter refused) and everything else raising. And
+`recorded_free.dtype` now comes from the engine rather than the constant
+`"bfloat16"`, which was about to become actively wrong: a Turing card resolves
+float16, and a report claiming bf16 would present two numeric regimes as one
+experiment.
 
 Three corrections to this phase's plan:
 

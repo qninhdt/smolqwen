@@ -105,6 +105,27 @@ Deliberately not implemented, with the reason recorded in
 different cadences by different code paths, so computing it inside the callback
 would produce a plausible number whenever the cadences disagree.
 
+### The T4 rehearsal
+
+There is a `t4` profile (16 GB, sm75) whose only purpose is to exercise these paths
+on a free Colab card before an L4 session is spent. It is not a training target and
+no number measured under it transfers:
+
+- **fp16, not bf16.** Turing has no bf16 tensor cores, so `EvalProfile.dtype`
+  resolves float16 and logs the downgrade. Narrower exponent range, so a T4 row and
+  an L4 row are not one experiment.
+- **`train-sft` refuses to run.** FlashAttention 2 is Ampere and newer, and without
+  a varlen flash kernel nothing reads `cu_seq_lens` — measured on sm86, mutating one
+  trajectory in a padding-free batch moves a neighbour's logits by 0.38, with a
+  control of exactly 0. `assert_padding_free_runtime` already fails closed.
+- **8K context, not 32K.** `budgets.json` puts 9.8% of trajectories under 8K, so
+  most of the distribution is truncated.
+
+What it does rehearse: `probe`, engine build/generate/alignment, adapter accept-or-
+raise, sleep/wake, `evaluate` on the batched path, GRPO's in-training callback,
+artifact upload, and non-TTY rendering in a real cell. Enough to find wiring bugs
+without spending L4 credits on them.
+
 Dependencies: 2 needs 1. 3 needs 2. 4 needs 3. 5 needs 4. 6 needs 5 **and**
 plan `260831-0808` phase 4 marked complete. 8 needs 1. 7 needs 8 — both edit
 `cli.py`, and deleting first means Phase 7 rewrites four error handlers instead
@@ -306,6 +327,7 @@ these findings rather than patched; Phases 1 and 7-10 were corrected in place.
 | 44 | Effort did not reconcile (files summed 11.0 vs header 12.5), and Phases 3/4 were budgeted under the master plan's 5d/4d precedent for the same subsystems | Medium | Accept | plan.md, P3, P4 |
 | 45 | `client.py` was justified by three `urlopen` sites, but two are the same readiness probe Phase 8 deletes, and it is a `GET /v1/models`, not a chat client | Medium | Accept | P2, P8 |
 | 46 | Counting errors: 56 test files not 59; `resolve_eval_checkpoint` is *unwired*, not dead (`test_checkpoint_pinning.py:98,101`); `grep -c` in three criteria was missing `-r` | Medium | Accept | plan.md, P3, P4 |
+| 47 | **Phase 4 closed with step 3 undone**: `evaluate_batched` was written and tested but `run_evaluation` was never rewired onto it, so goal 2 was false while the phase read "code complete". Every success criterion tested a unit; none asked which path the *command* took. Phase 8 then deleted `offline_engine_for_eval` — the helper written for that wiring — reading "zero consumers" as dead rather than as missing wiring | Critical | Fixed | P4, P8 |
 
 #### Corrections to the plan author's own earlier claims
 
