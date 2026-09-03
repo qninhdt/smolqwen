@@ -153,7 +153,55 @@ def test_the_step_zero_anchor_scores_the_base_model_with_no_adapter(tmp_path: Pa
 def test_the_engine_sleeps_after_every_boundary_including_a_failed_one(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """An engine left awake holds VRAM the next training step needs."""
+    """An engine left awake holds VRAM the next training step needs.
+
+    The failure is injected in `evaluate_batched`, which is the only point that runs
+    *after* the wake: `BenchEvalRunner.run` calls `create_adapter` and `dev_subset`
+    first, so a failure in either happens before `engine_source()` is ever evaluated.
+    Leaving the checkpoint directory absent -- the obvious way to fail a boundary --
+    takes that earlier path, so it would assert the `finally` while never having woken
+    the engine. That shape has its own test below; this one is about the `finally`.
+    """
+    engine = FakeEngine()
+    config = _config(tmp_path, baseline_at_step_zero=False)
+    holder = CheckpointEngine.build(config, engine=engine)  # type: ignore[arg-type]
+    _checkpoint(tmp_path, 100)
+
+    class _Adapter:
+        def load_tasks(self) -> list[Any]:
+            from smolqwen.eval.adapters.base import EvalTask
+
+            return [EvalTask("task-0", "envscaler_heldout", "do it", ())]
+
+        def close(self) -> None:
+            return None
+
+    def explode(*_args: Any, **_kwargs: Any) -> Any:
+        raise RuntimeError("scoring blew up after the engine woke")
+
+    monkeypatch.setattr("smolqwen.training.bench_eval.create_adapter", lambda *_a, **_k: _Adapter())
+    monkeypatch.setattr("smolqwen.training.bench_eval.evaluate_batched", explode)
+    runner = BenchEvalRunner(
+        eval_config=eval_config_for(config),
+        bench_config=config.bench_eval,
+        engine_source=holder.backend,
+        tokenizer_source=lambda: None,
+        metric_prefix="sft",
+        weight_version=lambda: f"checkpoint-{holder.step}",
+    )
+    callback = BenchEvalCallback(runner, before_each=holder.prepare, after_each=holder.release)
+
+    callback.on_save(None, SimpleNamespace(global_step=100), SimpleNamespace())
+
+    assert engine.events[-2:] == ["wake", "sleep"]
+    assert engine.asleep
+    outcome = runner.outcomes[-1]
+    assert outcome.failed_reason is not None
+    assert "blew up after the engine woke" in outcome.failed_reason
+
+
+def test_a_missing_checkpoint_fails_the_boundary_and_still_sleeps(tmp_path: Path) -> None:
+    """The other failure shape: nothing to score, raised before any scoring runs."""
     engine = FakeEngine()
     config = _config(tmp_path, baseline_at_step_zero=False)
     holder = CheckpointEngine.build(config, engine=engine)  # type: ignore[arg-type]
@@ -167,14 +215,11 @@ def test_the_engine_sleeps_after_every_boundary_including_a_failed_one(
     )
     callback = BenchEvalCallback(runner, before_each=holder.prepare, after_each=holder.release)
 
-    # No checkpoint on disk, so the boundary fails inside the runner.
     callback.on_save(None, SimpleNamespace(global_step=100), SimpleNamespace())
 
-    assert engine.events[-2:] == ["wake", "sleep"]
     assert engine.asleep
-    outcome = runner.outcomes[-1]
-    assert outcome.failed_reason is not None
-    assert "checkpoint-100" in outcome.failed_reason
+    assert engine.events[-1] == "sleep"
+    assert runner.outcomes[-1].failed_reason is not None
 
 
 def test_the_eval_config_is_resized_by_the_sft_run_s_own_profile(tmp_path: Path) -> None:

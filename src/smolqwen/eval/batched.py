@@ -218,11 +218,40 @@ def evaluate_batched(
                 truncated=episode.truncated,
                 exact_success=result.exact_success,
                 diagnostics=dict(result.diagnostics),
+                terminal_reason=episode.terminal_reason,
             )
         )
         if records is not None:
             records.append(_record(task, episode, result, invalid_calls, wall_s / len(task_list)))
+    _warn_if_nothing_generated(episodes)
     return adapter.summarize(metrics)
+
+
+def _warn_if_nothing_generated(episodes: Sequence[Episode]) -> None:
+    """Say so when no episode generated anything. Measured, not hypothetical.
+
+    On a T4 with the context window below EnvScaler's tool-schema size, every episode
+    hit the window check at admission and terminated with zero generations -- and the
+    run still reported `score: 0.25`, because the verifier grades final environment
+    state and an untouched initial state scores whatever it scores. The only signal in
+    the report was `average_generated_tokens: 0.0`, which requires a reader to already
+    suspect the failure.
+
+    Not an exception: `evaluate` is also how a genuinely mute model is measured, and
+    refusing to report that would be its own kind of wrong. A log line at WARNING that
+    names the likely cause is the honest middle.
+    """
+    if not episodes or any(episode.generation_count for episode in episodes):
+        return
+    reasons = sorted({episode.terminal_reason or "unknown" for episode in episodes})
+    LOG.warning(
+        "no episode generated a single turn (%d episodes, terminal reasons: %s). "
+        "A score computed from this measures the environment's initial state, not the "
+        "model. The usual cause is max_seq_length below the rendered prompt: EnvScaler "
+        "tool schemas alone run to ~4k tokens, ~6.8k at the widest env.",
+        len(episodes),
+        ", ".join(reasons),
+    )
 
 
 def _initial_messages(adapter: BenchmarkAdapter, binding: Any) -> list[Any]:

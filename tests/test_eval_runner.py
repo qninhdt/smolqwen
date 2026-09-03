@@ -67,6 +67,12 @@ def test_runner_collects_secondary_metrics_from_a_structured_generation() -> Non
         "average_generated_tokens": 3.0,
         "truncation_rate": 0.0,
         "exact_success_rate": 1.0,
+        # How the episode ended, aggregated as a rate. A run where this reads
+        # `terminal_step_cap_rate: 1.0` generated nothing and its score describes the
+        # environment's initial state -- which is what a T4 run reported before this
+        # existed.
+        "terminal_final_answer_rate": 1.0,
+        "terminal_reason_denominator": 1.0,
     }
 
 

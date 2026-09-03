@@ -143,6 +143,7 @@ def evaluate_adapter(
                     truncated=truncated,
                     exact_success=score.exact_success,
                     diagnostics=dict(score.diagnostics),
+                    terminal_reason=terminal_reason,
                 )
             )
             if records is not None:

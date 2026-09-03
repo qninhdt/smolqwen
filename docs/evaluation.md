@@ -89,6 +89,30 @@ without bf16 tensor cores (Turing, sm75) the engine resolves float16 and logs th
 downgrade; fp16 has a narrower exponent range, so a T4 row and an L4 row are not one
 experiment.
 
+## Reading a score: check how the episodes ended
+
+Every aggregate carries `terminal_<reason>_rate` with a denominator. Read it before
+the score, because the verifier grades the environment's **final state** and an
+untouched initial state is a valid state that scores whatever it scores:
+
+| Reason | Meaning |
+|---|---|
+| `final_answer` | the episode reached its own conclusion — the only healthy majority |
+| `turn_cap` | `max_steps_per_task` generations used without completing |
+| `step_cap` | `max_env_steps` reached, **or the context window filled at admission** |
+| `timeout`, `worker_crash` | infrastructure, not model behaviour |
+
+A run measured on a T4 at `max_seq_length: 4096` reported `score: 0.25255` beside
+`average_generated_tokens: 0.0`: every episode terminated at admission because the
+rendered prompt exceeded the window, and the verifier scored four untouched
+environments. `terminal_step_cap_rate: 1.0` is what names that; the zero token
+average only implies it. `evaluate` also logs a WARNING when no episode generated at
+all — it does not raise, because a genuinely mute model is a real thing to measure.
+
+Sizing note: EnvScaler tool schemas alone render to roughly 4,000 tokens, and 6,800
+at the widest environment, before the system prompt and the task. A window below
+~8,000 tokens will stall most held-out episodes at admission.
+
 Each run writes `<tag>.json` and `<tag>.md` under `artifacts/evaluation/`, plus one
 `<tag>-<adapter>.jsonl` trajectory file per adapter. The manifest hashes decoding,
 system prompts, tool schemas, benchmark revision, and step limits. It also records

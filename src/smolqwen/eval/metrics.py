@@ -30,6 +30,10 @@ class TaskMetrics:
     # Sparse per-task conditions. An absent key means "not applicable to this
     # task", never "zero" -- see `AdapterResult.diagnostics`.
     diagnostics: Mapping[str, float] = field(default_factory=dict)
+    # How the episode ended. Defaulted because this is a frozen positional dataclass
+    # with several construction sites, and because the serial path had no concept of
+    # a terminal reason until the turn engine introduced one.
+    terminal_reason: str | None = None
 
 
 def aggregate(tasks: Iterable[TaskMetrics]) -> dict[str, dict[str, float]]:
@@ -51,8 +55,34 @@ def aggregate(tasks: Iterable[TaskMetrics]) -> dict[str, dict[str, float]]:
             result[category]["exact_success_rate"] = sum(
                 bool(value.exact_success) for value in values if value.exact_success is not None
             ) / sum(value.exact_success is not None for value in values)
+        result[category].update(_terminal_rates(values))
         result[category].update(_aggregate_diagnostics(values))
     return result
+
+
+def _terminal_rates(values: list[TaskMetrics]) -> dict[str, float]:
+    """How episodes ended, as a rate per reason.
+
+    Measured on a T4: with the context window set too small for EnvScaler's tool
+    schemas, every episode terminated at admission with zero generations -- and the
+    verifier still scored each one, because it grades the environment's final state
+    and an untouched initial state is a valid state. The report showed `score: 0.25`
+    beside `average_generated_tokens: 0.0`, which is the tell, but nothing named the
+    cause and nothing refused.
+
+    So the reason is a first-class number: `terminal_step_cap_rate: 1.0` says the run
+    never generated, where a zero average only implies it. `final_answer` is the only
+    reason that means the episode ran to its own conclusion; anything else being
+    dominant is a finding about the configuration, not about the model.
+    """
+    reported = [value.terminal_reason for value in values if value.terminal_reason]
+    if not reported:
+        return {}
+    rates: dict[str, float] = {}
+    for reason in sorted(set(reported)):
+        rates[f"terminal_{reason}_rate"] = reported.count(reason) / len(reported)
+    rates["terminal_reason_denominator"] = float(len(reported))
+    return rates
 
 
 def _aggregate_diagnostics(values: list[TaskMetrics]) -> dict[str, float]:

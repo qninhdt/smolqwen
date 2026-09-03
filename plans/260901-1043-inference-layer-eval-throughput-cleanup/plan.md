@@ -118,13 +118,27 @@ no number measured under it transfers:
   a varlen flash kernel nothing reads `cu_seq_lens` — measured on sm86, mutating one
   trajectory in a padding-free batch moves a neighbour's logits by 0.38, with a
   control of exactly 0. `assert_padding_free_runtime` already fails closed.
-- **8K context, not 32K.** `budgets.json` puts 9.8% of trajectories under 8K, so
-  most of the distribution is truncated.
+- **16K context, not 32K.** Raised from 8K after measurement — see below.
 
-What it does rehearse: `probe`, engine build/generate/alignment, adapter accept-or-
-raise, sleep/wake, `evaluate` on the batched path, GRPO's in-training callback,
-artifact upload, and non-TTY rendering in a real cell. Enough to find wiring bugs
-without spending L4 credits on them.
+**It was run, on 2026-09-03, and it earned its keep.** Full numbers in
+[`reports/t4-rehearsal.md`](./reports/t4-rehearsal.md); the two findings:
+
+| # | Finding | Sev | Disp |
+|---|---------|-----|------|
+| 48 | A score computed from episodes that never generated. At `max_seq_length: 4096` every held-out episode terminated at admission (rendered prompt > window) and each was still scored — the verifier grades final environment state, and an untouched initial state scores whatever it scores. Report read `score: 0.25255` beside `average_generated_tokens: 0.0`, with nothing naming the cause | Critical | Fixed — `terminal_<reason>_rate` in every aggregate, plus a WARNING when nothing generated |
+| 49 | `tests/test_vllm_adapter_capability.py` cannot pass on any card. It builds on `write_tiny_checkpoint`, which saves `Qwen3_5TextConfig` (`model_type: qwen3_5_text`); vLLM's registry has only `qwen3_5`, routes to the multimodal path, and demands the wrapper config the released model actually has | High | Open — Phase 2's criterion, its fix belongs with that phase |
+
+Sleep mode on the real model measured 11.56 GiB freed of 12.41 GiB held (~93%), in
+4.45 s. That answers Phase 2's sleep/wake criterion on sm75 but not on an L4 at the
+profile's KV fraction. It also showed that
+`tests/test_sft_bench_eval_memory_guard.py` reads
+`torch.cuda.memory_allocated()` in the **parent** process, while vLLM V1 runs the
+engine in a spawned `EngineCore` — so that guard currently measures nothing and needs
+rewriting before Phase 10 relies on it.
+
+What the rehearsal does cover: `probe`, engine build/generate/alignment, sleep/wake,
+`evaluate` on the batched path end to end (`generation_path: vllm` in the report),
+and the locked install with no source build.
 
 Dependencies: 2 needs 1. 3 needs 2. 4 needs 3. 5 needs 4. 6 needs 5 **and**
 plan `260831-0808` phase 4 marked complete. 8 needs 1. 7 needs 8 — both edit
@@ -328,6 +342,9 @@ these findings rather than patched; Phases 1 and 7-10 were corrected in place.
 | 45 | `client.py` was justified by three `urlopen` sites, but two are the same readiness probe Phase 8 deletes, and it is a `GET /v1/models`, not a chat client | Medium | Accept | P2, P8 |
 | 46 | Counting errors: 56 test files not 59; `resolve_eval_checkpoint` is *unwired*, not dead (`test_checkpoint_pinning.py:98,101`); `grep -c` in three criteria was missing `-r` | Medium | Accept | plan.md, P3, P4 |
 | 47 | **Phase 4 closed with step 3 undone**: `evaluate_batched` was written and tested but `run_evaluation` was never rewired onto it, so goal 2 was false while the phase read "code complete". Every success criterion tested a unit; none asked which path the *command* took. Phase 8 then deleted `offline_engine_for_eval` — the helper written for that wiring — reading "zero consumers" as dead rather than as missing wiring | Critical | Fixed | P4, P8 |
+| 48 | A score computed from episodes that never generated: at too small a context window every held-out episode terminates at admission and is still scored, because the verifier grades final environment state. Measured on a T4 — `score: 0.25255` beside `average_generated_tokens: 0.0` | Critical | Fixed | P4, `reports/t4-rehearsal.md` |
+| 49 | `test_vllm_adapter_capability.py` cannot pass on any card: `write_tiny_checkpoint` saves `Qwen3_5TextConfig`, which vLLM's registry routes to the multimodal path and refuses | High | Open | P2, P10 |
+| 50 | `test_sft_bench_eval_memory_guard.py` reads `torch.cuda.memory_allocated()` in the parent process, but vLLM V1 runs the engine in a spawned `EngineCore` — the parent's allocator sees 0.00 GB throughout, so the guard measures nothing | High | Open | P6, P10 |
 
 #### Corrections to the plan author's own earlier claims
 
