@@ -18,7 +18,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 STAGES = ("data", "sft", "grpo", "eval", "serve")
-PROFILES = ("l4", "a100")
+PROFILES = ("t4", "l4", "a100")
 
 # budgets.json key -> the profile field it seeds. SFT max sequence length is not
 # here: old per-turn profile artifacts must never resize full-trajectory SFT.

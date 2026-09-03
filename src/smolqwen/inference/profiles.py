@@ -20,7 +20,53 @@ from dataclasses import dataclass
 from typing import Any
 
 from smolqwen.config_models import EvalConfig, GrpoConfig, ServeConfig
+from smolqwen.console import logger
 from smolqwen.inference.turn_engine import TurnEngineConfig
+
+LOG = logger(__name__)
+
+# bf16 tensor cores arrive with Ampere. Below that vLLM refuses bf16 outright
+# rather than emulating it, so a T4 (sm75) run must ask for fp16.
+BF16_MIN_CAPABILITY = (8, 0)
+
+
+def resolve_dtype(requested: str = "bfloat16", *, capability: tuple[int, int] | None = None) -> str:
+    """The dtype this card can actually run, with the downgrade logged.
+
+    Same shape as `resolve_attn_implementation`: state the request, state what the
+    host supports, pick the workable one and say why. A silent choice here is the
+    wrong kind of quiet -- fp16 has a narrower exponent range than bf16, so a reader
+    comparing a T4 number against an L4 number needs to know which ran.
+
+    `torch.cuda.is_bf16_supported()` is not the check: it returns True on sm75
+    because it counts emulation, and vLLM's own guard is the capability number.
+    Probed here rather than imported at module scope so `--dry-run` stays free of
+    torch.
+    """
+    if requested != "bfloat16":
+        return requested
+    if capability is None:
+        capability = _capability()
+    if capability is None or capability >= BF16_MIN_CAPABILITY:
+        return "bfloat16"
+    LOG.warning(
+        "compute capability %d.%d has no bf16 tensor cores; using float16. "
+        "Numerics differ from a bf16 run -- do not compare the two as one experiment.",
+        *capability,
+    )
+    return "float16"
+
+
+def _capability() -> tuple[int, int] | None:
+    """This host's compute capability, or None when there is no CUDA device."""
+    try:
+        import torch
+    except ImportError:  # pragma: no cover - torch is a hard dependency
+        return None
+    if not torch.cuda.is_available():
+        return None
+    major, minor = torch.cuda.get_device_capability(0)
+    return int(major), int(minor)
 
 
 @dataclass(frozen=True)
@@ -32,6 +78,12 @@ class EvalProfile:
     `max_context_tokens`. If the two ever need to diverge, that line changes in
     the same commit -- otherwise a run truncating at one length certifies
     comparability with a run that truncated at another.
+
+    `dtype` is resolved from the card rather than configured. It is sizing in the
+    same sense `enforce_eager` is: it does not change what a benchmark measures, and
+    a config field for it would let a T4 run be asked for bf16 and fail at engine
+    construction instead of downgrading with a recorded reason. The manifest records
+    what ran.
     """
 
     max_model_len: int
@@ -44,6 +96,7 @@ class EvalProfile:
     top_p: float
     top_k: int
     seed: int | None
+    dtype: str = "bfloat16"
 
     @classmethod
     def from_config(cls, config: EvalConfig) -> EvalProfile:
@@ -60,6 +113,7 @@ class EvalProfile:
             top_p=decoding.top_p,
             top_k=decoding.top_k,
             seed=decoding.seed,
+            dtype=resolve_dtype(),
         )
 
 

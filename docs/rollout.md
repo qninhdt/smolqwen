@@ -17,7 +17,10 @@ Run the benchmark from the repository root:
 smolqwen rollout-bench --profile l4 --episodes 64
 ```
 
-Use `--profile a100` for the A100 sizing profile, `--budgets PATH` when the
+Use `--profile a100` for the A100 sizing profile, `--profile t4` for a free-tier
+Colab T4 (a wiring-validation profile only — 16 GB, sm75, no bf16 tensor cores and
+no FlashAttention 2, so no number measured under it transfers to `l4`),
+`--budgets PATH` when the
 budget artifact is not at `artifacts/data/budgets.json`, and `--paths` to select
 the scripted diagnostic rows (the default is `serial_oracle,async`). The CLI options
 are owned by [`src/smolqwen/cli.py`](../src/smolqwen/cli.py); benchmark execution

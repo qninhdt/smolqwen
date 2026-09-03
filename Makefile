@@ -3,7 +3,7 @@
 help:
 	@echo "check  - ruff + mypy --strict over src/ and tests/"
 	@echo "test   - pytest, CPU only, no GPU / network / HF token"
-	@echo "smoke  - dry-run every stage config on both profiles"
+	@echo "smoke  - dry-run every stage config on every profile"
 	@echo "fmt    - ruff format + import sort"
 
 check: lint type
@@ -31,7 +31,7 @@ fmt:
 # thirty minutes into a run.
 smoke:
 	@for stage in profile-data prepare-sft train-sft evaluate serve build-workload; do \
-		for profile in l4 a100; do \
+		for profile in t4 l4 a100; do \
 			uv run smolqwen $$stage --profile $$profile --dry-run > /dev/null \
 				|| exit 1; \
 		done; \

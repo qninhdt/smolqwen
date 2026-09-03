@@ -1,0 +1,56 @@
+# T4 sizing profile -- 16 GB, sm75 (Turing).
+#
+# **A wiring-validation profile, not a training target.** It exists so the code
+# paths can be exercised on a free Colab T4 before an L4 session is spent, and no
+# number measured under it transfers to `l4.yaml`. Three hardware facts drive that:
+#
+# - **No bf16 tensor cores.** sm75 predates them, so vLLM refuses bf16 and
+#   `EvalProfile.dtype` resolves to float16 with the downgrade logged. fp16 has a
+#   narrower exponent range, so a T4 score and an L4 score are not one experiment.
+# - **No FlashAttention 2.** FA2 is Ampere and newer; Dao-AILab points Turing at
+#   the separate `flash-attention-turing` project, which has no prebuilt wheel for
+#   this torch pin. Without a varlen flash kernel, `cu_seq_lens` is ignored by
+#   sdpa/eager/flex alike -- measured: mutating one trajectory in a padding-free
+#   batch changes another's logits by 0.38 -- so `train-sft` correctly refuses to
+#   run here (`assert_padding_free_runtime`).
+# - **16 GB, not 24.** Every envelope number below is smaller for that reason
+#   alone and says nothing about the L4 envelope plan `260831-0808` owns.
+#
+# Sizing ONLY, same closed schema as the other profiles: a semantic field here
+# fails at load because ProfileConfig is `extra="forbid"`.
+
+# 8,192 rather than the 32,768 default. `budgets.json` records 55.8% of samples
+# and 9.8% of trajectories fitting under 8K, so this truncates most of the
+# distribution -- acceptable for proving the engine batches and the callback fires,
+# never for a reported score. Absent from l4.yaml on purpose; the L4 cap is only
+# ever lowered from a measurement, never seeded from here.
+max_seq_length: 8192
+
+# --- SFT envelope. Unreachable on this card (`train-sft` refuses without FA2), so
+# these are the smallest values that keep the config coherent rather than a target.
+micro_batch: 1
+grad_accum: 8
+max_tokens_per_microbatch: 8192
+
+# --- Generation. Halved against l4.yaml because the KV pool has a third less room
+# and shares it with whatever else is resident.
+generation_concurrency: 4
+active_pool_multiplier: 2
+# Lower than l4's 0.25: `gpu_memory_utilization` sizes against TOTAL memory, and on
+# 16 GB the same fraction leaves the trainer far less than it does on 24 GB.
+vllm_kv_fraction: 0.20
+
+# CUDA graph capture costs memory that a 16 GB card evaluating at 8K context does
+# not have to spare. Slower per step, and step latency is not what this profile
+# measures.
+enforce_eager: true
+
+# --- GRPO group size. 2 is the floor `num_generations` allows, and group-relative
+# advantage needs at least that.
+num_generations: 2
+
+# --- Worker pool. Halved: pool capacity bounds the eval admission window
+# (`min(generation_concurrency, pool_capacity)`), and 4x4=16 stays above the
+# concurrency above, so the window is still the generation width.
+env_worker_count: 2
+env_episodes_per_worker: 8

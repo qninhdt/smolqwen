@@ -135,6 +135,10 @@ class OfflineEngine:
             enable_lora=self.enable_lora,
             max_loras=self.profile.max_lora_slots if self.enable_lora else 1,
             enable_sleep_mode=self.enable_sleep_mode,
+            # Resolved from the card, not configured: vLLM refuses bf16 below sm80
+            # rather than emulating it, so a T4 run has to ask for fp16 or fail at
+            # construction. `EvalProfile.dtype` carries the decision and its reason.
+            dtype=self.profile.dtype,
         )
 
     @property
@@ -391,3 +395,35 @@ class OfflineEngineBackend:
             )
             for request, completion in zip(requests, completions, strict=True)
         ]
+
+
+def offline_engine_for_eval(
+    model: str,
+    profile: EvalProfile,
+    *,
+    revision: str | None = None,
+    adapter: Mapping[str, str] | None = None,
+    enable_sleep_mode: bool = False,
+) -> OfflineEngine:
+    """Build an engine and register any adapters, in the order the engine needs.
+
+    `enable_lora` has to be decided at construction -- vLLM allocates adapter slots
+    then -- so it is derived from whether any adapter was named rather than being a
+    second flag a caller can set inconsistently.
+
+    This existed once and was deleted as unreferenced. It had no references because
+    `run_evaluation` was never rewired onto it, which is the opposite of dead: an
+    audit reporting zero consumers for a helper written to be a command's entry point
+    is reporting missing wiring, not dead code.
+    """
+    engine = OfflineEngine(
+        model,
+        profile,
+        revision=revision,
+        enable_lora=bool(adapter),
+        enable_sleep_mode=enable_sleep_mode,
+    )
+    engine.build()
+    for name, path in (adapter or {}).items():
+        engine.load_adapter(name, path)
+    return engine

@@ -24,10 +24,13 @@ from __future__ import annotations
 
 import time
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from typing import Any
 
 from smolqwen.config_models import EvalConfig
+from smolqwen.console import logger
 from smolqwen.eval.adapters.base import AdapterResult, BenchmarkAdapter, EvalTask
+from smolqwen.eval.checkpoints import ResolvedCheckpoint
 from smolqwen.eval.driver import AdapterDriver, TaskBinding
 from smolqwen.eval.metrics import TaskMetrics
 from smolqwen.eval.trajectories import TrajectoryRecord
@@ -35,6 +38,89 @@ from smolqwen.inference.decoding import decode_completion
 from smolqwen.inference.episode import Episode
 from smolqwen.inference.profiles import EvalProfile
 from smolqwen.inference.turn_engine import TurnEngine, TurnEngineConfig
+
+LOG = logger(__name__)
+
+# The adapter name the engine registers a PEFT directory under. One slot, because
+# `evaluate` scores one checkpoint per invocation.
+ADAPTER_SLOT = "eval-adapter"
+
+
+@dataclass(frozen=True)
+class Generation:
+    """How this run generates, and the name recorded for it in the manifest.
+
+    `backend` is None when no engine could be built, in which case the caller falls
+    back to `TransformersPolicy`. `path` is recorded either way: which of the three
+    generation paths ran is a fact a reader needs, and it was previously unanswerable
+    from a report.
+    """
+
+    backend: Any | None
+    path: str
+    engine: Any | None = None
+
+    def shutdown(self) -> None:
+        if self.engine is not None:
+            self.engine.shutdown()
+
+
+def generation_for(config: EvalConfig, resolved: ResolvedCheckpoint) -> Generation:
+    """An in-process vLLM backend when one can be built, else the fallback marker.
+
+    Three reasons to fall back, all recorded rather than silent:
+
+    - **An endpoint.** The weights are in another process; `HttpPolicy` owns that.
+    - **vllm is not installed.** It lives in the `serve`/`colab` extras, absent from
+      CI by construction, so a CPU box evaluating a tiny checkpoint must still work.
+    - **vLLM refuses the adapter.** Both training configs use
+      `target_modules: all-linear`, which emits LoRA weights for Qwen3.5's Gated
+      DeltaNet projections, and vLLM validates against a per-architecture allowlist.
+      `TransformersPolicy` is the only path that evaluates an adapter without merging
+      it, which is exactly why it stays.
+
+    Anything else raises. An OOM or a corrupt checkpoint must not quietly become a
+    slower run that reports a different number.
+    """
+    if resolved.source == "endpoint" or resolved.path is None:
+        return Generation(backend=None, path="http")
+    try:
+        from smolqwen.inference.engine import OfflineEngineBackend, offline_engine_for_eval
+    except ImportError:  # pragma: no cover - the module imports vllm lazily
+        return Generation(backend=None, path="transformers")
+
+    adapters = {ADAPTER_SLOT: resolved.adapter_path} if resolved.adapter_path else None
+    try:
+        engine = offline_engine_for_eval(
+            resolved.path,
+            EvalProfile.from_config(config),
+            revision=resolved.revision,
+            adapter=adapters,
+        )
+    except ImportError as exc:
+        LOG.warning("vllm is not installed (%s); evaluating through transformers instead", exc)
+        return Generation(backend=None, path="transformers")
+    except Exception as exc:
+        if adapters is None:
+            raise
+        # The adapter was refused. Recorded, not fatal: the fallback path evaluates
+        # the same adapter on the same base, only slower.
+        LOG.warning(
+            "vLLM refused the adapter at %s (%s: %s); evaluating adapter-on-base "
+            "through transformers instead",
+            resolved.adapter_path,
+            type(exc).__name__,
+            exc,
+        )
+        return Generation(backend=None, path="transformers")
+
+    path = "vllm+lora" if adapters else "vllm"
+    LOG.info("generating through in-process vLLM (%s), dtype %s", path, engine.profile.dtype)
+    return Generation(
+        backend=OfflineEngineBackend(engine, adapter=ADAPTER_SLOT if adapters else None),
+        path=path,
+        engine=engine,
+    )
 
 
 def pool_capacity_of(adapter: BenchmarkAdapter) -> int | None:

@@ -13,6 +13,7 @@ from smolqwen.config_models import EvalConfig
 from smolqwen.console import logger, progress_task, status_table
 from smolqwen.eval.adapters import create_adapter
 from smolqwen.eval.adapters.base import BenchmarkAdapter
+from smolqwen.eval.batched import evaluate_batched, generation_for
 from smolqwen.eval.checkpoints import resolve as resolve_checkpoint
 from smolqwen.eval.manifest import EvalManifest
 from smolqwen.eval.metrics import TaskMetrics
@@ -173,18 +174,40 @@ def evaluate_adapter(
 
 def _evaluate_named_adapter(
     config: EvalConfig,
-    policy: Policy,
+    policy: Policy | None,
     name: str,
     records: list[TrajectoryRecord] | None = None,
+    backend: Any | None = None,
+    tokenizer: Any | None = None,
 ) -> tuple[dict[str, dict[str, float]], Mapping[str, Any]]:
+    """Score one benchmark, batched through the engine when there is one.
+
+    The two paths are the reason `evaluate_batched` exists: with a backend, tasks
+    advance concurrently and each cycle issues one batched generation call; without
+    one, `evaluate_adapter` walks tasks serially at batch size 1. Same adapters, same
+    aggregation, same trajectory records -- only the generation width differs, which
+    is what makes the agreement measurement meaningful.
+    """
     adapter = create_adapter(name, config)
     tasks = adapter.load_tasks()
     try:
         invariants = adapter.manifest_invariants(tasks)
-        return (
-            evaluate_adapter(config, policy, adapter, tasks=tasks, records=records, label=name),
-            invariants,
-        )
+        if backend is not None:
+            metrics = evaluate_batched(
+                config,
+                adapter,
+                backend=backend,
+                tokenizer=tokenizer,
+                tasks=tasks,
+                records=records,
+            )
+        else:
+            if policy is None:
+                raise ValueError("evaluation needs either a generation backend or a policy")
+            metrics = evaluate_adapter(
+                config, policy, adapter, tasks=tasks, records=records, label=name
+            )
+        return metrics, invariants
     finally:
         close = getattr(adapter, "close", None)
         if callable(close):
@@ -222,20 +245,30 @@ def run_evaluation(config: EvalConfig, args: Any) -> int:
         endpoint=args.endpoint,
         store=_checkpoint_store(config, args),
     )
-    policy = load_policy(
-        checkpoint=resolved.path,
-        revision=resolved.revision,
-        endpoint=args.endpoint,
-        adapter=resolved.adapter_path,
-        adapter_revision=resolved.adapter_revision,
-        model=config.http_model,
-        max_new_tokens=config.decoding.max_new_tokens,
-        temperature=config.decoding.temperature,
-        top_p=config.decoding.top_p,
-        top_k=config.decoding.top_k,
-        seed=config.decoding.seed,
-        http_timeout_s=config.http_timeout_s,
+    # The in-process engine first: this is the whole point of the inference layer.
+    # `generation_for` returns an empty backend for an endpoint, for a host without
+    # vllm, and for an adapter vLLM refuses -- each recorded, each falling back to a
+    # policy rather than failing the run.
+    generation = generation_for(config, resolved)
+    policy = (
+        None
+        if generation.backend is not None
+        else load_policy(
+            checkpoint=resolved.path,
+            revision=resolved.revision,
+            endpoint=args.endpoint,
+            adapter=resolved.adapter_path,
+            adapter_revision=resolved.adapter_revision,
+            model=config.http_model,
+            max_new_tokens=config.decoding.max_new_tokens,
+            temperature=config.decoding.temperature,
+            top_p=config.decoding.top_p,
+            top_k=config.decoding.top_k,
+            seed=config.decoding.seed,
+            http_timeout_s=config.http_timeout_s,
+        )
     )
+    tokenizer = _tokenizer_for(resolved) if generation.backend is not None else None
     adapter_invariants: dict[str, Mapping[str, Any]] = {}
     metrics: dict[str, dict[str, float]] = {}
     tag = args.tag or "evaluation"
@@ -247,6 +280,7 @@ def run_evaluation(config: EvalConfig, args: Any) -> int:
             "checkpoint": resolved.path or args.endpoint or "(config default)",
             "revision": resolved.revision,
             "source": resolved.source,
+            "generation": generation.path,
             "max steps per task": config.max_steps_per_task,
         },
     )
@@ -259,7 +293,12 @@ def run_evaluation(config: EvalConfig, args: Any) -> int:
         for adapter_name in adapter_names:
             records: list[TrajectoryRecord] = []
             adapter_metrics, invariants = _evaluate_named_adapter(
-                config, policy, adapter_name, records=records
+                config,
+                policy,
+                adapter_name,
+                records=records,
+                backend=generation.backend,
+                tokenizer=tokenizer,
             )
             duplicates = sorted(set(metrics) & set(adapter_metrics))
             if duplicates:
@@ -279,19 +318,18 @@ def run_evaluation(config: EvalConfig, args: Any) -> int:
                 len(adapter_metrics),
                 len(records),
             )
-        transport_backend = "http" if args.endpoint else "transformers"
+        transport_backend = "http" if args.endpoint else generation.path
         backend = getattr(args, "serving_backend", None) or transport_backend
         manifest = build_manifest(
             config,
-            revision=policy.revision,
+            revision=resolved.revision,
             backend=backend,
             adapter_invariants=adapter_invariants,
             recorded_free={
                 **resolved.to_recorded(),
                 "endpoint": args.endpoint,
                 "served_model": config.http_model if args.endpoint else None,
-                "dtype": getattr(args, "served_dtype", None)
-                or ("bfloat16" if transport_backend == "transformers" else None),
+                "dtype": getattr(args, "served_dtype", None) or _recorded_dtype(generation),
                 "quantization": getattr(args, "quantization", None),
                 "speculative_decoding": getattr(args, "speculative_decoding", None),
                 "kv_budget": getattr(args, "kv_budget", None),
@@ -302,6 +340,7 @@ def run_evaluation(config: EvalConfig, args: Any) -> int:
                 "library_versions": _library_versions(),
                 # What generation actually used, so a row is self-describing without
                 # the caller having asserted it on the command line.
+                "generation_path": generation.path,
                 "generation_concurrency": config.profile.generation_concurrency,
                 "enforce_eager": config.profile.enforce_eager,
                 "max_context_tokens_used": config.profile.max_seq_length,
@@ -325,9 +364,35 @@ def run_evaluation(config: EvalConfig, args: Any) -> int:
             extra_paths=[markdown_path, *trajectory_paths.values()],
         )
     finally:
+        generation.shutdown()
         tracker.finish()
     print(json.dumps({"json": str(json_path), "markdown": str(markdown_path)}, sort_keys=True))
     return 0
+
+
+def _recorded_dtype(generation: Any) -> str | None:
+    """The dtype generation actually ran at, from the engine when there is one.
+
+    Previously hardcoded `"bfloat16"` whenever the backend was not HTTP, which is
+    now wrong in a way that matters: a T4 run downgrades to fp16, and a report
+    claiming bf16 would present two different numeric regimes as one experiment.
+    """
+    engine = getattr(generation, "engine", None)
+    if engine is not None:
+        return str(engine.profile.dtype)
+    return "bfloat16" if generation.path == "transformers" else None
+
+
+def _tokenizer_for(resolved: Any) -> Any:
+    """The tokenizer the turn engine renders and tokenizes with.
+
+    The same checkpoint the engine loaded, at the same revision: the mask builder and
+    the prefix renderer must agree with the weights, and a tokenizer from elsewhere
+    would move a BPE seam under them.
+    """
+    from smolqwen.tokenizer import load_tokenizer
+
+    return load_tokenizer(resolved.path, revision=resolved.revision)
 
 
 def _log_report(

@@ -57,11 +57,37 @@ reward plus exact-success rate. Both adapters present the byte-identical
 non-conversational system prompt used by the released SFT trajectories; the
 EnvScaler environment introduction remains in that system message.
 
-Benchmark plugins own their task lifecycle, provenance, and metric aggregation;
-the generic runner only coordinates policies and reports. Add a module under
-`src/smolqwen/eval/adapters/` exposing `ADAPTER_NAME` and `create_adapter`, then
-select it through `adapters` or `--adapter`. Adapter-specific settings belong in
-the corresponding `adapter_options` entry.
+Benchmark plugins own their benchmark semantics; the generic runner owns none. Add a
+module under `src/smolqwen/eval/adapters/` exposing `ADAPTER_NAME` and
+`create_adapter`, then select it through `adapters` or `--adapter`. Adapter-specific
+settings belong in the corresponding `adapter_options` entry.
+
+## Generation paths
+
+`evaluate` generates through an in-process `vllm.LLM` whenever it can build one,
+driving tasks concurrently through the shared turn engine — the same engine the
+training rollout uses. Which path ran is recorded in `recorded_free.generation_path`,
+because a base-model row and an adapter-on-base row generated on different paths are
+still being compared in one table:
+
+| Path | When | Shape |
+|---|---|---|
+| `vllm` | local or merged checkpoint | batched, `min(generation_concurrency, pool_capacity)` tasks in flight |
+| `vllm+lora` | adapter checkpoint vLLM accepts | as above, adapter served via `LoRARequest` |
+| `transformers` | vllm absent, or vLLM refuses the adapter | serial, batch size 1 |
+| `http` | `--endpoint` | one request per turn against the served process |
+
+The `transformers` fallbacks are recorded, not silent. `TransformersPolicy` is the
+only path that evaluates an adapter without merging it, which is why it stays: whether
+vLLM accepts this project's `all-linear` adapters decides how *fast* adapter
+evaluation is, not whether it works. Anything other than those two causes — an OOM, a
+corrupt checkpoint — raises instead of quietly becoming a slower run that reports a
+different number.
+
+`recorded_free.dtype` comes from the engine that ran, not from a constant. On a card
+without bf16 tensor cores (Turing, sm75) the engine resolves float16 and logs the
+downgrade; fp16 has a narrower exponent range, so a T4 row and an L4 row are not one
+experiment.
 
 Each run writes `<tag>.json` and `<tag>.md` under `artifacts/evaluation/`, plus one
 `<tag>-<adapter>.jsonl` trajectory file per adapter. The manifest hashes decoding,
