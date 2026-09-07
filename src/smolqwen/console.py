@@ -27,7 +27,6 @@ import os
 import sys
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from threading import Event, Thread
 from time import monotonic
 from typing import Any
 
@@ -143,29 +142,18 @@ def logger(name: str) -> logging.Logger:
 
 
 @contextmanager
-def phase(description: str, *, every: float = 30.0) -> Iterator[None]:
-    """Log start, heartbeat, and terminal status for one blocking phase."""
+def phase(description: str) -> Iterator[None]:
+    """Log start and terminal status for one blocking phase."""
     log = logger("phase")
     started = monotonic()
-    stop = Event()
-
-    def heartbeat() -> None:
-        while not stop.wait(every):
-            log.info("%s still running (%.0fs elapsed)", description, monotonic() - started)
 
     log.info("%s: start", description)
-    worker = Thread(target=heartbeat, name="smolqwen-phase-heartbeat", daemon=True)
-    worker.start()
     try:
         yield
     except BaseException:
-        stop.set()
-        worker.join(timeout=1.0)
         log.exception("%s: failed after %.1fs", description, monotonic() - started)
         raise
     else:
-        stop.set()
-        worker.join(timeout=1.0)
         log.info("%s: complete in %.1fs", description, monotonic() - started)
 
 

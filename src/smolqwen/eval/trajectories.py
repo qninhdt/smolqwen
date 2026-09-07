@@ -18,7 +18,8 @@ gitignored, so records stay local until an upload phase moves them.
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -73,6 +74,22 @@ class TrajectoryRecord:
 def trajectory_path(output_dir: Path | str, *, tag: str, adapter: str) -> Path:
     """Where one adapter's records for one run tag live."""
     return Path(output_dir) / "trajectories" / f"{tag}-{adapter}.jsonl"
+
+
+@contextmanager
+def append_trajectories(
+    output_dir: Path | str, *, tag: str, adapter: str
+) -> Iterator[tuple[Path, Callable[[TrajectoryRecord], None]]]:
+    """Append and flush each completed task without discarding prior runs."""
+    path = trajectory_path(output_dir, tag=tag, adapter=adapter)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+
+        def append(record: TrajectoryRecord) -> None:
+            handle.write(json.dumps(record.to_row(), sort_keys=True) + "\n")
+            handle.flush()
+
+        yield path, append
 
 
 def write_trajectories(

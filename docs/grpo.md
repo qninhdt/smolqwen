@@ -26,8 +26,8 @@ smolqwen train-grpo --profile l4
 ```
 
 The command logs scenario/catalog loading, tokenizer and worker-pool startup,
-trainer/vLLM construction, optimizer progress, and checkpoint saves. Long phases
-emit heartbeat lines. On Colab GPU runtimes human output streams on stdout; set
+trainer/vLLM construction, optimizer progress, and checkpoint saves. On Colab GPU
+runtimes human output streams on stdout; set
 `SMOLQWEN_LOG_STREAM=stderr` when a shell pipeline needs stdout to remain
 machine-readable.
 

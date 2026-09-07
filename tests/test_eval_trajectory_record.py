@@ -19,6 +19,7 @@ from smolqwen.eval.policies import GenerationResult
 from smolqwen.eval.runner import evaluate_adapter
 from smolqwen.eval.trajectories import (
     TrajectoryRecord,
+    append_trajectories,
     read_trajectories,
     write_trajectories,
 )
@@ -128,6 +129,17 @@ def test_records_round_trip_through_jsonl(tmp_path: Path) -> None:
     assert [row["task_id"] for row in rows] == ["passes", "fails"]
     assert rows[1]["failure_reason"] == "state_mismatch_at_turn_2"
     assert rows[1]["diagnostics"]["state_match_rate"] == 0.0
+
+
+def test_trajectory_append_is_visible_before_the_evaluation_finishes(tmp_path: Path) -> None:
+    first = TrajectoryRecord(task_id="a", category="fixture", score=1.0)
+    second = TrajectoryRecord(task_id="b", category="fixture", score=0.0)
+
+    with append_trajectories(tmp_path, tag="sft", adapter="fixture") as (path, append):
+        append(first)
+        assert [row["task_id"] for row in read_trajectories(path)] == ["a"]
+        append(second)
+        assert [row["task_id"] for row in read_trajectories(path)] == ["a", "b"]
 
 
 def test_writing_the_same_tag_twice_replaces_rather_than_interleaves(

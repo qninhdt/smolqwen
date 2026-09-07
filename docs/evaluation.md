@@ -38,8 +38,10 @@ smolqwen evaluate \
 ```
 
 Evaluation logs checkpoint resolution, tokenizer loading, and vLLM construction
-before scoring starts. Blocking phases emit a heartbeat every 30 seconds; per-task
-progress streams in the active human-output channel and final report paths are JSON.
+before scoring starts. Per-task progress streams in the active human-output channel
+and final report paths are JSON.
+Each scored task is appended and flushed to its trajectory JSONL immediately, so an
+interrupted run retains completed trajectories rather than writing them only at the end.
 On Colab GPU runtimes this is stdout so cell output is immediate; set
 `SMOLQWEN_LOG_STREAM=stderr` when a shell pipeline needs stdout to remain JSON-only.
 

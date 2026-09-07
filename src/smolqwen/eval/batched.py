@@ -22,7 +22,7 @@ in-process and has no pool).
 from __future__ import annotations
 
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -147,6 +147,7 @@ def evaluate_batched(
     tokenizer: Any,
     tasks: Sequence[EvalTask] | None = None,
     records: list[TrajectoryRecord] | None = None,
+    record_sink: Callable[[TrajectoryRecord], None] | None = None,
     label: str = "evaluation",
 ) -> dict[str, dict[str, float]]:
     """Advance every task concurrently through the shared engine, then summarize.
@@ -164,6 +165,7 @@ def evaluate_batched(
     started = time.monotonic()
     scores: list[float] = []
     category_by_task_id = {task.task_id: task.category for task in task_list}
+    task_by_id = {task.task_id: task for task in task_list}
 
     with progress_task(label, total=len(task_list), unit="tasks", every=1) as advance:
 
@@ -172,6 +174,17 @@ def evaluate_batched(
             scores.append(result.score)
             running = sum(scores) / len(scores)
             category = category_by_task_id.get(episode.scenario_id, episode.scenario_id)
+            if record_sink is not None:
+                task = task_by_id[episode.scenario_id]
+                record_sink(
+                    _record(
+                        task,
+                        episode,
+                        result,
+                        adapter.invalid_call_count(task),
+                        time.monotonic() - started,
+                    )
+                )
             advance(f"{category} mean {running:.3f}")
 
         engine = TurnEngine(

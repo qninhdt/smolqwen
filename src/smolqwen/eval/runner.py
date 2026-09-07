@@ -20,7 +20,7 @@ from smolqwen.eval.metrics import TaskMetrics
 from smolqwen.eval.policies import Policy, load_http_policy
 from smolqwen.eval.report import write_report
 from smolqwen.eval.serving_pairing import load_quality_result
-from smolqwen.eval.trajectories import TrajectoryRecord, write_trajectories
+from smolqwen.eval.trajectories import TrajectoryRecord, append_trajectories
 from smolqwen.tracking import Tracker, tracker_for
 
 LOG = logger(__name__)
@@ -79,6 +79,7 @@ def evaluate_adapter(
     adapter: BenchmarkAdapter,
     tasks: Sequence[Any] | None = None,
     records: list[TrajectoryRecord] | None = None,
+    record_sink: Callable[[TrajectoryRecord], None] | None = None,
     label: str = "evaluation",
     progress: Callable[[EvalTask, TaskMetrics | None], None] | None = None,
 ) -> dict[str, dict[str, float]]:
@@ -156,28 +157,29 @@ def evaluate_adapter(
                     terminal_reason=terminal_reason,
                 )
             )
+            record = TrajectoryRecord(
+                task_id=task.task_id,
+                category=task.category,
+                messages=[dict(message) for message in history],
+                observations=observations,
+                score=score.score,
+                exact_success=score.exact_success,
+                completed=score.completed,
+                failure_reason=score.failure_reason,
+                failed_check_names=list(score.failed_check_names),
+                diagnostics=dict(score.diagnostics),
+                terminal_reason=terminal_reason,
+                generation_turns=generation_turns,
+                env_steps=env_steps,
+                generated_tokens=generated_tokens,
+                truncated=truncated,
+                invalid_calls=invalid_calls,
+                wall_s=wall_s,
+            )
             if records is not None:
-                records.append(
-                    TrajectoryRecord(
-                        task_id=task.task_id,
-                        category=task.category,
-                        messages=[dict(message) for message in history],
-                        observations=observations,
-                        score=score.score,
-                        exact_success=score.exact_success,
-                        completed=score.completed,
-                        failure_reason=score.failure_reason,
-                        failed_check_names=list(score.failed_check_names),
-                        diagnostics=dict(score.diagnostics),
-                        terminal_reason=terminal_reason,
-                        generation_turns=generation_turns,
-                        env_steps=env_steps,
-                        generated_tokens=generated_tokens,
-                        truncated=truncated,
-                        invalid_calls=invalid_calls,
-                        wall_s=wall_s,
-                    )
-                )
+                records.append(record)
+            if record_sink is not None:
+                record_sink(record)
             running = sum(metric.score for metric in task_metrics) / len(task_metrics)
             advance(f"{task.category} mean {running:.3f}")
             if progress is not None:
@@ -190,6 +192,7 @@ def _evaluate_named_adapter(
     policy: Policy | None,
     name: str,
     records: list[TrajectoryRecord] | None = None,
+    record_sink: Callable[[TrajectoryRecord], None] | None = None,
     backend: Any | None = None,
     tokenizer: Any | None = None,
 ) -> tuple[dict[str, dict[str, float]], Mapping[str, Any]]:
@@ -208,13 +211,20 @@ def _evaluate_named_adapter(
                 tokenizer=tokenizer,
                 tasks=tasks,
                 records=records,
+                record_sink=record_sink,
                 label=name,
             )
         else:
             if policy is None:
                 raise ValueError("evaluation needs either a generation backend or a policy")
             metrics = evaluate_adapter(
-                config, policy, adapter, tasks=tasks, records=records, label=name
+                config,
+                policy,
+                adapter,
+                tasks=tasks,
+                records=records,
+                record_sink=record_sink,
+                label=name,
             )
         return metrics, invariants
     finally:
@@ -300,15 +310,25 @@ def run_evaluation(config: EvalConfig, args: Any) -> int:
     tracker.start()
     try:
         for adapter_name in adapter_names:
-            records: list[TrajectoryRecord] = []
-            adapter_metrics, invariants = _evaluate_named_adapter(
-                config,
-                policy,
-                adapter_name,
-                records=records,
-                backend=inference_backend,
-                tokenizer=tokenizer,
-            )
+            written = 0
+            with append_trajectories(config.output_dir, tag=tag, adapter=adapter_name) as (
+                trajectory_path,
+                append_record,
+            ):
+
+                def record_sink(record: TrajectoryRecord) -> None:
+                    nonlocal written
+                    append_record(record)
+                    written += 1
+
+                adapter_metrics, invariants = _evaluate_named_adapter(
+                    config,
+                    policy,
+                    adapter_name,
+                    record_sink=record_sink,
+                    backend=inference_backend,
+                    tokenizer=tokenizer,
+                )
             duplicates = sorted(set(metrics) & set(adapter_metrics))
             if duplicates:
                 raise ValueError(
@@ -316,16 +336,12 @@ def run_evaluation(config: EvalConfig, args: Any) -> int:
                 )
             metrics.update(adapter_metrics)
             adapter_invariants[adapter_name] = invariants
-            trajectory_paths[adapter_name] = str(
-                write_trajectories(
-                    config.output_dir, tag=tag, adapter=adapter_name, records=records
-                )
-            )
+            trajectory_paths[adapter_name] = str(trajectory_path)
             LOG.info(
                 "%s: %d categories scored, %d trajectories written",
                 adapter_name,
                 len(adapter_metrics),
-                len(records),
+                written,
             )
         transport_backend = "http" if args.endpoint else generation.path
         backend = getattr(args, "serving_backend", None) or transport_backend
