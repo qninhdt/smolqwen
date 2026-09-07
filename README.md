@@ -28,9 +28,9 @@ correctness-first `rollout-bench` workflow, and how to interpret its A/B report.
 
 ## Agentic GRPO
 
-See [docs/grpo.md](docs/grpo.md) for difficulty profiling, online GRPO,
-checkpoint resume semantics, safety stops, and the target-GPU evidence still
-required before final results can be reported.
+See [docs/grpo.md](docs/grpo.md) for online GRPO, checkpoint resume semantics,
+safety stops, and the target-GPU evidence still required before final results can
+be reported.
 
 ## Serving
 

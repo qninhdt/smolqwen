@@ -56,9 +56,7 @@ def main() -> int:
 
     sequences = [record_to_sequence(row) for row in records]
     lengths = [len(input_ids) for input_ids, _ in sequences]
-    supervised = [
-        sum(label != IGNORE_INDEX for label in labels) for _, labels in sequences
-    ]
+    supervised = [sum(label != IGNORE_INDEX for label in labels) for _, labels in sequences]
     print(
         json.dumps(
             {

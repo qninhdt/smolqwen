@@ -1,12 +1,8 @@
 """One console for every command: rich on **stderr**, machine output on stdout.
 
-stdout is a contract here, not a convenience. Eight emitters produce output another
-program reads — two of them from committed notebook cells (`01-sft.ipynb` pipes
-`merge-adapter`'s JSON through `cat`, `03-grpo.ipynb` reads
-`profile-difficulty`'s), one from a documented shell capture
-(`serve --print-command`), and the rest from tests. Notebook changes are a non-goal,
-so those rows cannot move. Every human-facing line goes to stderr instead, which
-keeps `smolqwen ... | jq` working while a run is still legible.
+stdout is a contract here, not a convenience. Machine-readable command output stays
+on stdout, while every human-facing line goes to stderr so `smolqwen ... | jq` keeps
+working while a run is still legible.
 
 The concrete failure this fixes: `eval/runner.py` used to run for hours and emit one
 JSON line at the end, so a stalled run was indistinguishable from a slow one.

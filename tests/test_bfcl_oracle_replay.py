@@ -46,12 +46,9 @@ def test_every_pinned_bfcl_ground_truth_trajectory_scores_successfully() -> None
     category_counts: dict[str, int] = {}
     for task in tasks:
         category_counts[task.category] = category_counts.get(task.category, 0) + 1
-    assert category_counts == {
-        "multi_turn_base": 200,
-        "multi_turn_long_context": 200,
-        "multi_turn_miss_func": 200,
-        "multi_turn_miss_param": 200,
-    }
+    # The shipped eval config scores multi-turn base only: dev and test coincide
+    # in this experiment, and the other three categories stay adapter-owned.
+    assert category_counts == {"multi_turn_base": 200}
     manifest = adapter.manifest_invariants(tasks)
-    assert manifest["task_count"] == 800
+    assert manifest["task_count"] == 200
     assert manifest["checkout_revision"] == manifest["benchmark_commit"]

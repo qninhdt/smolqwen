@@ -70,6 +70,11 @@ class TurnTokens:
     logprobs: tuple[float, ...]
     duration_s: float = 0.0
     prompt_tokens: int = 0
+    finish_reason: str | None = None
+
+    @property
+    def truncated(self) -> bool:
+        return self.finish_reason == "length"
 
 
 class GenerationBackend(Protocol):
@@ -100,15 +105,16 @@ class ScriptedPolicyBackend:
             if context is None:
                 raise GenerationError(f"{request.episode_id}: no scripted context bound")
             text = self._policy(request.episode_id, context.turn_index, context.messages)
-            token_ids = tuple(self._encode(text))
-            if len(token_ids) > request.max_new_tokens:
-                token_ids = token_ids[: request.max_new_tokens]
+            generated = tuple(self._encode(text))
+            truncated = len(generated) > request.max_new_tokens
+            token_ids = generated[: request.max_new_tokens]
             results.append(
                 TurnTokens(
                     episode_id=request.episode_id,
                     token_ids=token_ids,
                     logprobs=tuple(SCRIPTED_LOGPROB for _ in token_ids),
                     prompt_tokens=len(request.prompt_ids),
+                    finish_reason="length" if truncated else "stop",
                 )
             )
             context.turn_index += 1
@@ -206,7 +212,8 @@ class VllmColocateBackend:
         ):
             token_ids = [int(token) for token in token_ids]
             logprobs = _sampling_logprobs(token_ids, raw_logprobs, raw_logprob_ids)
-            if len(token_ids) > request.max_new_tokens:
+            truncated = len(token_ids) >= request.max_new_tokens
+            if truncated:
                 token_ids, logprobs = (
                     token_ids[: request.max_new_tokens],
                     logprobs[: request.max_new_tokens],
@@ -218,6 +225,7 @@ class VllmColocateBackend:
                     logprobs=tuple(logprobs),
                     duration_s=time.monotonic() - started,
                     prompt_tokens=len(request.prompt_ids),
+                    finish_reason="length" if truncated else None,
                 )
             )
         return results

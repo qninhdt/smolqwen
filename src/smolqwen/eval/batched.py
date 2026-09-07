@@ -1,8 +1,7 @@
-"""Batched evaluation: many tasks in flight, one generation call per cycle.
+"""Turn-engine evaluation: local vLLM batches tasks in flight.
 
-The serial path in `runner.evaluate_adapter` advances one task at a time, so
-`policies.py` calls `model.generate()` at batch size 1 for every turn of every
-task. A 2B model decoding one sequence leaves the card almost idle.
+The local vLLM path advances many tasks concurrently and issues one generation call per
+cycle. The HTTP compatibility path remains text-native.
 
 This drives the same adapters through the shared turn engine instead, which holds
 `max_in_flight` tasks concurrently and issues one batched generation per cycle. Two
@@ -28,7 +27,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from smolqwen.config_models import EvalConfig
-from smolqwen.console import logger
+from smolqwen.console import logger, progress_task
 from smolqwen.eval.adapters.base import AdapterResult, BenchmarkAdapter, EvalTask
 from smolqwen.eval.checkpoints import ResolvedCheckpoint
 from smolqwen.eval.driver import AdapterDriver, TaskBinding
@@ -48,13 +47,7 @@ ADAPTER_SLOT = "eval-adapter"
 
 @dataclass(frozen=True)
 class Generation:
-    """How this run generates, and the name recorded for it in the manifest.
-
-    `backend` is None when no engine could be built, in which case the caller falls
-    back to `TransformersPolicy`. `path` is recorded either way: which of the three
-    generation paths ran is a fact a reader needs, and it was previously unanswerable
-    from a report.
-    """
+    """The generation backend selected for this evaluation run."""
 
     backend: Any | None
     path: str
@@ -66,54 +59,19 @@ class Generation:
 
 
 def generation_for(config: EvalConfig, resolved: ResolvedCheckpoint) -> Generation:
-    """An in-process vLLM backend when one can be built, else the fallback marker.
-
-    Three reasons to fall back, all recorded rather than silent:
-
-    - **An endpoint.** The weights are in another process; `HttpPolicy` owns that.
-    - **vllm is not installed.** It lives in the `serve`/`colab` extras, absent from
-      CI by construction, so a CPU box evaluating a tiny checkpoint must still work.
-    - **vLLM refuses the adapter.** Both training configs use
-      `target_modules: all-linear`, which emits LoRA weights for Qwen3.5's Gated
-      DeltaNet projections, and vLLM validates against a per-architecture allowlist.
-      `TransformersPolicy` is the only path that evaluates an adapter without merging
-      it, which is exactly why it stays.
-
-    Anything else raises. An OOM or a corrupt checkpoint must not quietly become a
-    slower run that reports a different number.
-    """
+    """Use HTTP for a served endpoint and require in-process vLLM otherwise."""
     if resolved.source == "endpoint" or resolved.path is None:
         return Generation(backend=None, path="http")
-    try:
-        from smolqwen.inference.engine import OfflineEngineBackend, offline_engine_for_eval
-    except ImportError:  # pragma: no cover - the module imports vllm lazily
-        return Generation(backend=None, path="transformers")
+
+    from smolqwen.inference.engine import OfflineEngineBackend, offline_engine_for_eval
 
     adapters = {ADAPTER_SLOT: resolved.adapter_path} if resolved.adapter_path else None
-    try:
-        engine = offline_engine_for_eval(
-            resolved.path,
-            EvalProfile.from_config(config),
-            revision=resolved.revision,
-            adapter=adapters,
-        )
-    except ImportError as exc:
-        LOG.warning("vllm is not installed (%s); evaluating through transformers instead", exc)
-        return Generation(backend=None, path="transformers")
-    except Exception as exc:
-        if adapters is None:
-            raise
-        # The adapter was refused. Recorded, not fatal: the fallback path evaluates
-        # the same adapter on the same base, only slower.
-        LOG.warning(
-            "vLLM refused the adapter at %s (%s: %s); evaluating adapter-on-base "
-            "through transformers instead",
-            resolved.adapter_path,
-            type(exc).__name__,
-            exc,
-        )
-        return Generation(backend=None, path="transformers")
-
+    engine = offline_engine_for_eval(
+        resolved.path,
+        EvalProfile.from_config(config),
+        revision=resolved.revision,
+        adapter=adapters,
+    )
     path = "vllm+lora" if adapters else "vllm"
     LOG.info("generating through in-process vLLM (%s), dtype %s", path, engine.profile.dtype)
     return Generation(
@@ -128,7 +86,16 @@ def pool_capacity_of(adapter: BenchmarkAdapter) -> int | None:
 
     `None` means "no environment layer", which is BFCL: its steps are in-process
     Python, so the only bound on concurrency is generation width.
+
+    `pool_capacity` is asked first because a pool is built lazily -- EnvScaler's
+    appears on the first `build_prompt`, which is *after* the window is computed --
+    so reading `_pool` alone reported `None` for an adapter that does have a
+    capacity, and `min()` silently degraded to the generation width. The live-pool
+    read stays as the second source: it is the authority once a pool exists.
     """
+    declared = getattr(adapter, "pool_capacity", None)
+    if declared is not None:
+        return int(declared)
     pool = getattr(adapter, "_pool", None)
     if pool is None:
         return None
@@ -163,6 +130,7 @@ def engine_config(config: EvalConfig, *, max_in_flight: int) -> TurnEngineConfig
         temperature=profile.temperature,
         top_p=profile.top_p,
         max_in_flight=max_in_flight,
+        enable_thinking=config.enable_thinking,
         # Evaluation trains nothing, so there is no mask to build. Turning it off is
         # what makes the engine's liveness tracking load-bearing rather than
         # incidental -- see `test_turn_engine_admission.py`.
@@ -178,6 +146,7 @@ def evaluate_batched(
     tokenizer: Any,
     tasks: Sequence[EvalTask] | None = None,
     records: list[TrajectoryRecord] | None = None,
+    label: str = "evaluation",
 ) -> dict[str, dict[str, float]]:
     """Advance every task concurrently through the shared engine, then summarize.
 
@@ -191,17 +160,29 @@ def evaluate_batched(
 
     window = admission_window(config, adapter)
     driver = AdapterDriver(adapter, max_generation_turns=config.max_steps_per_task)
-    engine = TurnEngine(
-        backend=backend,
-        driver=driver,
-        initial_messages=lambda binding: _initial_messages(adapter, binding),
-        render_prefix_ids=_renderer(tokenizer),
-        decode=lambda ids: decode_completion(tokenizer, list(ids)),
-        config=engine_config(config, max_in_flight=window),
-    )
-
     started = time.monotonic()
-    episodes = engine.run([TaskBinding(task) for task in task_list])
+    scores: list[float] = []
+    category_by_task_id = {task.task_id: task.category for task in task_list}
+
+    with progress_task(label, total=len(task_list), unit="tasks", every=1) as advance:
+
+        def on_episode_done(episode: Episode) -> None:
+            result = driver.results.get(episode.episode_id) or AdapterResult(0.0, False)
+            scores.append(result.score)
+            running = sum(scores) / len(scores)
+            category = category_by_task_id.get(episode.scenario_id, episode.scenario_id)
+            advance(f"{category} mean {running:.3f}")
+
+        engine = TurnEngine(
+            backend=backend,
+            driver=driver,
+            initial_messages=lambda binding: _initial_messages(adapter, binding),
+            render_prefix_ids=_renderer(tokenizer, config.enable_thinking),
+            decode=lambda ids: decode_completion(tokenizer, list(ids)),
+            config=engine_config(config, max_in_flight=window),
+            on_episode_done=on_episode_done,
+        )
+        episodes = engine.run([TaskBinding(task) for task in task_list])
     wall_s = time.monotonic() - started
 
     metrics: list[TaskMetrics] = []
@@ -266,13 +247,17 @@ def _initial_messages(adapter: BenchmarkAdapter, binding: Any) -> list[Any]:
     return [parse_message(dict(message)) for message in adapter.build_prompt(binding.task, [])]
 
 
-def _renderer(tokenizer: Any) -> Any:
+def _renderer(tokenizer: Any, enable_thinking: bool = True) -> Any:
     from smolqwen.data.render import render_prefix
     from smolqwen.rollout.rollout_func import encode_ids
 
     def render_prefix_ids(messages: Sequence[Any], tools: Sequence[Mapping[str, Any]]) -> list[int]:
         text = render_prefix(
-            tokenizer, messages, tools=[dict(tool) for tool in tools], add_generation_prompt=True
+            tokenizer,
+            messages,
+            tools=[dict(tool) for tool in tools],
+            add_generation_prompt=True,
+            enable_thinking=enable_thinking,
         )
         return encode_ids(tokenizer, text)
 

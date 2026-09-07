@@ -35,10 +35,12 @@ dependencies = [
 # dev never pull a multi-GB CUDA wheel chain.
 serve = ["vllm==0.26.0"]
 
-# Kernel wheels for the GDN mixer and the fused loss head. All three are
-# mandatory on GPU -- there is no sdpa/eager fallback path, because falling back
-# materializes the dense [batch, seq, 248320] logits tensor and the unfused GDN
-# recurrence, which does not fit in 24 GB.
+# Kernel wheels for the GDN mixer, the causal convolution, and the fused loss
+# head. Those three are mandatory on GPU: falling back materializes the dense
+# [batch, seq, 248320] logits tensor and the unfused GDN recurrence, which does
+# not fit in 24 GB. `flash-attn` is the one exception -- attention does have a
+# working fallback in `sdpa`, and FA2's kernels are Ampere-and-newer anyway, so a
+# Turing card installs this extra and runs sdpa.
 #
 # Nothing here is ever compiled from source. `liger-kernel` and
 # `flash-linear-attention` are pure-Python `py3-none-any` wheels. `flash-attn`

@@ -179,6 +179,10 @@ class TurnEngineConfig:
     fork_threshold_tokens: int = 1024
     max_in_flight: int | None = None
     build_masks: bool = True
+    # Decoding and generation-prompt mode. `False` renders prefixes with the
+    # closed empty think block and reads completions as content; see
+    # `inference/decoding.py` for why the two must switch together.
+    enable_thinking: bool = True
 
 
 @dataclass
@@ -226,6 +230,7 @@ class TurnEngine:
         render_prefix_ids: Callable[[Sequence[Message], Sequence[Mapping[str, Any]]], list[int]],
         decode: Callable[[Sequence[int]], str],
         config: TurnEngineConfig,
+        on_episode_done: Callable[[Episode], None] | None = None,
         clock: Callable[[], float] = time.monotonic,
         wait_for: Callable[..., set[Future[Any]]] | None = None,
     ) -> None:
@@ -235,6 +240,7 @@ class TurnEngine:
         self._render = render_prefix_ids
         self._decode = decode
         self._config = config
+        self._on_episode_done = on_episode_done
         self._clock = clock
         self._wait = wait_for or _default_wait
         # (clock time, episode id, event): the timeline the profiler and the
@@ -368,10 +374,7 @@ class TurnEngine:
                 self._capture_mask(episode)
                 self._begin_close(slot, episode)
             elif action == "destroy":
-                self._live_episode_ids.discard(episode.episode_id)
-                episode.state = "done"
-                self._log(episode.episode_id, "done")
-                self._log(episode.episode_id, "destroyed")
+                self._finish_episode(episode)
 
     _STAGE_NAMES = {
         "create": "env.create",
@@ -484,7 +487,7 @@ class TurnEngine:
         episode.record_timing("parse", parse_finished - parse_started)
         self.stage_intervals.append(("parse", parse_started, parse_finished))
 
-        message = assistant_message(text)
+        message = assistant_message(text, thinking=self._config.enable_thinking)
         episode.messages.append(message)
         self._mirror_scripted(episode, message)
 
@@ -586,12 +589,18 @@ class TurnEngine:
         episode.state = "tool"
         future = self._driver.close(episode)
         if future is None:
-            self._live_episode_ids.discard(episode.episode_id)
-            episode.state = "done"
-            self._log(episode.episode_id, "done")
-            self._log(episode.episode_id, "destroyed")
+            self._finish_episode(episode)
             return
         self._track(slot, episode, "destroy", future)
+
+    def _finish_episode(self, episode: Episode) -> None:
+        """Mark one final episode done and notify consumers without changing state."""
+        self._live_episode_ids.discard(episode.episode_id)
+        episode.state = "done"
+        self._log(episode.episode_id, "done")
+        self._log(episode.episode_id, "destroyed")
+        if self._on_episode_done is not None:
+            self._on_episode_done(episode)
 
     def _capture_mask(self, episode: Episode) -> None:
         builder = self._builders.get(episode.episode_id)

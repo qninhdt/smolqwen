@@ -40,6 +40,20 @@ COMPILE_TARGET_CLASS_SUFFIXES: tuple[str, ...] = ("MLP", "RMSNorm", "Attention")
 # gated-delta-net block is the mixer body itself.
 COMPILE_FORBIDDEN_CLASSES: tuple[str, ...] = ("Qwen3_5GatedDeltaNet",)
 
+# FlashAttention-2's kernels are Ampere-and-newer. Below this, the installed wheel
+# is irrelevant: the only other attention implementation this project runs is sdpa.
+FLASH_ATTENTION_2_MIN_CAPABILITY: tuple[int, int] = (8, 0)
+
+# bf16 tensor cores also arrive with Ampere. Torch emulates bf16 on Turing rather
+# than refusing it, so the capability number -- not `torch.cuda.is_bf16_supported()`
+# -- is what decides whether a run gets bf16 or fp16.
+BF16_MIN_CAPABILITY: tuple[int, int] = (8, 0)
+
+# Qwen3.5's released checkpoint wraps the text model beside a visual tower. The
+# project runs text-only, so `all-linear` must cover the language branch without
+# creating adapters for modules vLLM's text-only LoRA mapper cannot serve.
+TEXT_ONLY_PEFT_EXCLUDE_MODULES = r".*\.visual(?:\..*)?$"
+
 
 @dataclass(frozen=True)
 class Toggle:
@@ -74,6 +88,18 @@ def cuda_available() -> bool:
     except ImportError:  # pragma: no cover - torch is a hard dependency
         return False
     return bool(torch.cuda.is_available())
+
+
+def cuda_capability() -> tuple[int, int] | None:
+    """This host's compute capability, or None when there is no CUDA device."""
+    try:
+        import torch
+    except ImportError:  # pragma: no cover - torch is a hard dependency
+        return None
+    if not torch.cuda.is_available():
+        return None
+    major, minor = torch.cuda.get_device_capability(0)
+    return int(major), int(minor)
 
 
 def flash_attn_available() -> bool:
@@ -120,16 +146,76 @@ def liger_unavailable_guidance() -> str:
     )
 
 
+def resolve_selective_logits(
+    requested: bool, *, liger_enabled: bool, padding_free: bool, supervised_fraction: float | None
+) -> Toggle:
+    """Decide whether the head projects only the supervised positions.
+
+    Liger's fused head is chunked but not selective: it sizes chunks from the row
+    count and runs the GEMM over every position, using the label mask only to zero
+    the loss afterwards. So a full-trajectory shard pays the projection on
+    observation and prompt tokens that contribute nothing.
+
+    `logits_to_keep` as an index tensor is the upstream contract for skipping them
+    (`modeling_qwen3_5.py:1643`), and Liger's `lce_forward` forwards it unchanged.
+    Two hard preconditions, both about correctness rather than speed:
+
+    - **The fused head must be in play.** Without it the dense `[1, T, 248320]`
+      logits tensor is materialized anyway, and slicing rows off it saves nothing
+      that matters at this vocabulary.
+    - **The batch must be padding-free.** `hidden_states[:, index, :]` selects the
+      *same* positions in every row, which is only meaningful when there is one
+      row. Under padded execution each row has its own supervised positions, so a
+      shared index would train the wrong tokens -- silently.
+    """
+    if not requested:
+        return Toggle(
+            "selective_logit_loss",
+            False,
+            "disabled by config; the head projects every position, supervised or not",
+        )
+    if not liger_enabled:
+        return Toggle(
+            "selective_logit_loss",
+            False,
+            "requested but the fused head is off; dense logits are materialized "
+            "regardless, so selecting rows saves nothing",
+        )
+    if not padding_free:
+        return Toggle(
+            "selective_logit_loss",
+            False,
+            "requested but this run uses padded batches; one shared position index "
+            "cannot describe per-row supervision without training wrong tokens",
+        )
+    measured = (
+        f"; shard supervises {supervised_fraction:.1%} of positions"
+        if supervised_fraction is not None
+        else ""
+    )
+    return Toggle(
+        "selective_logit_loss",
+        True,
+        f"head projects supervised positions only, via logits_to_keep{measured}",
+    )
+
+
 def resolve_attn_implementation(
     requested: str,
     *,
     has_flash_attn: bool | None = None,
     has_cuda: bool | None = None,
+    capability: tuple[int, int] | None = None,
 ) -> Toggle:
     """Pick an attention implementation, downgrading with a recorded reason.
 
     The `Toggle.name` is the implementation actually selected, so the caller reads
     the decision off one object rather than re-deriving it.
+
+    Only two implementations are ever selected for `flash_attention_2`: the
+    official FlashAttention-2 wheel on Ampere-plus, and `sdpa` everywhere else.
+    FA2's kernels are Ampere-and-newer, so on Turing the wheel being installed is
+    not enough -- the capability check is the deciding one.
     """
     flash = flash_attn_available() if has_flash_attn is None else has_flash_attn
     cuda = cuda_available() if has_cuda is None else has_cuda
@@ -138,6 +224,16 @@ def resolve_attn_implementation(
         return Toggle(requested, True, f"requested explicitly: {requested}")
     if not cuda:
         return Toggle("sdpa", False, "flash_attention_2 requested but no CUDA device; using sdpa")
+    if capability is None:
+        capability = cuda_capability()
+    if capability is not None and capability < FLASH_ATTENTION_2_MIN_CAPABILITY:
+        return Toggle(
+            "sdpa",
+            False,
+            "flash_attention_2 requested but its kernels need compute capability "
+            f"{FLASH_ATTENTION_2_MIN_CAPABILITY[0]}.{FLASH_ATTENTION_2_MIN_CAPABILITY[1]}; "
+            f"sm{capability[0]}{capability[1]} uses sdpa",
+        )
     if not flash:
         return Toggle(
             "sdpa",
@@ -149,6 +245,32 @@ def resolve_attn_implementation(
         True,
         "flash_attention_2 on the 6 full-attention layers; GDN layers use their own kernels",
     )
+
+
+def resolve_precision(bf16_requested: bool, *, capability: tuple[int, int] | None = None) -> Toggle:
+    """Resolve the effective compute dtype for a training run.
+
+    BF16 tensor cores arrive with Ampere. On Turing torch still *accepts* bf16 and
+    emulates it, which is the wrong kind of quiet: the run is slower than FP16 and
+    the numerics are not the BF16 ones an Ampere run produced. So a pre-Ampere card
+    resolves to FP16 with the downgrade recorded in the ledger.
+
+    Returned as a `Toggle` so the reason travels with the decision; the effective
+    dtype name is `Toggle.name`.
+    """
+    if not bf16_requested:
+        return Toggle("float32", True, "bf16 disabled by config; running float32")
+    if capability is None:
+        capability = cuda_capability()
+    if capability is not None and capability < BF16_MIN_CAPABILITY:
+        return Toggle(
+            "float16",
+            False,
+            f"bf16 requested but sm{capability[0]}{capability[1]} has no bf16 tensor cores; "
+            "running float16 under GradScaler. Numerics differ from a bf16 run -- "
+            "do not compare the two as one experiment",
+        )
+    return Toggle("bfloat16", True, "bf16 on a card with bf16 tensor cores")
 
 
 def _is_excluded(name: str, class_name: str, exclude_patterns: Iterable[str]) -> bool:
@@ -220,19 +342,26 @@ def apply_regional_compile(
 
 
 def cast_adapters(model: Any, dtype_name: str) -> Toggle:
-    """Cast trainable (LoRA) parameters to `dtype_name`.
+    """Cast trainable (LoRA) parameters to the safe effective dtype.
 
     PEFT upcasts adapters to fp32 by default, which exists for low-bit QLoRA
     bases. With all-linear targets on a bf16 base it instead forces an
-    upcast/downcast plus an fp32 GEMM at every linear.
+    upcast/downcast plus an fp32 GEMM at every linear. FP16 is different:
+    Accelerate's GradScaler rejects FP16 gradients, so FP16 mixed-precision
+    training must retain trainable adapters in FP32.
     """
     import torch
 
-    if dtype_name == "float32":
+    if dtype_name in {"float16", "float32"}:
+        detail = (
+            "adapters left in fp32; GradScaler rejects FP16 gradients"
+            if dtype_name == "float16"
+            else "adapters left in fp32 (PEFT default); every linear pays an fp32 GEMM"
+        )
         return Toggle(
             "adapter_dtype",
             False,
-            "adapters left in fp32 (PEFT default); every linear pays an fp32 GEMM",
+            detail,
         )
 
     dtype = getattr(torch, dtype_name)

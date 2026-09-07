@@ -104,6 +104,30 @@ def test_http_policy_accepts_a_versioned_api_base_without_duplicate_path() -> No
     assert policy.completion_url == "http://localhost:8000/v1/chat/completions"
 
 
+def test_http_policy_sends_chat_template_kwargs_only_when_thinking_is_disabled() -> None:
+    """vLLM reads `chat_template_kwargs` to render the request's prompt; standard
+    OpenAI endpoints reject unknown body fields, so the key ships only when the
+    non-thinking default needs overriding."""
+    seen: list[Any] = []
+    policy = HttpPolicy(
+        "http://localhost:8000",
+        revision=REVISION,
+        enable_thinking=False,
+        opener=lambda request, **_: _record_request(seen, request, _Response()),
+    )
+    policy.generate([{"role": "user", "content": "hi"}], [])
+    assert json.loads(seen[0].data)["chat_template_kwargs"] == {"enable_thinking": False}
+
+    seen.clear()
+    thinking = HttpPolicy(
+        "http://localhost:8000",
+        revision=REVISION,
+        opener=lambda request, **_: _record_request(seen, request, _Response()),
+    )
+    thinking.generate([{"role": "user", "content": "hi"}], [])
+    assert "chat_template_kwargs" not in json.loads(seen[0].data)
+
+
 def test_http_policy_rejects_a_moving_revision_name() -> None:
     with pytest.raises(ValueError, match="revision sha"):
         HttpPolicy("http://localhost:8000", revision="main")

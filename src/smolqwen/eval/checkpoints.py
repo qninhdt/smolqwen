@@ -2,11 +2,8 @@
 
 Two pinning holes existed. `resolve_eval_checkpoint` (`artifacts.py:208`) refuses an
 unpinned checkpoint read and was tested but never wired to the `evaluate` command,
-so a Hub-hosted checkpoint reached `from_pretrained` with whatever `--revision`
-happened to be, and a concurrent training push could change what a tag meant
-between two runs. And adapter-revision pinning lived only in
-`TransformersPolicy.__init__` (`policies.py:217-219`), so the vLLM adapter path had
-none at all.
+so a Hub-hosted checkpoint could change between runs. Adapter-revision pinning was
+also missing from the vLLM path.
 
 Both checks belong at the boundary where weights enter, which is here.
 """

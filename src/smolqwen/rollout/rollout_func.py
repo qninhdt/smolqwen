@@ -135,7 +135,11 @@ def make_turn_engine(
         messages: Sequence[Message], tools: Sequence[Mapping[str, Any]]
     ) -> list[int]:
         text = render_prefix(
-            tokenizer, messages, tools=[dict(tool) for tool in tools], add_generation_prompt=True
+            tokenizer,
+            messages,
+            tools=[dict(tool) for tool in tools],
+            add_generation_prompt=True,
+            enable_thinking=config.enable_thinking,
         )
         return encode_ids(tokenizer, text)
 

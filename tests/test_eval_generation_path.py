@@ -9,10 +9,8 @@ which path the *command* took.
 So the first test here is a wiring assertion: with an engine available, the batched
 path runs and the serial one does not. It fails on the pre-fix code.
 
-The rest cover the three recorded fallbacks. Each has a real cause -- an endpoint,
-a host without vllm, an adapter vLLM refuses -- and each must be visible in the
-report rather than inferred, because a base-model row and an adapter-on-base row
-generated on different paths are still being compared in one table.
+The remaining cases cover the supported HTTP path and prove that a missing vLLM
+runtime or a refused adapter fails local evaluation instead of changing engines.
 """
 
 from __future__ import annotations
@@ -30,6 +28,12 @@ from smolqwen.eval import runner
 from smolqwen.eval.batched import ADAPTER_SLOT, Generation, generation_for
 from smolqwen.eval.checkpoints import ResolvedCheckpoint
 from smolqwen.eval.manifest import EvalManifest
+from smolqwen.eval.serving_pairing import (
+    QualityResult,
+    ServingPairingError,
+    assert_quality_matches_serving,
+)
+from smolqwen.inference.engine import AdapterCapabilityError
 from smolqwen.inference.profiles import resolve_dtype
 
 SHA = "a" * 40
@@ -105,15 +109,13 @@ def test_evaluate_generates_through_the_engine_when_one_can_be_built(
     assert recorded["backend"] == "vllm"
 
 
-def test_no_policy_is_loaded_when_the_engine_is_used(
+def test_no_http_policy_is_loaded_when_the_engine_is_used(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """`TransformersPolicy.__init__` loads weights. Building both wastes the card."""
-
     def refuse_policy(**_k: Any) -> Any:
-        raise AssertionError("a policy was constructed while an engine was available")
+        raise AssertionError("an HTTP policy was constructed for local evaluation")
 
-    monkeypatch.setattr(runner, "load_policy", refuse_policy)
+    monkeypatch.setattr(runner, "load_http_policy", refuse_policy)
     monkeypatch.setattr(
         runner,
         "generation_for",
@@ -164,31 +166,21 @@ def test_an_endpoint_keeps_the_http_policy(tmp_path: Path) -> None:
     assert generation.path == "http"
 
 
-def test_a_host_without_vllm_falls_back_and_says_so(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
+def test_a_host_without_vllm_fails_local_evaluation(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """vllm lives in the `serve`/`colab` extras and is absent from CI by design."""
-
     def no_vllm(*_a: Any, **_k: Any) -> Any:
-        raise ImportError("No module named 'vllm'")
+        raise ModuleNotFoundError("No module named 'vllm'", name="vllm")
 
-    monkeypatch.setattr(batched_module, "EvalProfile", SimpleNamespace(from_config=lambda _c: None))
     monkeypatch.setattr("smolqwen.inference.engine.offline_engine_for_eval", no_vllm, raising=True)
     resolved = ResolvedCheckpoint(path=str(tmp_path), revision=SHA, source="local")
-    with caplog.at_level(logging.WARNING, logger="smolqwen.eval.batched"):
-        generation = generation_for(EvalConfig(), resolved)
-    assert (generation.backend, generation.path) == (None, "transformers")
-    assert "vllm is not installed" in caplog.text
+    with pytest.raises(ModuleNotFoundError, match="vllm"):
+        generation_for(EvalConfig(), resolved)
 
 
-def test_a_refused_adapter_falls_back_to_adapter_on_base(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
+def test_a_refused_adapter_fails_local_evaluation(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """`all-linear` emits LoRA weights for GDN projections; vLLM may refuse them.
-
-    `TransformersPolicy` is the only path that evaluates an adapter without merging
-    it, which is the whole reason it was kept.
-    """
     adapter_dir = tmp_path / "adapter"
     adapter_dir.mkdir()
     seen: list[dict[str, str] | None] = []
@@ -197,9 +189,12 @@ def test_a_refused_adapter_falls_back_to_adapter_on_base(
         model: Any, profile: Any, *, revision: Any = None, adapter: Any = None, **_: Any
     ) -> Any:
         seen.append(adapter)
-        raise ValueError("unsupported LoRA weight for architecture Qwen3_5ForCausalLM")
+        raise AdapterCapabilityError(
+            "LoRA target module model.layers.0.linear_attn (Qwen3_5GatedDeltaNet) matched "
+            "the deployment configuration but could not be wrapped by any LoRA layer "
+            "implementation. target_modules=['all-linear']"
+        )
 
-    monkeypatch.setattr(batched_module, "EvalProfile", SimpleNamespace(from_config=lambda _c: None))
     monkeypatch.setattr("smolqwen.inference.engine.offline_engine_for_eval", refuse, raising=True)
     resolved = ResolvedCheckpoint(
         path=str(tmp_path),
@@ -208,12 +203,112 @@ def test_a_refused_adapter_falls_back_to_adapter_on_base(
         adapter_revision="b" * 40,
         source="local",
     )
-    with caplog.at_level(logging.WARNING, logger="smolqwen.eval.batched"):
-        generation = generation_for(EvalConfig(), resolved)
-    assert (generation.backend, generation.path) == (None, "transformers")
-    assert "refused the adapter" in caplog.text
+    with pytest.raises(AdapterCapabilityError, match="could not be wrapped"):
+        generation_for(EvalConfig(), resolved)
     # The adapter reached the engine under the one slot `evaluate` uses.
     assert seen == [{ADAPTER_SLOT: str(adapter_dir)}]
+
+
+def test_a_rank_mismatch_is_not_treated_as_a_capability_refusal(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """vLLM's default `max_lora_rank` is 16 and the configs train at 32.
+
+    A rank mismatch must surface directly rather than being hidden behind another
+    inference implementation.
+    """
+    adapter_dir = tmp_path / "adapter"
+    adapter_dir.mkdir()
+
+    def refuse(*_a: Any, **_k: Any) -> Any:
+        raise ValueError("LoRA rank 32 is greater than max_lora_rank 16.")
+
+    monkeypatch.setattr(
+        batched_module,
+        "EvalProfile",
+        SimpleNamespace(from_config=lambda _c: SimpleNamespace(dtype="float16")),
+    )
+    monkeypatch.setattr("smolqwen.inference.engine.offline_engine_for_eval", refuse, raising=True)
+    resolved = ResolvedCheckpoint(
+        path=str(tmp_path),
+        revision=SHA,
+        adapter_path=str(adapter_dir),
+        adapter_revision="b" * 40,
+        source="local",
+    )
+    with pytest.raises(ValueError, match="max_lora_rank"):
+        generation_for(EvalConfig(), resolved)
+
+
+def test_an_unrelated_import_error_is_not_treated_as_missing_vllm(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    def broken_runtime(*_a: Any, **_k: Any) -> Any:
+        raise ImportError("cannot import name 'LLM' from a broken vllm dependency")
+
+    monkeypatch.setattr(
+        batched_module,
+        "EvalProfile",
+        SimpleNamespace(from_config=lambda _c: SimpleNamespace(dtype="float16")),
+    )
+    monkeypatch.setattr(
+        "smolqwen.inference.engine.offline_engine_for_eval", broken_runtime, raising=True
+    )
+    resolved = ResolvedCheckpoint(path=str(tmp_path), revision=SHA, source="local")
+    with pytest.raises(ImportError, match="broken vllm dependency"):
+        generation_for(EvalConfig(), resolved)
+
+
+def test_a_corrupt_adapter_is_not_treated_as_a_capability_refusal(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    adapter_dir = tmp_path / "adapter"
+    adapter_dir.mkdir()
+
+    def corrupt(*_a: Any, **_k: Any) -> Any:
+        raise ValueError("adapter_model.safetensors is corrupt")
+
+    monkeypatch.setattr(
+        batched_module,
+        "EvalProfile",
+        SimpleNamespace(from_config=lambda _c: SimpleNamespace(dtype="float16")),
+    )
+    monkeypatch.setattr("smolqwen.inference.engine.offline_engine_for_eval", corrupt, raising=True)
+    resolved = ResolvedCheckpoint(
+        path=str(tmp_path),
+        revision=SHA,
+        adapter_path=str(adapter_dir),
+        adapter_revision="b" * 40,
+        source="local",
+    )
+    with pytest.raises(ValueError, match="corrupt"):
+        generation_for(EvalConfig(), resolved)
+
+
+def test_an_adapter_oom_is_not_treated_as_a_capability_refusal(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    adapter_dir = tmp_path / "adapter"
+    adapter_dir.mkdir()
+
+    def oom(*_a: Any, **_k: Any) -> Any:
+        raise RuntimeError("CUDA out of memory while loading LoRA")
+
+    monkeypatch.setattr(
+        batched_module,
+        "EvalProfile",
+        SimpleNamespace(from_config=lambda _c: SimpleNamespace(dtype="float16")),
+    )
+    monkeypatch.setattr("smolqwen.inference.engine.offline_engine_for_eval", oom, raising=True)
+    resolved = ResolvedCheckpoint(
+        path=str(tmp_path),
+        revision=SHA,
+        adapter_path=str(adapter_dir),
+        adapter_revision="b" * 40,
+        source="local",
+    )
+    with pytest.raises(RuntimeError, match="out of memory"):
+        generation_for(EvalConfig(), resolved)
 
 
 def test_a_failure_with_no_adapter_involved_is_not_swallowed(
@@ -224,7 +319,11 @@ def test_a_failure_with_no_adapter_involved_is_not_swallowed(
     def oom(*_a: Any, **_k: Any) -> Any:
         raise RuntimeError("CUDA out of memory")
 
-    monkeypatch.setattr(batched_module, "EvalProfile", SimpleNamespace(from_config=lambda _c: None))
+    monkeypatch.setattr(
+        batched_module,
+        "EvalProfile",
+        SimpleNamespace(from_config=lambda _c: SimpleNamespace(dtype="float16")),
+    )
     monkeypatch.setattr("smolqwen.inference.engine.offline_engine_for_eval", oom, raising=True)
     resolved = ResolvedCheckpoint(path=str(tmp_path), revision=SHA, source="local")
     with pytest.raises(RuntimeError, match="out of memory"):
@@ -276,6 +375,90 @@ def test_the_recorded_dtype_comes_from_the_engine_not_a_constant(
     config = EvalConfig(adapters=("fixture",), output_dir=str(tmp_path))
     assert runner.run_evaluation(config, _args(tmp_path)) == 0
     assert captured[0].recorded_free["dtype"] == "float16"
+
+
+SERVING = {
+    "dtype": "bfloat16",
+    "quantization": None,
+    "speculative_decoding": None,
+    "kv_budget": 0.25,
+    "max_num_seqs": 48,
+    "max_num_batched_tokens": 8192,
+    "chunked_prefill": True,
+    "prefix_caching": True,
+}
+
+
+def test_the_engine_s_serving_config_reaches_the_report_and_pairs(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`--require-serving-match` had nothing to match against.
+
+    The eight serving-detail flags were deleted in favour of recording what ran, but
+    nothing replaced them as a source, so every field stayed `None` and the guard
+    refused every real serving row on six of eight fields. The engine is the only
+    party that knows what it resolved, so it is the source.
+    """
+    engine = SimpleNamespace(
+        shutdown=lambda: None,
+        profile=SimpleNamespace(dtype="bfloat16"),
+        serving_config=lambda: dict(SERVING),
+    )
+    monkeypatch.setattr(
+        runner,
+        "generation_for",
+        lambda *_a, **_k: Generation(backend=object(), path="vllm", engine=engine),
+    )
+    monkeypatch.setattr(runner, "_tokenizer_for", lambda *_a, **_k: object())
+    monkeypatch.setattr(runner, "create_adapter", lambda *_a, **_k: _Adapter())
+    monkeypatch.setattr(runner, "evaluate_batched", lambda *_a, **_k: {"fixture": dict(METRICS)})
+    captured = _captured_manifest(monkeypatch, tmp_path)
+
+    config = EvalConfig(adapters=("fixture",), output_dir=str(tmp_path))
+    assert runner.run_evaluation(config, _args(tmp_path)) == 0
+
+    recorded = captured[0].recorded_free
+    assert {field: recorded[field] for field in SERVING} == SERVING
+
+    # The point of recording them: a throughput row measured under this config pairs,
+    # and one measured under another does not.
+    quality = QualityResult(score=1.0, manifest=captured[0])
+    assert_quality_matches_serving(dict(SERVING), quality)
+    with pytest.raises(ServingPairingError, match="max_num_seqs"):
+        assert_quality_matches_serving({**SERVING, "max_num_seqs": 128}, quality)
+
+
+def test_a_serving_config_read_that_fails_is_logged_not_fatal(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Provenance is evidence; a scored run is the deliverable."""
+
+    def refuse() -> dict[str, Any]:
+        raise RuntimeError("vllm_config moved")
+
+    engine = SimpleNamespace(
+        shutdown=lambda: None,
+        profile=SimpleNamespace(dtype="float16"),
+        serving_config=refuse,
+    )
+    monkeypatch.setattr(
+        runner,
+        "generation_for",
+        lambda *_a, **_k: Generation(backend=object(), path="vllm", engine=engine),
+    )
+    monkeypatch.setattr(runner, "_tokenizer_for", lambda *_a, **_k: object())
+    monkeypatch.setattr(runner, "create_adapter", lambda *_a, **_k: _Adapter())
+    monkeypatch.setattr(runner, "evaluate_batched", lambda *_a, **_k: {"fixture": dict(METRICS)})
+    captured = _captured_manifest(monkeypatch, tmp_path)
+
+    config = EvalConfig(adapters=("fixture",), output_dir=str(tmp_path))
+    with caplog.at_level(logging.WARNING, logger="smolqwen.eval.runner"):
+        assert runner.run_evaluation(config, _args(tmp_path)) == 0
+
+    assert "serving config" in caplog.text
+    # Still says which dtype ran; only the server-side detail is unknown.
+    assert captured[0].recorded_free["dtype"] == "float16"
+    assert captured[0].recorded_free["max_num_seqs"] is None
 
 
 class _Adapter:

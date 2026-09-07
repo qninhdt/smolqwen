@@ -1,22 +1,21 @@
 # T4 sizing profile -- 16 GB, sm75 (Turing).
 #
-# **A wiring-validation profile, not a training target.** It exists so the code
-# paths can be exercised on a free Colab T4 before an L4 session is spent, and no
-# number measured under it transfers to `l4.yaml`. Three hardware facts drive that:
+# **A separate padded-FP16 SFT profile.** It lets the full-trajectory trainer run
+# on a free Colab T4 before an L4 session is spent; no number measured under it
+# transfers to `l4.yaml`. Three hardware facts drive that:
 #
-# - **No bf16 tensor cores.** sm75 predates them, so vLLM refuses bf16 and
-#   `EvalProfile.dtype` resolves to float16 with the downgrade logged. fp16 has a
-#   narrower exponent range, so a T4 score and an L4 score are not one experiment.
-# - **No FlashAttention 2.** FA2 is Ampere and newer; Dao-AILab points Turing at
-#   the separate `flash-attention-turing` project, which has no prebuilt wheel for
-#   this torch pin. Without a varlen flash kernel, `cu_seq_lens` is ignored by
-#   sdpa/eager/flex alike -- measured: mutating one trajectory in a padding-free
-#   batch changes another's logits by 0.38 -- so `train-sft` correctly refuses to
-#   run here (`assert_padding_free_runtime`).
+# - **No bf16 tensor cores.** sm75 predates them, so both the trainer and vLLM
+#   resolve to float16 with the downgrade logged. fp16 has a narrower exponent
+#   range, so a T4 score and an L4 score are not one experiment.
+# - **No FlashAttention 2.** FA2's kernels are Ampere and newer, so SFT resolves
+#   to `sdpa` with right-padded batches and a real attention mask. That is a
+#   correct attention path, not an approximation -- but it is a different one, and
+#   padding costs are included in `max_tokens_per_microbatch` rather than hidden
+#   behind the padding-free sampler.
 # - **16 GB, not 24.** Every envelope number below is smaller for that reason
 #   alone and says nothing about the L4 envelope plan `260831-0808` owns.
 #
-# Sizing ONLY, same closed schema as the other profiles: a semantic field here
+# Sizing only, same closed schema as the other profiles: a semantic field here
 # fails at load because ProfileConfig is `extra="forbid"`.
 
 # 16,384 rather than the 32,768 default. MEASURED on a T4, not estimated: at 8,192
@@ -31,8 +30,9 @@
 # never seeded from here.
 max_seq_length: 16384
 
-# --- SFT envelope. Unreachable on this card (`train-sft` refuses without FA2), so
-# these are the smallest values that keep the config coherent rather than a target.
+# --- SFT envelope for the padded FP16 sdpa path. The cap and actual fit still need
+# live measurement on the target T4; these values are intentionally separate from
+# the 32K padding-free L4/A100 envelope.
 micro_batch: 1
 grad_accum: 8
 max_tokens_per_microbatch: 16384
@@ -41,12 +41,12 @@ max_tokens_per_microbatch: 16384
 # and shares it with whatever else is resident.
 generation_concurrency: 4
 active_pool_multiplier: 2
-# MEASURED: 0.20 of 14.56 GB is 2.9 GB and the fp16 weights alone are 4.25 GB, so
-# this value cannot load the model at all when the engine is alone on the card. It is
-# sized for an engine sharing the card with a trainer, which is the in-training eval
-# case. A solo `evaluate` run needs to override it (~0.80); that asymmetry is real and
-# is why the number is annotated rather than "fixed".
-vllm_kv_fraction: 0.20
+# vLLM's fraction is measured against total VRAM, while colocated trainer weights
+# already occupy the card. 0.20 (2.91 GB) is below the 4.25 GB fp16 weight footprint;
+# 0.45 still left 0.0 GiB for the required 4K KV cache after the trainer was loaded.
+# 0.65 leaves a small rollout KV pool while keeping sleep-mode training viable; solo
+# `evaluate` still overrides this to 0.80 because it has the whole card.
+vllm_kv_fraction: 0.65
 
 # CUDA graph capture costs memory that a 16 GB card evaluating at 8K context does
 # not have to spare. Slower per step, and step latency is not what this profile

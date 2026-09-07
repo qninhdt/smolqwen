@@ -68,11 +68,12 @@ released model is the wrapper shape (`Qwen3_5ForConditionalGeneration`, `text_co
 + `vision_config`). A wrapper-shaped fixture then failed on a missing
 `preprocessor_config.json`.
 
-**Consequence for `tests/test_vllm_adapter_capability.py`: it cannot pass on any
-card, including the L4.** It is a Phase 2 GPU criterion built on
-`write_tiny_checkpoint`. Either the fixture gains the wrapper config plus a processor,
-or the test points at the released model. Left open rather than patched here — it is
-Phase 2's criterion and the fix should be chosen with that phase's intent in view.
+**Consequence for `tests/test_vllm_adapter_capability.py`: it could not pass on any
+card, including the L4, with the original fixture.** It was a Phase 2 GPU criterion
+built on `write_tiny_checkpoint`; the follow-up now gives it a tiny released-shaped
+`Qwen3_5ForConditionalGeneration` wrapper and the processor metadata vLLM loads.
+The fixture shape is covered by `tests/test_vllm_fixture.py`; the actual adapter
+acceptance branch remains a Phase 10 measurement.
 
 ## Numbers for Phase 10
 
@@ -84,17 +85,37 @@ Sleep mode freed 11.56 GiB, 0.85 GiB still in use
 took 4.45 s to fall asleep
 ```
 
-That is a ~93% release. It answers Phase 2's sleep/wake criterion **on sm75 at 0.82
-utilisation** — not on an L4 at the profile's fraction, which is still Phase 10's to
-measure. Note `torch.cuda.memory_allocated()` in the parent process read 0.00 GB
-throughout: vLLM V1 runs the engine in a spawned `EngineCore` process, so the parent's
-allocator sees nothing. **`tests/test_sft_bench_eval_memory_guard.py` reads exactly
-that counter and will therefore measure nothing** — it needs the engine's reported
-numbers or an in-process check.
+That is a ~93% release from vLLM's own allocator log, **on sm75 at 0.82 utilisation**.
+It is rehearsal evidence only: it does not close the new Phase 2 worker-side
+`memory_allocated()` criterion or measure an L4 at the profile's fraction. Note
+`torch.cuda.memory_allocated()` in the parent process read 0.00 GB throughout: vLLM
+V1 runs the engine in a spawned `EngineCore` process, so the parent's allocator sees
+nothing. The memory guard now asks the engine workers for their allocator readings
+through `OfflineEngine.memory_allocated_bytes()`; the live L4 measurement is still
+pending.
 
 Backends selected on sm75, for contrast with the L4 run: `TRITON_ATTN` (FA2 refused,
 `compute capability >= 8` required), `TORCH_SDPA` for the vision encoder,
 Triton/FLA for the GDN prefill.
+
+## Follow-up contract verification — 2026-09-03
+
+After the two fixture/runtime fixes above, the same locked T4 environment reran the
+GPU-marked vLLM checks with result `s..`:
+
+- A direct `OfflineEngine` construction resolved its dataclass `bfloat16` default to
+  `float16` on sm75, then built and generated successfully. This closes the direct
+  caller portability bug; it does not make T4 numerically equivalent to an L4.
+- vLLM injected `MemoryWorkerExtension` and the worker-side RPC completed without
+  insecure callable serialization. The tiny fixture's summed worker reading changed
+  from `5,408,295,424` to `5,408,279,040` bytes after sleep (16 KiB, `0.0 MiB`
+  rounded), while vLLM's own allocator log reported `3.38 GiB` freed. This validates
+  the accounting wiring, not the L4 release/envelope criterion.
+- The non-zero `all-linear` adapter registered, but deterministic adapted/base
+  probes had no observable token or logprob delta. The central guard raised
+  `AdapterCapabilityError`, the explicit signal used to select the Transformers
+  fallback; the GPU test recorded that refusal. Unloaded-adapter generation and
+  sleep/wake both passed. Adapter acceptance on the target L4 remains unmeasured.
 
 ## Operational notes
 
@@ -115,7 +136,7 @@ Triton/FLA for the GDN prefill.
 ## Still needs the L4
 
 Unchanged by this session: the 32K envelope beside a sleeping engine, the
-non-monotonic asleep reading (and the memory-guard rewrite above), the 10% cost bound
-for both stages, baseline agreement, and the Colab non-TTY rendering check. The T4
+non-monotonic asleep reading on an L4, the 10% cost bound for both stages, baseline
+agreement, and the Colab non-TTY rendering check. The T4
 cannot run `train-sft` at all — FA2 is Ampere and newer, and without a varlen kernel
 nothing reads `cu_seq_lens`.

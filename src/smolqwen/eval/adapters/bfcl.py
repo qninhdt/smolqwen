@@ -24,9 +24,10 @@ from typing import Any
 from pydantic import Field
 
 from smolqwen.config_models import EvalConfig, StrictModel
+from smolqwen.data.loader import sha256_of
 from smolqwen.data.tool_call_xml import parse_tool_calls
 from smolqwen.eval.adapters.base import AdapterResult, BenchmarkAdapter, EvalTask, StepResult
-from smolqwen.eval.manifest import hash_json, sha256_file
+from smolqwen.eval.manifest import hash_json
 from smolqwen.eval.metrics import TaskMetrics, aggregate
 from smolqwen.eval.tool_calls import (
     is_completion_signal,
@@ -302,16 +303,30 @@ class BfclMultiTurnAdapter:
             (path for path in (data_dir, *data_dir.parents) if (path / ".git").exists()),
             None,
         )
-        if git_root is None:
-            raise RuntimeError(f"BFCL data directory is not inside a git checkout: {data_dir}")
-        completed = subprocess.run(
-            ["git", "-C", str(git_root), "rev-parse", "HEAD"],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        checkout_revision = completed.stdout.strip()
+        checkout_revision: str | None = None
+        if git_root is not None:
+            try:
+                completed = subprocess.run(
+                    ["git", "-C", str(git_root), "rev-parse", "HEAD"],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+            except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+                # A tar archive may preserve a submodule's `.git` pointer without
+                # the parent object database. The configured commit is still pinned
+                # and the content hash below protects the actual input files.
+                pass
+            else:
+                checkout_revision = completed.stdout.strip()
+        if checkout_revision is None:
+            if not self.benchmark_commit:
+                raise RuntimeError(
+                    f"BFCL data directory is not inside a usable git checkout: {data_dir}; "
+                    "a pinned benchmark_commit is required for archived sources"
+                )
+            checkout_revision = self.benchmark_commit
         if self.benchmark_commit and checkout_revision != self.benchmark_commit:
             raise RuntimeError(
                 f"BFCL checkout revision {checkout_revision} does not match configured pin "
@@ -333,7 +348,7 @@ class BfclMultiTurnAdapter:
                 raise FileNotFoundError(f"BFCL manifest input missing: {path}")
             digest.update(str(path.relative_to(data_dir)).encode())
             digest.update(b"\0")
-            digest.update(bytes.fromhex(sha256_file(path)))
+            digest.update(bytes.fromhex(sha256_of(path)))
         return checkout_revision, digest.hexdigest()
 
     @staticmethod

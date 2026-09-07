@@ -94,6 +94,24 @@ score or a multi-turn quality claim**, and the generated composition file record
 exactly what was sampled. `--skip-chat-template` is required because the prompts are
 already rendered.
 
+The template comes from the pinned base model in `configs/base/sft.yaml`, at its
+recorded revision — not from `EvalConfig.http_model`, which is the name the server
+answers to (`--served-model-name smolqwen`) and never a repo id. A merged checkpoint
+carries the base tokenizer verbatim, so rendering against the base renders what the
+server will see. The workload's render mode follows `enable_thinking` in
+`configs/base/eval.yaml` — set it to `false` to benchmark a non-reasoning
+endpoint's prompt shape.
+
+### Non-reasoning serving
+
+The server needs no change: `--reasoning-parser qwen3` tolerates the empty think
+block, and the render mode is a per-request property. A non-reasoning client
+sends `"chat_template_kwargs": {"enable_thinking": false}` in its chat
+completion request (the eval HTTP path does exactly this when its eval config
+says so); a thinking client sends `{"enable_thinking": true}`. The mode a score
+was measured under lives in the eval manifest's invariant set, not in the server
+configuration.
+
 The Compose service runs this same command:
 
 ```sh
@@ -118,6 +136,14 @@ identical invariants while being different experiments.
 compares `recorded_free` instead — dtype, quantization, speculative decoding, KV
 budget, batching limits, chunked prefill, prefix caching — and refuses the pairing on
 any difference. `smolqwen evaluate --require-serving-match <report.json>` applies it.
+
+Those eight fields are read off the in-process engine's resolved `VllmConfig`, which
+is the only party that knows what it ran at: vLLM resolves `max_num_batched_tokens`
+and the chunked-prefill default itself. An `--endpoint` evaluation records them as
+unknown, and the guard compares only what the throughput measurement recorded, so an
+unknown makes no claim rather than a false one — but it also means a quality score
+worth pairing has to come from a local engine run, not from re-scoring through the
+endpoint.
 The evaluation workflow and the recorded fields are documented in
 [`evaluation.md`](evaluation.md).
 

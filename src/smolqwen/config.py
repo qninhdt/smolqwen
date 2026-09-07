@@ -216,11 +216,14 @@ def resolve(
 
     directory = config_dir or DEFAULT_CONFIG_DIR
     base_path = config_path or (directory / "base" / f"{stage}.yaml")
-    merged: dict[str, Any] = deep_merge(load_budgets(budgets_path), _load_yaml(base_path))
+    budget_overlay = load_budgets(budgets_path) if "profile" in model.model_fields else {}
+    merged: dict[str, Any] = deep_merge(budget_overlay, _load_yaml(base_path))
 
     if profile is not None:
         if profile not in PROFILES:
             raise ConfigError(f"unknown profile '{profile}'; expected one of {', '.join(PROFILES)}")
+        if "profile" not in model.model_fields:
+            raise ConfigError(f"stage '{stage}' does not accept a GPU profile")
         profile_payload = _load_yaml(directory / "profiles" / f"{profile}.yaml")
         # A profile YAML holds sizing fields at its top level; nest them under the
         # stage model's `profile` section so a profile cannot reach a semantic key.
@@ -241,7 +244,7 @@ def resolve(
     except ValidationError as exc:
         raise ConfigError(f"invalid {stage} config: {exc}") from exc
 
-    budgets = load_budgets(budgets_path)
+    budgets = load_budgets(budgets_path) if "profile" in model.model_fields else {}
     violations = _profile_cap_violations(getattr(resolved, "profile", ProfileConfig()), budgets)
     if violations:
         raise ConfigError("; ".join(violations))

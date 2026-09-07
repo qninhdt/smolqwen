@@ -88,13 +88,22 @@ def merge_adapter(
     """Fold the adapter into the base weights and write a standalone checkpoint."""
     import torch
     from peft import PeftModel
-    from transformers import AutoModelForCausalLM
+    from transformers import AutoConfig, AutoModelForCausalLM
 
     adapter = find_adapter_dir(adapter_dir)
     target = Path(output_dir)
     target.mkdir(parents=True, exist_ok=True)
 
-    base = AutoModelForCausalLM.from_pretrained(
+    model_class: Any = AutoModelForCausalLM
+    model_config = AutoConfig.from_pretrained(base_model_id, revision=base_revision)
+    if getattr(model_config, "model_type", None) == "qwen3_5":
+        # Qwen3.5's vLLM path resolves the multimodal wrapper even for text-only
+        # input. AutoModelForCausalLM selects Qwen3_5TextConfig and saves a
+        # text-only checkpoint that vLLM cannot load after a merge.
+        from transformers import AutoModelForImageTextToText
+
+        model_class = AutoModelForImageTextToText
+    base = model_class.from_pretrained(
         base_model_id,
         revision=base_revision,
         dtype=getattr(torch, dtype),
@@ -105,6 +114,18 @@ def merge_adapter(
 
     tokenizer = load_tokenizer(base_model_id, revision=base_revision)
     tokenizer.save_pretrained(str(target))
+    if getattr(model_config, "model_type", None) == "qwen3_5":
+        # vLLM keeps Qwen3.5 on its multimodal wrapper even for text-only
+        # requests. Save the pinned image/video processor metadata it needs to
+        # build that wrapper; the training/eval paths still load AutoTokenizer.
+        from transformers import AutoProcessor
+
+        processor = AutoProcessor.from_pretrained(  # type: ignore[no-untyped-call]
+            base_model_id, revision=base_revision
+        )
+        processor.save_pretrained(str(target))
+        processor.image_processor.save_pretrained(str(target))
+        processor.video_processor.save_pretrained(str(target))
 
     result = MergeResult(
         adapter_dir=str(adapter),

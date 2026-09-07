@@ -208,10 +208,7 @@ def tracker_for(
 ) -> Tracker:
     """A `Tracker` from any config carrying a `TrackingConfig`.
 
-    The three training call sites spelled this out identically, and `evaluate` and
-    `profile-data` had no tracker at all -- so a report or a budgets file had nowhere
-    to be logged. Named rather than inlined because "which W&B run does this command
-    attach to" should have one answer.
+    The training and evaluation call sites share one W&B setup path.
     """
     return Tracker(
         project=tracking.wandb_project,

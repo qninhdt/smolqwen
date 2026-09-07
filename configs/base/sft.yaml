@@ -1,5 +1,6 @@
 # SFT semantics and optimizations. The profile owns the maximum trajectory
-# length, total tokens per padding-free micro-batch, and accumulation count.
+# length, token envelope (unpadded on L4/A100, dense padded on T4), and
+# accumulation count.
 # Its fixed `micro_batch` setting is not used to size SFT rows: the sampler fills
 # complete trajectories up to the token envelope, so row count varies per batch.
 
@@ -16,22 +17,20 @@ lora:
   lora_alpha: 64
   lora_dropout: 0.05
   target_modules: all-linear
-  # bf16, not PEFT's fp32 default: with all-linear targets fp32 adapters force an
-  # upcast/downcast plus an fp32 GEMM at every linear. The fp32 default exists for
-  # low-bit QLoRA bases, which this is not.
+  # BF16 on the normal path; T4's FP16 runtime keeps adapters in FP32 because
+  # GradScaler rejects FP16 gradients. The base model still runs under FP16.
   adapter_dtype: bfloat16
 
 training:
   learning_rate: 1.0e-4
   # 1-2 epochs maximum. A 2B model on ~9k trajectories can memorize, and more
-  # epochs is not the fix for the val loss turning up.
+  # epochs is not the fix for a loss curve turning up.
   num_train_epochs: 2.0
   warmup_ratio: 0.03
   weight_decay: 0.0
   lr_scheduler_type: cosine
   logging_steps: 10
   save_steps: 100
-  eval_steps: 100
   seed: 1234
 
 optimization:
@@ -42,10 +41,14 @@ optimization:
   # is the dominant activation and the first thing to OOM on 24 GB -- ahead of
   # weights. The fused-kernel L4 validation remains required before training.
   liger_fused_linear_cross_entropy: true
+  # The Qwen3.5 head supports an index-valued logits_to_keep. With padding-free
+  # batches this projects only supervised next-token positions before Liger FLCE;
+  # non-reasoning shards supervise a small fraction of each full trajectory.
+  selective_logit_loss: true
   attn_implementation: flash_attention_2
-  # Keep the known-safe default compile mode. Its performance under full
-  # trajectories and padding-free batching must be measured on L4.
-  regional_torch_compile: true
+  # Disabled after the same-shape L4 comparison: compile-off was faster and
+  # avoids a long Inductor startup that can outlive a reclaimable Colab VM.
+  regional_torch_compile: false
   # GDN layers run flash-linear-attention Triton kernels that upstream marks
   # torch.compiler.disable; compiling through them raises inductor errors, so the
   # exclusion list is not optional.
@@ -54,18 +57,6 @@ optimization:
     - mixer
     - conv1d
 
-# In-training held-out dev eval, scored from the checkpoint TRL just wrote. Off by
-# default: it needs a card, and it builds a vLLM engine before the trainer so the
-# trainer sizes itself against what remains.
-#
-# `every_steps: 0` is save-boundaries-only, and here that is not merely the cheapest
-# cadence -- it is the only correct one. The scored weights are `checkpoint-N` on
-# disk, which exists only at a save boundary; an interval eval would have nothing to
-# score. `save_steps` is 100 above, so this is every 100 optimizer steps.
-bench_eval:
-  enabled: false
-  adapter: envscaler_heldout
-  every_steps: 0
-  baseline_at_step_zero: true
-  task_limit: 16
-  timeout_s: 900.0
+# Train-only, matching upstream EnvScaler's SFT (LlamaFactory, no validation set,
+# loss curve on the training loss alone). No eval_loss and no in-training
+# benchmark: the capability curve is GRPO's bench_eval boundary.

@@ -206,3 +206,81 @@ def test_an_unclosed_block_keeps_its_text_as_reasoning() -> None:
     # policy and for alternate engines.
     reasoning, content = split_generation_continuation("<think>thought</think>\n\nanswer")
     assert (reasoning, content) == ("thought", "answer")
+
+
+def test_non_thinking_mode_reads_an_untagged_continuation_as_content() -> None:
+    """The generation prompt closed the empty think block, so whatever the model
+    samples next is the answer, not reasoning. Thinking mode reads the same text
+    as reasoning -- the two modes disagree, and that is the point."""
+    reasoning, content = split_generation_continuation("just the answer", thinking=False)
+    assert (reasoning, content) == ("", "just the answer")
+    assert (split_generation_continuation("just the answer")) == ("just the answer", "")
+
+    message = assistant_message("just the answer", thinking=False)
+    assert message.content == "just the answer"
+    assert message.reasoning_content == ""
+
+
+def test_think_tags_split_in_non_thinking_mode_too() -> None:
+    """A thinking-trained model behind a non-thinking prompt still emits tags;
+    dropping them into the wrong field would corrupt the history either way."""
+    reasoning, content = split_generation_continuation(
+        "thought\n</think>\n\nanswer", thinking=False
+    )
+    assert (reasoning, content) == ("thought", "answer")
+
+
+def test_non_thinking_message_re_renders_the_generation_prompt_byte_for_byte(
+    tokenizer: Any,
+) -> None:
+    """The load-bearing convention: `reasoning_content=""` (not None) makes the
+    template emit the closed empty think block, so the next turn's re-render
+    reproduces exactly what generation was prompted with -- the invariant the
+    drift classifier depends on."""
+    from smolqwen.data.render import render_prefix
+
+    prompt = render_prefix(
+        tokenizer,
+        [Message("system", "S"), Message("user", "Q")],
+        tools=[],
+        add_generation_prompt=True,
+        enable_thinking=False,
+    )
+    completion = "a tool call"
+    generated = encode(tokenizer, completion)
+    message = assistant_message(decode_completion(tokenizer, generated), thinking=False)
+    assert message.reasoning_content == ""
+
+    re_rendered = render_prefix(
+        tokenizer,
+        [Message("system", "S"), Message("user", "Q"), message],
+        tools=[],
+        add_generation_prompt=False,
+    )
+    assert re_rendered == prompt + completion + "<|im_end|>\n"
+
+
+def test_non_thinking_episode_accumulates_without_drift(tokenizer: Any) -> None:
+    """End to end through the real mask builder: a non-thinking episode whose
+    re-renders reproduce the prompt must classify clean on every turn."""
+    from smolqwen.data.render import render_prefix
+    from smolqwen.inference.mask import EpisodeMaskBuilder
+
+    messages = [Message("system", "S"), Message("user", "Q")]
+
+    def prefix() -> list[int]:
+        text = render_prefix(
+            tokenizer, messages, tools=[], add_generation_prompt=True, enable_thinking=False
+        )
+        return encode(tokenizer, text)
+
+    builder = EpisodeMaskBuilder(prefix())
+    for index, raw in enumerate(["call one", "call two"]):
+        sampled = encode(tokenizer, raw)
+        builder.append_response(sampled, [-0.5] * len(sampled))
+        messages.append(assistant_message(decode_completion(tokenizer, sampled), thinking=False))
+        messages.append(Message("tool", f"OBS{index}"))
+        kind = builder.open_turn(prefix())
+        assert kind == "clean", f"turn {index} drifted; the decode convention regressed"
+    supervised = sum(builder.env_mask)
+    assert supervised > 0

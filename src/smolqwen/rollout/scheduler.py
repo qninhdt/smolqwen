@@ -1,10 +1,4 @@
-"""The worker-pool dispatcher: `EnvDispatcher` over the synchronous `WorkerPool`.
-
-The turn loop this file used to own now lives in `inference/turn_engine.py`, driven
-by both rollout and evaluation. What remains is the thread pool that makes the
-synchronous pool usable from a single-threaded loop, plus the binding and driver
-types re-exported for callers that still import them from here.
-"""
+"""The worker-pool dispatcher: `EnvDispatcher` over the synchronous `WorkerPool`."""
 
 from __future__ import annotations
 
@@ -20,7 +14,6 @@ from smolqwen.inference.turn_engine import (
     MAX_REPLACEMENTS_PER_POSITION,
     POLL_INTERVAL_S,
     TurnEngineConfig,
-    TurnEngineError,
 )
 from smolqwen.rollout.driver import EnvDispatcher, RolloutDriver, ScenarioBinding
 
@@ -32,15 +25,8 @@ __all__ = [
     "PoolDispatcher",
     "RolloutDriver",
     "ScenarioBinding",
-    "SchedulerConfig",
-    "SchedulerError",
     "TurnEngineConfig",
 ]
-
-# The loop's config and error type are the engine's now. Kept as aliases because
-# `training/grpo.py` and the bench build them by these names.
-SchedulerConfig = TurnEngineConfig
-SchedulerError = TurnEngineError
 
 
 class PoolDispatcher:

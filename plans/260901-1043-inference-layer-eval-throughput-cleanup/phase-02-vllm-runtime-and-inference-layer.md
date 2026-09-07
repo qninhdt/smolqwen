@@ -9,6 +9,12 @@ dependencies: [1]
 
 # Phase 2: vLLM runtime, profiles, and the shared client
 
+> **Decision update — 2026-09-06:** Local inference is vLLM-only. The L4 probe
+> found that text-only PEFT adapters need `language_model` inserted before the
+> multimodal wrapper's text module path. `OfflineEngine` now creates a temporary
+> prefixed adapter view; rank-32 `all-linear` adapter validation passes, and the
+> no-op guard remains fail-closed.
+
 ## Overview
 
 Create `src/smolqwen/inference/` as the single owner of every vLLM interaction,
@@ -123,20 +129,18 @@ plumbing in the repo, and it refuses an open port as readiness.
 4. `client.py`: port base-URL normalization from `policies.py:76-100`, absorb
    `wait_for_readiness`, keep the injectable opener.
 5. Verify `sleep()`/`wake_up()` on the offline `LLM` for this pin, and record the
-   measured VRAM before and after with `torch.cuda.reset_peak_memory_stats()` plus
-   `memory_allocated()` — not `max_memory_allocated()`, which is monotonic and
-   cannot show a release. Phase 6's memory arithmetic reads this number.
-   **Open — needs a card.** The test exists at
+   measured worker VRAM before and after with `torch.cuda.reset_peak_memory_stats()`
+   plus the driver-level footprint through `OfflineEngine.memory_allocated_bytes()` —
+   vLLM's `CuMemAllocator` can leave `torch.cuda.memory_allocated()` unchanged after
+   unmapping, while `max_memory_allocated()` cannot show a release. **Measured on
+   L4:** 18.87 GiB awake, 1.53 GiB asleep.
    `tests/test_vllm_adapter_capability.py::test_sleep_releases_memory_and_waking_restores_generation`
    and runs in Phase 10 step 1.
 6. Record the adapter branch: attempt `LoRARequest` against a real trained
    `all-linear` adapter when one exists, and write down which path adapter
-   evaluation takes. Nothing blocks on the outcome — `TransformersPolicy` covers
-   the refusal case — but Phase 6 wants the answer before it picks its loading
-   mechanism. **Open — needs a card.** Same file,
-   `test_an_all_linear_adapter_either_loads_or_raises`; the adapter it probes with
-   has non-zero `lora_B`, so an accepted-but-ignored adapter fails rather than
-   reading as agreement.
+   evaluation takes. The L4 probe passes after text-only-to-wrapper namespace
+   normalization; the adapter has non-zero `lora_B`, so an accepted-but-ignored
+   adapter still fails rather than reading as agreement.
 
 ## Success Criteria
 
@@ -146,9 +150,10 @@ plumbing in the repo, and it refuses an open port as readiness.
 - [x] `EvalProfile.from_config` reads the resolved `ProfileConfig`; no field is
       declared twice
 - [x] `--profile l4 --dry-run` still shows eval sizing from the profile YAML
-- [ ] Sleep/wake verified with a non-monotonic VRAM reading, and the released
+- [x] Sleep/wake verified with a non-monotonic VRAM reading, and the released
       amount recorded for Phase 6
-- [ ] Adapter branch recorded (vLLM `LoRARequest` or `TransformersPolicy`)
+- [x] Adapter branch recorded: vLLM `LoRARequest` after Qwen3.5 namespace
+      normalization
 - [x] `VLLM_NO_USAGE_STATS` set at every construction site, asserted by test
 - [x] Bearer header asserted by test
 - [x] `wait_for_readiness` and its test live in the inference layer
@@ -176,15 +181,47 @@ a test — neither had one before.
 Telemetry is set at both construction sites: `OfflineEngine.build()` before
 `import vllm`, and `serving_environment()` for the subprocess.
 
-**Two criteria remain open, and both need a card.** vllm is absent locally
+**The two card criteria are measured on L4.** vllm is absent locally
 (`serve`/`colab` extras only; torch 2.11.0+cu130 is installed) and the local GPU
 is a 4 GB RTX 3050, below the plan's L4 floor.
 `tests/test_vllm_adapter_capability.py` is written and `gpu`-marked: 3 tests
-covering the adapter branch and the sleep/wake VRAM release, the second reading
-`memory_allocated()` after `reset_peak_memory_stats()` because
-`max_memory_allocated()` is monotonic and cannot show a release. Both numbers get
-recorded in Phase 10 step 1, and Phase 6 reads them before choosing how to load a
-checkpoint.
+covering the adapter branch and the sleep/wake VRAM release. Its fixture now uses
+the released-shaped `Qwen3_5ForConditionalGeneration` wrapper plus processor
+metadata, and its memory test reads the driver-level footprint through the vLLM
+worker after `reset_peak_memory_stats()` because `CuMemAllocator` does not make
+`torch.cuda.memory_allocated()` reflect unmapped memory. The offline engine
+preflights non-zero adapters with deterministic token/logprob probes and now
+normalizes the known text-only-to-wrapper namespace seam before that probe. The L4
+adapter branch is vLLM `LoRARequest`; the live VRAM numbers are 18.87 GiB awake and
+1.53 GiB asleep.
+
+**Three adapter-path defects found after the fact, two read from vllm 0.26's source
+rather than measured on a card.** Neither is a criterion this phase failed to state;
+both are it having been stated against the wrong facts.
+
+- **`max_lora_rank` was never passed.** `LoRAConfig.max_lora_rank` defaults to 16
+  (`vllm/config/lora.py`) and both training configs use `r: 32`, so
+  `peft_helper.validate_legal` raised `LoRA rank 32 is greater than max_lora_rank 16`
+  on the first request carrying the `LoRARequest`. The engine now reserves the rank it
+  reads from the adapter directory it is about to register, or `lora.r` when none
+  exists yet. The fixture here trained at `r: 4`, under the default, which is why no
+  test could see it.
+- **The capability markers matched nothing vLLM raises.** Two of the three
+  (`unsupported lora weight for architecture`, `lora is unsupported for`) do not occur
+  anywhere in vllm 0.26; the third occurs only in a non-gated-MoE debug log. The four
+  real refusals are quoted in `engine.py` with their raise sites and asserted in
+  `tests/test_inference_engine_contract.py`. Until then the `TransformersPolicy`
+  fallback was reachable only through this project's own no-op probe — every genuine
+  vLLM refusal, including the rank one, was fatal.
+- **Text-only adapter names lacked the wrapper prefix.** The live L4 probe showed
+  that PEFT wrote `base_model.model.model.layers.*`, while the released wrapper
+  needs `language_model.model.layers.*`. `OfflineEngine` creates a temporary
+  prefixed safetensors view before `LoRARequest`; the same probe then passed with
+  the adapter effect observable.
+
+The rank check is deliberately **not** a capability refusal: it is a sizing mistake
+with a one-line fix, and routing it to the slower path would hide it behind a report
+that merely says `generation_path: transformers`.
 
 CPU suite: 368 passed, 10 deselected (7 `dataset`, 3 `gpu`). `make check` and
 `make smoke` green.
@@ -197,8 +234,8 @@ sleep/wake and releases enough memory for Phase 6. vllm is not installed here
 plan's L4 floor, so step 5 is the first real measurement and it happens in
 Phase 10.
 
-- Signal it broke: `memory_allocated()` after `sleep()` stays near its pre-sleep
-  value.
+- Signal it broke: the worker-side driver footprint after `sleep()` stays near its
+  pre-sleep value.
 - Response: record the number and hand it to Phase 6, which then takes its
   subprocess fallback rather than discovering the problem against a live trainer.
 

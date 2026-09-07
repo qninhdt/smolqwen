@@ -101,7 +101,7 @@ def test_the_headline_score_still_separates_from_every_diagnostic() -> None:
     aggregated = aggregate(
         [
             metrics(
-                "envscaler_heldout",
+                "fixture",
                 AdapterResult(
                     0.5,
                     False,
@@ -114,7 +114,7 @@ def test_the_headline_score_still_separates_from_every_diagnostic() -> None:
                 ),
             )
         ]
-    )["envscaler_heldout"]
+    )["fixture"]
 
     assert aggregated["score"] == 0.5
     # What the aggregate genuinely discarded: which checks failed, and how many

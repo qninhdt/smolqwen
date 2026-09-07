@@ -5,7 +5,11 @@ from __future__ import annotations
 import pytest
 
 from smolqwen.data.convert_sft import SFT_SCHEMA_VERSION, SFT_SEMANTICS
-from smolqwen.training.collate import CollateError, padding_free_collator
+from smolqwen.training.collate import (
+    CollateError,
+    collator,
+    padding_free_collator,
+)
 from smolqwen.training.token_batching import TokenBatchingError, TokenBudgetBatchSampler
 
 
@@ -31,6 +35,18 @@ def test_batches_visit_every_row_once_without_crossing_budget() -> None:
     assert sorted(index for batch in batches for index in batch) == list(range(len(lengths)))
     assert all(sum(lengths[index] for index in batch) <= 12 for batch in batches)
     assert len({len(batch) for batch in batches}) > 1
+
+
+def test_padded_batches_bound_dense_tensor_cost() -> None:
+    lengths = [6, 4, 4]
+    sampler = TokenBudgetBatchSampler(
+        lengths, max_tokens=10, seed=7, shuffle=False, padding_free=False
+    )
+
+    batches = sampler.batches()
+
+    assert batches == [[0], [1, 2]]
+    assert all(len(batch) * max(lengths[index] for index in batch) <= 10 for batch in batches)
 
 
 def test_sampler_is_seeded_and_resume_cursor_is_exact() -> None:
@@ -99,6 +115,19 @@ def test_padding_free_collator_flattens_and_reconstructs_boundaries() -> None:
     assert batch["cu_seq_lens_k"].tolist() == [0, 3, 8, 10]
     assert batch["seq_idx"].tolist() == [[0, 0, 0, 1, 1, 1, 1, 1, 2, 2]]
     assert batch["max_length_q"] == batch["max_length_k"] == 5
+
+
+def test_padded_collator_keeps_the_mask_that_sdpa_needs() -> None:
+    records = [_record("a", 3), _record("b", 5)]
+
+    batch = collator(pad_token_id=0)(records)
+
+    assert set(batch) == {"input_ids", "labels", "attention_mask"}
+    assert batch["input_ids"].tolist() == [[1, 2, 3, 0, 0], [1, 2, 3, 4, 5]]
+    assert batch["labels"].tolist() == [[-100, 2, 3, -100, -100], [-100, 2, 3, 4, 5]]
+    # The mask is what keeps a padded row from attending to its own padding, so it
+    # is the difference between a correct sdpa batch and a silently wrong one.
+    assert batch["attention_mask"].tolist() == [[1, 1, 1, 0, 0], [1, 1, 1, 1, 1]]
 
 
 def test_padding_free_masks_each_document_start_for_global_causal_shift() -> None:

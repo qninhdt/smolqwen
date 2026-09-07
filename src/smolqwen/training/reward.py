@@ -42,27 +42,12 @@ def group_reward_stats(rewards: Sequence[float], group_indices: Sequence[int]) -
     )
 
 
-def predicted_zero_variance_fraction(
-    success_rates: Sequence[float], group_indices: Sequence[int], group_size: int
-) -> float:
-    """Bernoulli all-equal probability implied by difficulty profiling."""
-    if not success_rates:
-        return 0.0
-    grouped: dict[int, float] = {}
-    for rate, group_index in zip(success_rates, group_indices, strict=True):
-        grouped.setdefault(int(group_index), float(rate))
-    probabilities = [rate**group_size + (1.0 - rate) ** group_size for rate in grouped.values()]
-    return math.fsum(probabilities) / len(probabilities) if probabilities else 0.0
-
-
 def verifier_reward(
     *,
     rollout_reward: Sequence[float],
     terminal_reason: Sequence[str | None],
     group_index: Sequence[int],
     trajectory: Sequence[Mapping[str, Any]],
-    difficulty_success_rate: Sequence[float] | None = None,
-    num_generations: int | None = None,
     log_metric: Callable[[str, float], Any] | None = None,
     log_extra: Callable[[str, list[Any]], Any] | None = None,
     trajectory_sample_limit: int = 8,
@@ -82,12 +67,5 @@ def verifier_reward(
     if log_metric is not None:
         log_metric("group_reward_variance/mean", stats.mean_variance)
         log_metric("group_reward_variance/zero_fraction", stats.zero_variance_fraction)
-        if difficulty_success_rate is not None and num_generations is not None:
-            log_metric(
-                "group_reward_variance/predicted_zero_fraction",
-                predicted_zero_variance_fraction(
-                    difficulty_success_rate, group_index, num_generations
-                ),
-            )
     log_trajectory_columns(log_extra, trajectory, sample_limit=trajectory_sample_limit)
     return rewards

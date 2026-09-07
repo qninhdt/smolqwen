@@ -4,8 +4,8 @@
 called it from `evaluate` — so a Hub-hosted checkpoint reached `from_pretrained`
 with whatever `--revision` held, and a concurrent training push could change what a
 tag meant between two runs of it. Adapter pinning had the same gap from the other
-direction: the check lived in `TransformersPolicy.__init__`, which the vLLM adapter
-path does not go through.
+direction: the vLLM adapter path used to load a mutable reference without enforcing
+a commit SHA first.
 """
 
 from __future__ import annotations
@@ -61,8 +61,7 @@ def test_an_unpinned_revision_is_refused_before_any_weights_load() -> None:
 
 
 def test_an_adapter_without_its_own_revision_is_refused(tmp_path: Path) -> None:
-    """Previously enforced only in `TransformersPolicy.__init__`, so the vLLM
-    adapter path had no pinning at all."""
+    """The vLLM adapter path must pin the adapter before loading it."""
     with pytest.raises(CheckpointResolutionError, match="adapter revision sha"):
         resolve(checkpoint=str(tmp_path), revision=SHA, adapter="artifacts/models/adapter")
 

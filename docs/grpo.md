@@ -17,27 +17,6 @@ The local RTX 3050 has 4 GB of VRAM and cannot run the target profile. CPU tests
 prove trainer, reward, rollout, and resume wiring; they do not provide OOM,
 throughput, learning-curve, or benchmark evidence.
 
-## Profile difficulty
-
-Run several verifier-scored rollouts per sampled scenario before training:
-
-```sh
-smolqwen profile-difficulty --profile l4
-```
-
-Use `--checkpoint PATH` and `--revision SHA` to override the configured merged
-SFT checkpoint. The command writes
-`artifacts/rl/difficulty_profile.json`, classifying a scenario as:
-
-- `always_zero`: no rollout fully passed its checklist;
-- `band`: some, but not all, rollouts fully passed;
-- `always_one`: every rollout fully passed.
-
-Partial verifier rewards are retained as `mean_reward`, but success probability
-means full-checklist success. GRPO samples the profiled scenarios in a seeded,
-weighted order that prioritizes the band. The held-out evaluation slice is
-excluded from this curriculum.
-
 ## Train and resume
 
 Start training with:
@@ -53,7 +32,7 @@ smolqwen train-grpo --profile l4 --resume
 ```
 
 Every saved checkpoint pushes the adapter and Transformers trainer state along
-with `resume_state.json`. That marker carries the optimizer step, curriculum
+with `resume_state.json`. That marker carries the optimizer step, scenario
 sampler cursor, and W&B run ID. The trainer disables Transformers' automatic
 data skip because the cursor-owning sampler is authoritative; resuming therefore
 continues the scenario order rather than replaying its prefix.
@@ -63,26 +42,47 @@ The production trainer is constructed with `rollout_func`, `tools=None`, and
 environment mask. Colocated vLLM prefix caching is required and asserted from
 the live engine after construction.
 
+The shipped `all-linear` LoRA target excludes Qwen3.5's unused visual tower because
+this pipeline is text-only; otherwise a colocated text-only vLLM adapter rejects the
+visual keys during weight sync.
+
+The rollout's reasoning mode is `enable_thinking` in
+[`configs/base/grpo.yaml`](../configs/base/grpo.yaml) (default `false`). `false`
+renders every generation prompt with Qwen's closed empty think block and decodes
+completions as content. The in-training dev eval copies this value into its eval
+config, so the dev set always measures the distribution rollout trains on — it
+should also match the `enable_thinking` the SFT shards were prepared with.
+
 ## Monitoring and stop conditions
 
-Training logs verifier reward, held-out evaluation reward, sampled trajectories,
-and per-group reward variance. Trajectory rows include reasoning, calls,
+Training logs verifier reward, the in-training dev score, sampled trajectories,
+and per-group reward variance. Scenarios are sampled uniformly in a seeded order.
+Trajectory rows include reasoning, calls,
 observations, checkpoint verdicts, invalid calls, and step count.
 
 ### In-training dev eval
 
-The reward series above is computed over *training* scenarios under curriculum
-weighting — a biased sample by construction. `bench_eval` adds a held-out score on
-the same dev set `smolqwen evaluate` uses, through the same turn engine and the
-same aggregation, so one number means one thing in both places.
+The reward series above is computed over uniformly sampled training scenarios.
+`bench_eval` adds a fixed dev slice
+of BFCL multi-turn base on the same benchmark `smolqwen evaluate` runs, through
+the same turn engine and the same aggregation, so one number means one thing in
+both places. Dev and test coincide in this experiment's design (the upstream
+EnvScaler setup validates on the same benchmark); the final BFCL number therefore
+selects nothing.
 
 ```yaml
 bench_eval:
-  enabled: true          # off by default: it needs a card
-  adapter: envscaler_heldout
-  every_steps: 0         # 0 = save boundaries only
-  task_limit: 16
+  enabled: true
+  adapter: bfcl_multi_turn
+  every_steps: 20       # equals save_steps, so every score attaches to a checkpoint
+  task_limit: 128       # of the 200 multi-turn-base tasks
 ```
+
+The GRPO trainer disables Transformers' native evaluation loop and runs no
+`eval_dataset`. Dev benchmark evaluation is owned by `BenchEvalCallback` above, so
+it uses the shared turn engine and aggregation instead of triggering a second
+GRPO/Liger loss pass. With `bench_eval.enabled: false`, training performs no
+in-training benchmark evaluation.
 
 Three things about the resulting series are worth knowing before reading it:
 
@@ -92,24 +92,31 @@ Three things about the resulting series are worth knowing before reading it:
   steps old. The callback calls `sync_weights()` explicitly and records
   `step-N.sync-M`, which is what makes a later comparison against `evaluate` "at the
   same revision" falsifiable rather than merely plausible.
-- **`grpo/bench_wall_s` is the cost, measured.** The budget is 10% of training wall
-  time; widen `every_steps` or lower `task_limit` if the recorded total exceeds it.
-  The setting is checked against this number, not asserted in a comment.
-- **The adapter is named, never inherited.** `configs/base/eval.yaml` lists BFCL too,
-  and BFCL is the test set. A benchmark used to select checkpoints is a dev set, so
-  scoring it here would void the final `Base | SFT | SFT+RL` comparison;
-  `bench_eval.assert_dev_adapter` refuses a test-set name.
+- **`grpo/bench_wall_s` is the cost, measured.** Each boundary scores up to 128
+  tasks; read the recorded per-boundary cost before widening `task_limit` or
+  tightening `every_steps`. The setting is checked against this number, not
+  asserted in a comment.
+- **A step is scored once.** If an interval and save boundary coincide, a successful
+  eval is not repeated. A failed interval attempt can still retry at the save hook,
+  without losing the boundary.
+- **The adapter is named, never inherited.** `bench_eval.adapter` names the
+  benchmark directly; the callback never iterates `eval.yaml`'s adapter list.
+- **The turn engine is sized by `vllm_max_model_len`, not by the eval profile.**
+  `resolve("eval")` takes no `--profile`, so the callback would otherwise carry
+  `ProfileConfig` defaults — 32K context and width 8 against a colocated engine built
+  at 16K, on every shipped profile. The turn engine would admit a prefix the engine
+  cannot accept and vLLM raises `The decoder prompt (length N) is longer than the
+  maximum model length`, turning every boundary into `bench_failed`.
+  `bench_eval_config` substitutes this run's profile with `max_seq_length` set to the
+  engine's own bound; `tests/test_grpo_args.py` asserts the two agree per profile.
 
 An eval failure logs `bench_failed`, releases its environments, and training
 continues. Releasing matters: a leaked episode set turns one recoverable failure
 into a pool at capacity at every later boundary.
 
-Two conditions stop training rather than silently accepting corrupt evidence:
+One condition stops training rather than silently accepting corrupt evidence:
 
 - TRL's sampling-logprob difference exceeds the configured alignment threshold.
-- Observed zero-variance groups materially exceed the probability predicted by
-  the difficulty profile after the configured warm-up steps. Investigate worker
-  isolation before changing curriculum weights.
 
 A `worker_crash` is an infrastructure failure and raises at the reward boundary;
 it is never converted into a low policy reward.

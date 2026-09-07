@@ -58,10 +58,9 @@ class HubClient(Protocol):
 class ResumeState:
     """Everything a run needs to continue that is not the weights.
 
-    Restoring only the adapter makes a GRPO run replay the curriculum from the
-    top, re-training on scenarios it already saw and over-weighting whatever
-    sorts first. Nothing in the loss curve shows it, so the cursor is part of the
-    payload rather than something to reconstruct.
+    Restoring only the adapter makes a GRPO run replay scenarios it already saw
+    and shifts the training order. Nothing in the loss curve shows it, so the
+    cursor is part of the payload rather than something to reconstruct.
     """
 
     revision: str | None = None

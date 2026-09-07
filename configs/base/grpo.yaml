@@ -21,7 +21,6 @@ training:
   lr_scheduler_type: constant
   logging_steps: 1
   save_steps: 20
-  eval_steps: 20
   seed: 1234
 
 optimization:
@@ -32,10 +31,6 @@ optimization:
   regional_torch_compile: false
 
 env:
-  # The vendored EnvScaler copy is authoritative. The Hub ships
-  # 191_env_metadata_processed.json, a different file of a different size, so
-  # which one runs must be named rather than inferred.
-  env_metadata_source: vendored
   vendored_env_metadata: third_party/EnvScaler/rl/roll/pipeline/agentic/env/envscaler_env/data/191_env_metadata.json
   vendored_env_metadata_sha256: d2c0010f16ff77d6d55868ee386353b1d0aadace58beed1eed678e8f7c84c33d
   vendored_rl_scenarios: third_party/EnvScaler/rl/roll/pipeline/agentic/env/envscaler_env/data/envscaler_rl_scenario_metadata.json
@@ -45,31 +40,18 @@ env:
   # handful of checks. A hanging check_func must not kill an overnight run.
   verify_timeout_s: 60.0
   create_timeout_s: 30.0
-  env_split_manifest: artifacts/data/env_split.json
-
-curriculum:
-  # GRPO advantage only carries information where 0 < P(success) < 1. Scenarios
-  # the SFT policy always fails are unreachable; ones it always solves are done.
-  enabled: true
-  profile_rollouts: 4
-  profile_scenario_sample: 128
-  band_weight: 1.0
-  always_zero_weight: 0.1
-  always_one_weight: 0.1
-  difficulty_profile_path: artifacts/rl/difficulty_profile.json
-  heldout_env_count: 10
-  heldout_scenarios_per_env: 8
-  trajectory_samples_per_log: 8
-  # Stop only after several steps, and only when observed zero-variance groups
-  # materially exceed the profile-derived expectation.
-  zero_variance_stop_margin: 0.25
-  zero_variance_stop_multiplier: 1.5
-  zero_variance_stop_after_steps: 10
 
 beta: 0.0
 loss_type: dapo
 temperature: 1.0
 top_p: 1.0
+
+# Reasoning mode for rollout. `false` renders every generation prompt with Qwen's
+# closed empty think block and decodes completions as content instead of
+# reasoning. The bench-eval boundary copies this value into its eval config, so
+# the dev set always measures the distribution rollout trains on. Should match
+# the `enable_thinking` the SFT shards were prepared with.
+enable_thinking: false
 
 # The model advertises 262,144 positions. Inheriting that under colocated vLLM is
 # an instant OOM, so the KV budget is always explicit and never defaulted.
@@ -98,23 +80,25 @@ episode_timeout_s: 600.0
 # run; retune only against a measured distribution, never blind.
 fork_threshold_tokens: 1024
 
-# In-training dev eval. Disabled by default: it needs a card, and a CPU dry-run
-# must not try to build a generation engine.
+# Keep a small sample of completions in the W&B step log for diagnosis.
+trajectory_samples_per_log: 8
+
+# In-training dev eval on BFCL multi-turn base, mirroring upstream EnvScaler's
+# RL validation (`val_env_manager: [BFCLEval]`, temp 0, fixed sample). Upstream
+# validates every 5 steps on a 512-prompt rollout batch across 8 GPUs; this run's
+# optimizer step consumes 16 prompts, so the same data-relative cadence is beyond
+# the run's length -- `every_steps: 20` is the adopted cadence and deliberately
+# equals `save_steps`, so every dev score attaches to a checkpoint-N on disk.
+# 10 save boundaries plus the step-0 anchor = 11 boundaries x 128 tasks.
+# `grpo/bench_wall_s` records the measured per-boundary cost; widen or narrow
+# from measurement, not from a guess.
 #
-# Cost sizing against the 10% of training wall time the budget allows. With
-# save_steps: 20 and max_steps: 200 there are 10 save boundaries plus the step-0
-# baseline, so 11 evals. At 16 tasks and up to 20 turns each the per-boundary cost
-# is what `grpo/bench_wall_s` records -- the setting is checkable from that number
-# rather than asserted here. Widen `every_steps` or lower `task_limit` if the
-# recorded total exceeds the budget.
-#
-# `adapter` names the dev benchmark explicitly. `eval.yaml` lists BFCL too, and a
-# benchmark used to select checkpoints is a dev set -- scoring the test set here
-# would void the final Base | SFT | SFT+RL comparison.
+# Dev and test coincide in this lab's design: BFCL multi-turn base is both the
+# dev curve and the final test benchmark, so the final number selects nothing.
 bench_eval:
-  enabled: false
-  adapter: envscaler_heldout
-  every_steps: 0
+  enabled: true
+  adapter: bfcl_multi_turn
+  every_steps: 20
   baseline_at_step_zero: true
-  task_limit: 16
-  timeout_s: 900.0
+  task_limit: 128
+  timeout_s: 2400.0

@@ -12,6 +12,10 @@ from smolqwen.data.render import RenderedSample
 SKIP_TOO_LONG = "too_long"
 SFT_SCHEMA_VERSION = 2
 SFT_SEMANTICS = "full_trajectory_reasoning_v1"
+# The non-reasoning mode's tag. The trainer's collator accepts exactly these two
+# plus nothing, so a shard always self-describes the rendering it was built under.
+SFT_SEMANTICS_NON_REASONING = "full_trajectory_non_reasoning_v1"
+SFT_SEMANTICS_TAGS = (SFT_SEMANTICS, SFT_SEMANTICS_NON_REASONING)
 
 
 @dataclass(frozen=True)
@@ -95,11 +99,16 @@ def convert_trajectory(
     )
 
 
-def sample_to_record(sample: RenderedSample) -> dict[str, Any]:
-    """Versioned persisted shape consumed by the full-trajectory trainer."""
+def sample_to_record(sample: RenderedSample, *, semantics: str = SFT_SEMANTICS) -> dict[str, Any]:
+    """Versioned persisted shape consumed by the full-trajectory trainer.
+
+    `semantics` is the caller's rendering mode -- reasoning (the default) or the
+    non-reasoning tag -- so a shard records what produced it without a second
+    metadata file.
+    """
     return {
         "schema_version": SFT_SCHEMA_VERSION,
-        "semantics": SFT_SEMANTICS,
+        "semantics": semantics,
         "trajectory_uid": sample.trajectory_uid,
         "task_id": sample.task_id,
         "env_id": sample.env_id,

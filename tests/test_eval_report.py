@@ -22,7 +22,7 @@ def test_report_writes_metrics_and_recorded_free_fields(tmp_path: Path) -> None:
                 "average_generated_tokens": 4.0,
                 "truncation_rate": 0.0,
             },
-            "envscaler_heldout": {
+            "fixture": {
                 "score": 0.5,
                 "invalid_call_rate": 0.0,
                 "average_steps": 2.0,

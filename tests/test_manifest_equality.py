@@ -64,3 +64,25 @@ def test_manifest_retains_adapter_owned_invariants_without_interpreting_them() -
     assert first.invariant["adapters"] != second.invariant["adapters"]
     assert first.invariant["adapters"]["fixture"]["heldout_ids"] == ["case"]
     assert first.recorded_free["checkpoint_revision"] == "abc"
+
+
+def test_render_mode_is_an_invariant_and_a_mode_mismatch_is_refused() -> None:
+    """A thinking-prompt run and a non-thinking-prompt run ask the model different
+    things, so the two are not comparable even with identical sampling."""
+    config = resolve("eval")
+    assert isinstance(config, EvalConfig)
+    assert config.enable_thinking is False
+    thinking = build_manifest(
+        config.model_copy(update={"enable_thinking": True}),
+        revision="abc",
+        backend="transformers",
+    )
+    non_thinking = build_manifest(
+        config.model_copy(update={"enable_thinking": False}),
+        revision="abc",
+        backend="transformers",
+    )
+    assert thinking.invariant["enable_thinking"] is True
+    assert non_thinking.invariant["enable_thinking"] is False
+    with pytest.raises(ManifestMismatchError, match="enable_thinking"):
+        assert_comparable(thinking, non_thinking)

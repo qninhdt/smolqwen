@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 from smolqwen.config_models import EvalConfig, GrpoConfig, ServeConfig
 from smolqwen.console import logger
@@ -25,12 +25,18 @@ from smolqwen.inference.turn_engine import TurnEngineConfig
 
 LOG = logger(__name__)
 
+# The dtype names vLLM's `LLM` accepts. Spelled out rather than left as `str` so a
+# typo in a serving overlay fails at type-check instead of at engine construction.
+VllmDtype = Literal["auto", "half", "float16", "bfloat16", "float", "float32"]
+
 # bf16 tensor cores arrive with Ampere. Below that vLLM refuses bf16 outright
 # rather than emulating it, so a T4 (sm75) run must ask for fp16.
 BF16_MIN_CAPABILITY = (8, 0)
 
 
-def resolve_dtype(requested: str = "bfloat16", *, capability: tuple[int, int] | None = None) -> str:
+def resolve_dtype(
+    requested: VllmDtype = "bfloat16", *, capability: tuple[int, int] | None = None
+) -> VllmDtype:
     """The dtype this card can actually run, with the downgrade logged.
 
     Same shape as `resolve_attn_implementation`: state the request, state what the
@@ -96,7 +102,7 @@ class EvalProfile:
     top_p: float
     top_k: int
     seed: int | None
-    dtype: str = "bfloat16"
+    dtype: VllmDtype = "bfloat16"
 
     @classmethod
     def from_config(cls, config: EvalConfig) -> EvalProfile:
@@ -168,6 +174,7 @@ def turn_engine_config(config: GrpoConfig, **overrides: Any) -> TurnEngineConfig
         "temperature": config.temperature,
         "top_p": config.top_p,
         "fork_threshold_tokens": config.fork_threshold_tokens,
+        "enable_thinking": config.enable_thinking,
     }
     defaults.update(overrides)
     return TurnEngineConfig(**defaults)

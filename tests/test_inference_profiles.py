@@ -108,6 +108,29 @@ def test_rollout_profile_reads_grpo_engine_settings() -> None:
     assert profile.enable_prefix_caching is True
 
 
+def test_turn_engine_config_carries_the_render_mode() -> None:
+    """Rollout rendering and decoding must switch together; the flag rides the
+    engine config so no caller can set one without the other."""
+    from smolqwen.inference.profiles import turn_engine_config
+
+    config = shipped("grpo", "l4")
+    assert isinstance(config, GrpoConfig)
+    assert turn_engine_config(config).enable_thinking is False
+    config = config.model_copy(update={"enable_thinking": True})
+    assert turn_engine_config(config).enable_thinking is True
+
+
+def test_eval_engine_config_carries_the_render_mode() -> None:
+    from smolqwen.eval.batched import engine_config
+
+    config = shipped("eval", "l4")
+    assert isinstance(config, EvalConfig)
+    engine = engine_config(config, max_in_flight=4)
+    assert engine.enable_thinking is False
+    engine = engine_config(config.model_copy(update={"enable_thinking": True}), max_in_flight=4)
+    assert engine.enable_thinking is True
+
+
 def test_serve_argv_is_unchanged_by_the_move() -> None:
     """`ServeProfile.command()` is `serving/server.py`'s builder, verbatim.
 

@@ -1,9 +1,8 @@
 """What survives VM loss, and what must never leave the machine in a report.
 
 `artifacts.py:1-5` states the premise -- "Colab VMs are reclaimed without warning,
-so an adapter that only exists locally does not exist" -- and applied it to exactly
-one artifact class. Eval reports, `budgets.json`, difficulty profiles and the merged
-checkpoint were all local-only.
+so an adapter that only exists locally does not exist" -- and applies it to
+checkpoint artifacts.
 
 Two properties are asserted here, and the second is the one with teeth:
 
@@ -56,7 +55,7 @@ def _artifact_files(run: FakeRun) -> list[str]:
 
 
 def test_a_disabled_tracker_logs_nothing_and_raises_nothing(tmp_path: Path) -> None:
-    """The no-credential path: `profile-data` on CI must not crash or upload."""
+    """The no-credential path must not crash or upload."""
     path = tmp_path / "budgets.json"
     path.write_text("{}", encoding="utf-8")
     tracker = Tracker(project="t", enabled=False)
@@ -89,7 +88,7 @@ def test_evaluate_logs_the_report_with_its_trajectories(
     run = FakeRun()
     monkeypatch.setattr(
         runner,
-        "load_policy",
+        "load_http_policy",
         lambda **_: SimpleNamespace(revision="a" * 40, adapter_revision=None),
     )
     monkeypatch.setattr(
@@ -120,53 +119,6 @@ def test_evaluate_logs_the_report_with_its_trajectories(
     assert any("eval/sft/fixture/score" in payload for payload in run.logged)
     # The run is closed even though the upload happened inside the try block.
     assert run.finished
-
-
-def test_profile_difficulty_logs_the_profile_and_its_band_counts(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """The profile gates every later GRPO run and costs a full pass to rebuild."""
-    from smolqwen.config import resolve
-    from smolqwen.config_models import GrpoConfig
-    from smolqwen.training import grpo as grpo_module
-
-    run = FakeRun()
-    task_ids = ("task-a", "task-b")
-    dataset = [{"task_id": task_id, "prompt": f"p-{task_id}"} for task_id in task_ids]
-    rewards = iter([1.0, 1.0, 0.0, 0.0] * 4)
-    trainer = SimpleNamespace(
-        train_dataset=dataset,
-        rollout_func=lambda prompts, _t: {"rollout_reward": [next(rewards) for _ in prompts]},
-        vllm_generation=None,
-    )
-    monkeypatch.setattr(
-        grpo_module,
-        "build_grpo_trainer",
-        lambda *_a, **_k: SimpleNamespace(
-            trainer=trainer,
-            train_task_ids=task_ids,
-            tracker=Tracker(project="t", run=run),
-            shutdown=lambda: None,
-        ),
-    )
-    base = resolve("grpo", profile="l4")
-    assert isinstance(base, GrpoConfig)
-    config = base.model_copy(
-        update={
-            "curriculum": base.curriculum.model_copy(
-                update={
-                    "difficulty_profile_path": str(tmp_path / "difficulty.json"),
-                    "profile_rollouts": 2,
-                }
-            )
-        }
-    )
-    assert grpo_module.run_profile_difficulty(config) == 0
-    assert _artifact_files(run) == ["difficulty.json"]
-    bands = {key for payload in run.logged for key in payload}
-    assert {"difficulty/always_zero", "difficulty/always_one"} <= bands
-    # The stdout contract is unaffected by the upload.
-    assert set(json.loads(capsys.readouterr().out)) == {"always_zero", "band", "always_one"}
 
 
 def test_the_merged_push_is_opt_in_and_uses_its_own_repo(tmp_path: Path) -> None:

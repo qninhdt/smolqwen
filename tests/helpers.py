@@ -172,7 +172,12 @@ def load_trajectory_rows() -> list[dict[str, Any]]:
     return raw
 
 
-def write_tiny_tokenizer(directory: Path, *, vocab_size: int = 256) -> Path:
+def write_tiny_tokenizer(
+    directory: Path,
+    *,
+    vocab_size: int = 256,
+    additional_special_tokens: list[str] | None = None,
+) -> Path:
     """Save a trivial word-level fast tokenizer into `directory`.
 
     Needed wherever a test writes a local checkpoint that real code then loads
@@ -184,7 +189,12 @@ def write_tiny_tokenizer(directory: Path, *, vocab_size: int = 256) -> Path:
     from tokenizers import Tokenizer, models
     from transformers import PreTrainedTokenizerFast
 
-    vocab = {f"<{index}>": index for index in range(vocab_size)}
+    special_tokens = additional_special_tokens or []
+    if len(special_tokens) >= vocab_size:
+        raise ValueError("additional special tokens must leave room for regular tokens")
+    regular_size = vocab_size - len(special_tokens)
+    vocab = {f"<{index}>": index for index in range(regular_size)}
+    vocab.update({token: regular_size + index for index, token in enumerate(special_tokens)})
     backend = Tokenizer(models.WordLevel(vocab=vocab, unk_token="<0>"))
     # `PreTrainedTokenizerFast` resolves to an untyped backend class, so bind it
     # through `Any` rather than sprinkling ignores at the call site.
@@ -194,6 +204,7 @@ def write_tiny_tokenizer(directory: Path, *, vocab_size: int = 256) -> Path:
         unk_token="<0>",
         eos_token="<1>",
         pad_token="<2>",
+        additional_special_tokens=special_tokens or None,
     )
     directory.mkdir(parents=True, exist_ok=True)
     tokenizer.save_pretrained(str(directory))
@@ -247,4 +258,109 @@ def write_tiny_checkpoint(directory: Path, *, vocab_size: int = 256) -> Path:
     """Save a tiny model plus its tokenizer, so real loading code can read it."""
     tiny_qwen35_model(vocab_size=vocab_size).save_pretrained(str(directory))
     write_tiny_tokenizer(directory, vocab_size=vocab_size)
+    return directory
+
+
+def write_tiny_vllm_checkpoint(directory: Path, *, vocab_size: int = 256) -> Path:
+    """Save a tiny released-shaped Qwen3.5 wrapper that vLLM can resolve.
+
+    ``write_tiny_checkpoint`` intentionally writes the text-only model used by
+    the CPU training tests. vLLM's Qwen3.5 entry is registered for the
+    multimodal ``qwen3_5`` wrapper, so the adapter capability test needs this
+    separate fixture shape plus the processor metadata that vLLM loads even for
+    text-only prompts.
+    """
+    from transformers import (
+        Qwen3_5Config,
+        Qwen3_5ForConditionalGeneration,
+        Qwen3_5TextConfig,
+        Qwen3_5VisionConfig,
+    )
+
+    text_config = Qwen3_5TextConfig(
+        vocab_size=vocab_size,
+        hidden_size=64,
+        intermediate_size=128,
+        num_hidden_layers=len(TINY_LAYER_TYPES),
+        num_attention_heads=4,
+        num_key_value_heads=2,
+        head_dim=16,
+        linear_key_head_dim=8,
+        linear_value_head_dim=8,
+        linear_num_key_heads=2,
+        linear_num_value_heads=2,
+        layer_types=TINY_LAYER_TYPES,
+        max_position_embeddings=512,
+        tie_word_embeddings=True,
+    )
+    vision_config = Qwen3_5VisionConfig(
+        depth=1,
+        hidden_size=32,
+        intermediate_size=64,
+        num_heads=4,
+        patch_size=16,
+        spatial_merge_size=2,
+        temporal_patch_size=2,
+        out_hidden_size=64,
+        num_position_embeddings=16,
+    )
+    factory: Any = Qwen3_5ForConditionalGeneration
+    model = factory(
+        Qwen3_5Config(
+            text_config=text_config,
+            vision_config=vision_config,
+            image_token_id=vocab_size - 4,
+            video_token_id=vocab_size - 3,
+            vision_start_token_id=vocab_size - 2,
+            vision_end_token_id=vocab_size - 1,
+            tie_word_embeddings=True,
+        )
+    )
+    model.save_pretrained(str(directory))
+    write_tiny_tokenizer(
+        directory,
+        vocab_size=vocab_size,
+        additional_special_tokens=[
+            "<|image_pad|>",
+            "<|video_pad|>",
+            "<|vision_start|>",
+            "<|vision_end|>",
+        ],
+    )
+
+    # vLLM 0.26.0's Qwen3.5 vision config uses the released model's legacy
+    # ``qwen3_5`` tag. Transformers 5.16 writes its equivalent as
+    # ``qwen3_5_vision``; normalize only the serialized fixture.
+    config_path = directory / "config.json"
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    config["vision_config"]["model_type"] = "qwen3_5"
+    config["vision_config"]["deepstack_visual_indexes"] = []
+    config_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+
+    preprocessor = {
+        "size": {"longest_edge": 16777216, "shortest_edge": 65536},
+        "patch_size": 16,
+        "temporal_patch_size": 2,
+        "merge_size": 2,
+        "image_mean": [0.5, 0.5, 0.5],
+        "image_std": [0.5, 0.5, 0.5],
+        "processor_class": "Qwen3VLProcessor",
+        "image_processor_type": "Qwen2VLImageProcessorFast",
+    }
+    video_preprocessor = {
+        "size": {"longest_edge": 25165824, "shortest_edge": 4096},
+        "patch_size": 16,
+        "temporal_patch_size": 2,
+        "merge_size": 2,
+        "image_mean": [0.5, 0.5, 0.5],
+        "image_std": [0.5, 0.5, 0.5],
+        "processor_class": "Qwen3VLProcessor",
+        "video_processor_type": "Qwen3VLVideoProcessor",
+    }
+    (directory / "preprocessor_config.json").write_text(
+        json.dumps(preprocessor, indent=2) + "\n", encoding="utf-8"
+    )
+    (directory / "video_preprocessor_config.json").write_text(
+        json.dumps(video_preprocessor, indent=2) + "\n", encoding="utf-8"
+    )
     return directory

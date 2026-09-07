@@ -1,4 +1,4 @@
-"""Validate full-trajectory records and provide the diagnostic padded collator."""
+"""Validate full-trajectory records and build the padded and padding-free batches."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from smolqwen.data.convert_sft import SFT_SCHEMA_VERSION, SFT_SEMANTICS
+from smolqwen.data.convert_sft import SFT_SCHEMA_VERSION, SFT_SEMANTICS_TAGS
 
 IGNORE_INDEX = -100
 
@@ -52,7 +52,7 @@ class Batch:
 def record_to_sequence(record: Mapping[str, Any]) -> tuple[list[int], list[int]]:
     """Validate and return the already aligned ids/labels from schema v2."""
     schema_matches = record.get("schema_version") == SFT_SCHEMA_VERSION
-    semantics_match = record.get("semantics") == SFT_SEMANTICS
+    semantics_match = record.get("semantics") in SFT_SEMANTICS_TAGS
     if not schema_matches or not semantics_match:
         raise CollateError(
             "incompatible SFT shard; regenerate full-trajectory schema v2 with "
@@ -113,7 +113,12 @@ def collate(
 
 
 def collator(pad_token_id: int, *, max_length: int | None = None) -> Any:
-    """A `DataCollator`-shaped callable for `Trainer`, returning tensors."""
+    """A `DataCollator`-shaped callable for `Trainer`, returning tensors.
+
+    The padded path an `sdpa` run takes: right-padded rows plus the attention mask
+    that tells the kernel which positions are real. `sdpa` reads a mask natively,
+    so nothing here has to be omitted or reshaped for it.
+    """
 
     def call(features: Sequence[Mapping[str, Any]]) -> Any:
         return collate(features, pad_token_id=pad_token_id, max_length=max_length).to_torch()
@@ -167,3 +172,29 @@ def padding_free_collator(max_tokens: int, *, max_sequence_length: int | None = 
         }
 
     return call
+
+
+def supervised_positions(labels: Any) -> Any:
+    """Positions whose *next-token prediction* is supervised, in the shifted frame.
+
+    A causal head at position `i` predicts `labels[i + 1]`, so the rows the head
+    must project are one left of the supervised labels -- and the last position is
+    never a prediction target. Returns `(index, shift_labels)` where `index` selects
+    those rows out of the hidden states and `shift_labels` is the aligned target for
+    exactly those rows.
+
+    This is the whole of "selective": the fused head then sees `index.numel()` rows
+    instead of `T`. Everything downstream (loss value, `num_items_in_batch`
+    normalization, gradient) is unchanged, because dropping a row whose target is
+    `-100` removes a term that contributed zero.
+    """
+    import torch
+
+    shifted = torch.nn.functional.pad(labels, (0, 1), value=IGNORE_INDEX)[..., 1:]
+    if shifted.dim() != 2 or shifted.shape[0] != 1:
+        raise CollateError(
+            f"selective logits need one flattened row, got shape {tuple(shifted.shape)}; "
+            "a shared position index cannot describe per-row supervision"
+        )
+    index = shifted[0].ne(IGNORE_INDEX).nonzero(as_tuple=True)[0]
+    return index, shifted[:, index]

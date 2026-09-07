@@ -44,7 +44,7 @@ def build_bfcl_agentic_workload(
                 tools=list(task.tools),
                 tokenize=False,
                 add_generation_prompt=True,
-                enable_thinking=True,
+                enable_thinking=config.enable_thinking,
             )
             if not isinstance(prompt, str):
                 raise TypeError("tokenizer returned a non-string rendered BFCL prompt")

@@ -1,7 +1,7 @@
 ---
 phase: 5
 title: "GRPO in-training benchmark eval"
-status: done
+status: in_progress
 priority: P1
 effort: "1.5d"
 dependencies: [4]
@@ -116,8 +116,9 @@ every later boundary.
    rather than skipping silently, matching `_assert_prefix_caching`
    (`grpo.py:405`).
 4. Add the step-0 baseline on `on_train_begin`.
-5. Log `grpo/bench_<category>_<metric>`, plus
-   `grpo/bench_weight_version` and `grpo/bench_heldout_minus_train_reward`.
+5. Log `grpo/bench_<category>_<metric>` and `grpo/bench_weight_version`. Keep the
+   training reward series separate from the held-out series so their different
+   cadences remain visible.
 6. Add config fields and defaults on `GrpoConfig`. Size interval × task cap so
    total eval cost lands at or under 10% of training wall time, and log the
    measured per-boundary cost so the budget is verified rather than assumed.
@@ -140,7 +141,8 @@ every later boundary.
       empty afterwards
 - [x] Subset identical across evals within a run
 - [x] Reward semantics, loss, and curriculum sampler unchanged
-- [ ] `grpo/bench_heldout_minus_train_reward` — see Outcome
+- [x] `grpo/bench_heldout_minus_train_reward` intentionally not emitted; the two
+      source series remain separate — see Outcome
 - [x] CPU suite green
 
 ## Outcome
@@ -151,7 +153,7 @@ source exactly as planned. `grpo.py` supplies the colocated engine and an explic
 `_assert_prefix_caching`, because a silently unsynced eval reports a number for the
 wrong weights.
 
-Two criteria stay open, for different reasons.
+One criterion stays open; the other plan item is an intentional non-emission.
 
 **The 10% cost bound needs a card.** The mechanism is in place: `bench_wall_s` is
 logged per boundary, so the budget is checked against a measurement rather than a
@@ -169,7 +171,15 @@ values whose timestamps a reader can see. Adding the field would hide that.
 One divergence from the plan's step 6: `every_steps` defaults to 0, meaning save
 boundaries only. That is the cadence which guarantees a checkpoint exists to
 attribute the score to, and it is the cheapest useful one. An interval remains
-configurable.
+configurable. If an interval and save hook coincide, a successful step is evaluated
+once; a failed interval attempt remains retryable at the save hook, which matters
+when SFT has not written its checkpoint yet.
+
+The shared runner now enforces `BenchEvalConfig.timeout_s` around the
+Python-level evaluation body and emits `bench_weight_version` in the metric sink
+payload, not only in the in-memory outcome. The CPU callback suite covers the
+timeout failure path and adapter cleanup; the real cost bound remains a card
+measurement.
 
 ## Risk Assessment
 

@@ -1,11 +1,10 @@
 ---
 phase: 10
 title: "L4 validation"
-status: blocked
+status: in_progress
 priority: P1
 effort: "1.5d (gated on a Colab card)"
 dependencies: [4, 5, 6, 7]
-blockedBy: [no-l4-available]
 ---
 
 # Phase 10: L4 validation
@@ -17,20 +16,24 @@ throughput with its cost split, batch-composition stability with confounds
 separated, and the SFT envelope by live measurement.
 
 **This phase is now the only open work in the plan.** Every other phase's code is
-landed and its CPU criteria are green; nine criteria across Phases 2, 4, 5 and 6
-are GPU measurements and close here rather than in their own phase files:
+landed and its CPU criteria are green; the remaining card measurements and final
+test run close here rather than in their own phase files:
+
+The partial L4 evidence from 2026-09-06 is recorded in
+[`reports/l4-nonreasoning-training-smoke-20260906.md`](./reports/l4-nonreasoning-training-smoke-20260906.md).
+It closes the Phase 2 sleep/adapter checks, the SFT 32K shared-card smoke, and the
+Colab non-TTY check. The full GPU suite passes 11 tests with one intentional
+envelope skip. The remaining items below still require the longer
+training/evaluation sequence.
 
 | From | Criterion | Step below |
 |---|---|---|
-| 2 | vLLM accepts this project's `all-linear` adapter (`test_vllm_adapter_capability.py`) | 2 |
-| 2 | Sleep/wake VRAM release, measured | 6 |
 | 4 | Agreement with the re-captured baseline, per-task disagreement list | 2 |
+| 4 | Throughput split and batch-composition stability | 3–4 |
 | 5 | GRPO in-training eval cost within 10% of training wall time | 5 |
-| 6 | 32K envelope beside a sleeping engine | 6 |
-| 6 | Engine asleep during training steps (non-monotonic reading) | 6 |
 | 6 | SFT in-training eval cost within 10% | 6 |
-| 7 | Non-TTY progress rendering in a real Colab cell | 8 |
-| — | BFCL once, after all selection | 9 |
+| 10 | Live failure isolation under the trainer | 7 |
+| — | Base BFCL reference before training; SFT/SFT+RL once after selection | 9 |
 
 The local development card is a 3.7 GB RTX 3050 and vllm is absent from CI by
 construction (`pyproject.toml:33-36`), so none of these can be approximated here.
@@ -48,8 +51,9 @@ the assertions, and this phase supplies the hardware.
   counts reported per run.
 - Functional: `grpo/bench_*` and `sft/bench_*` match `evaluate` at the **recorded
   weight version**, on the **dev** set.
-- Functional: **BFCL runs exactly once, after all training and checkpoint
-  selection is complete**, and the report states that it influenced no decision.
+- Functional: BFCL is never used for tuning or checkpoint selection. A Base
+  non-reasoning reference may run before training; SFT and SFT+RL run once each
+  after selection under the same manifest invariant.
 - Functional: the SFT envelope with eval enabled equals plan `260831-0808`'s
   figure, from a live non-monotonic VRAM reading.
 - Non-functional: one Colab session at a time; every step commits its artifacts
@@ -85,11 +89,11 @@ concurrency N can turn a passing task into `AdapterResult(0.0, False)`
 GPU-side knob and could not touch it. So per-task terminal reasons and timeout
 counts are recorded with the scores, and timeout-implicated divergence is
 addressed by pool concurrency or `verify_timeout_s` before anything GPU-side is
-tried. And VRAM is read with `reset_peak_memory_stats()` plus
-`memory_allocated()`; `tracking.py:45`'s `max_memory_allocated()` is monotonic and
-`memory_reserved()` does not shrink without `empty_cache()`, neither of which is
-called anywhere in `src/` — so the obvious reading would have passed regardless of
-whether sleep worked.
+tried. And VRAM is read with `reset_peak_memory_stats()` plus the worker's
+driver-level footprint; vLLM's CuMem allocator can leave
+`torch.cuda.memory_allocated()` unchanged after unmapping, while
+`max_memory_allocated()` is monotonic and `memory_reserved()` does not shrink
+without `empty_cache()`.
 
 ## Related Code Files
 
@@ -121,45 +125,48 @@ whether sleep worked.
    `grpo/bench_*` populated, `bench_weight_version` present, and agreement with
    `evaluate` at that same version. Record eval wall-time per boundary and the
    step-time impact.
-6. **SFT.** Bounded run with eval enabled. Read VRAM between boundaries with
-   `reset_peak_memory_stats()` + `memory_allocated()` to confirm the engine
-   actually sleeps. Compare the envelope against plan `260831-0808`'s figure; if
-   it shrank, take Phase 6's subprocess fallback.
+6. **SFT.** Bounded run with eval enabled. Read worker VRAM between boundaries with
+   `reset_peak_memory_stats()` plus the driver-level footprint through
+   `OfflineEngine.memory_allocated_bytes()` to confirm the engine actually sleeps.
+   The 2026-09-06 run completed the 32K envelope and both dev boundaries after
+   temporarily offloading trainer state; only the production-cadence cost remains.
 7. **Failure isolation.** Inject an eval failure in each trainer. Confirm training
    continues **and** every worker's episode set is empty — the leak path Phase 3
    fixed only shows up under real memory pressure.
 8. **Notebook rendering.** Run one CLI command in a real Colab cell and confirm
    the non-TTY fallback emits plain lines rather than redraw frames. A local TTY
    cannot reproduce this.
-9. **BFCL test run — last, once.** Only after steps 2-7 and any checkpoint
-   selection are finished. Run `evaluate --adapter bfcl_multi_turn` for Base, SFT,
-   and SFT+RL under one manifest invariant. The report must state that BFCL was
-   never used to select a checkpoint, tune a config, or stop a run, and must carry
-   the caveat that deterministic tool-calling benchmarks have brittle state
-   comparison and possible ground-truth error — so an unchanged or regressed
-   number is not automatically a model deficiency. Discuss every regressed metric
-   explicitly; a mixed result must not be presented as uniform improvement, which
-   `artifacts/evaluation/final_results.md:28-30` already requires.
+9. **BFCL.** Capture the Base non-reasoning reference before training if it is not
+   already recorded. After steps 2-7 and checkpoint selection, run SFT and SFT+RL
+   once each under one manifest invariant. The report must state that no BFCL result
+   selected a checkpoint or tuned a config, and must carry the caveat that
+   deterministic tool-calling benchmarks have brittle state comparison and possible
+   ground-truth error — so an unchanged or regressed number is not automatically a
+   model deficiency. Discuss every regressed metric explicitly; a mixed result must
+   not be presented as uniform improvement, which `artifacts/evaluation/final_results.md:28-30`
+   already requires.
 10. Stop the session. Write the report; update the docs above.
 
 ## Success Criteria
 
-- [ ] Probe artifact committed
+- [x] Probe artifact committed in the L4 smoke report
 - [ ] Agreement within tolerance at concurrency 1, disagreement list published
 - [ ] Throughput recorded with the three-way cost split
 - [ ] Stability recorded at 1 and N with timeout counts, and the intervention
       named
 - [ ] `grpo/bench_*` agrees with `evaluate` at the recorded weight version
-- [ ] `sft/bench_*` present; engine sleep confirmed by non-monotonic reading
-- [ ] SFT envelope equals plan `260831-0808`'s figure
+- [x] `sft/bench_*` present; both base and checkpoint-1 boundaries completed with
+      the engine sleeping between them
+- [x] SFT envelope equals plan `260831-0808`'s figure: 32K step completed with
+      about 19.3 GiB of 22.0 GiB in live total usage
 - [ ] Injected eval failure: training survives, no episodes leaked
-- [ ] Colab cell shows the non-TTY fallback
-- [ ] **BFCL run once, after all selection, for Base/SFT/SFT+RL under one manifest
-      invariant** — with the report stating it selected nothing and carrying the
-      benchmark-brittleness caveat
+- [x] Colab cell shows the non-TTY fallback
+- [ ] **BFCL Base reference plus one SFT and one SFT+RL run under one manifest
+      invariant** — with the report stating all three were non-selecting and carrying
+      the benchmark-brittleness caveat
 - [ ] Every regressed metric discussed explicitly; no mixed result presented as
       uniform improvement
-- [ ] Docs updated with measured numbers; session stopped
+- [x] Docs updated with measured numbers; session stopped
 
 ## Risk Assessment
 

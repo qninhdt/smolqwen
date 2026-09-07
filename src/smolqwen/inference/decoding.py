@@ -28,6 +28,16 @@ silently demoted to mask 0, and the demotion compounds per turn.
 
 So: decode with `skip_special_tokens=True`, and store the split shape. One
 convention, satisfying both consumers, rather than each path's local habit.
+
+**The mode decides which half a continuation is.** Qwen's generation prompt
+ends in an open `<think>\\n` (thinking) or a closed empty block
+`<think>\\n\\n</think>\\n\\n` (non-thinking). The same untagged continuation is
+therefore *all reasoning* in thinking mode and *all content* in non-thinking
+mode. The non-thinking branch stores `reasoning_content=""` — an empty string,
+not `None` — because the template renders the empty think scaffold before
+content only when `reasoning_content` is a string (even empty), which is what
+reproduces the generation prompt byte-for-byte on the next turn's re-render and
+keeps the drift classifier clean.
 """
 
 from __future__ import annotations
@@ -46,15 +56,21 @@ def decode_completion(tokenizer: Any, token_ids: Any) -> str:
     return str(tokenizer.decode(token_ids, skip_special_tokens=True))
 
 
-def split_generation_continuation(text: str) -> tuple[str, str]:
-    """Split a continuation generated after the template's opening `<think>`.
+def split_generation_continuation(text: str, *, thinking: bool = True) -> tuple[str, str]:
+    """Split a continuation generated after the template's generation prompt.
 
-    Qwen3.5's generation prompt ends in ``<think>\\n``, so the sampled text holds
-    the reasoning body and its closing tag but not the opening one. A backend
-    returning a complete block is tolerated for deterministic tests and alternate
-    engines. If the block never closes -- usually token truncation -- the whole
-    continuation is kept as reasoning, which is what stops the template from
-    re-rendering those tokens somewhere else on the next turn.
+    Thinking mode: Qwen3.5's generation prompt ends in ``<think>\\n``, so the
+    sampled text holds the reasoning body and its closing tag but not the opening
+    one. A backend returning a complete block is tolerated for deterministic tests
+    and alternate engines. If the block never closes -- usually token truncation --
+    the whole continuation is kept as reasoning, which is what stops the template
+    from re-rendering those tokens somewhere else on the next turn.
+
+    Non-thinking mode (`thinking=False`): the prompt already closed the empty think
+    block, so an untagged continuation is entirely content. Think tags in the text
+    still split in both modes -- a model trained in thinking mode behind a
+    non-thinking prompt emits them, and dropping them into the wrong field would
+    corrupt the episode history just the same.
     """
     from smolqwen.env.parse import split_reasoning
 
@@ -63,10 +79,12 @@ def split_generation_continuation(text: str) -> tuple[str, str]:
     if "</think>" in text:
         reasoning, content = text.split("</think>", 1)
         return reasoning.strip(), content.strip()
+    if not thinking:
+        return "", text.strip()
     return text.strip(), ""
 
 
-def assistant_message(text: str) -> Message:
+def assistant_message(text: str, *, thinking: bool = True) -> Message:
     """The assistant turn in the shape the chat template re-renders faithfully."""
-    reasoning, content = split_generation_continuation(text)
+    reasoning, content = split_generation_continuation(text, thinking=thinking)
     return Message(role="assistant", content=content, reasoning_content=reasoning)

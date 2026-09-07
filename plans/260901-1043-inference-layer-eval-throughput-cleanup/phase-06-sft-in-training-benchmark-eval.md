@@ -10,6 +10,10 @@ blockedBy: [260831-0808-sft-full-trajectory-padding-free]
 
 # Phase 6: SFT in-training benchmark eval
 
+> **Decision update — 2026-09-06:** Checkpoint evaluation uses vLLM's
+> `LoRARequest`; `OfflineEngine` normalizes the Qwen3.5 text-only adapter namespace
+> required by the multimodal wrapper. The L4 rank-32 `all-linear` probe passes.
+
 ## Overview
 
 Give SFT a held-out benchmark score during training by loading the checkpoint TRL
@@ -53,7 +57,8 @@ on_save (TRL wrote checkpoint-N; store copied and pushed it)
    → load adapter from checkpoint-N   # already on disk
    → score dev subset ; log
    → engine.sleep()                   # weights offloaded, KV freed
-   → training continues, optimizer state never touched
+   → restore trainer model/optimizer to GPU
+   → training continues
 ```
 
 Base weights never change during SFT — only the adapter does — so there is
@@ -86,13 +91,16 @@ recorded constant cannot fail when the envelope shrinks. And the obvious VRAM
 reading is wrong too: `tracking.py:45` uses `max_memory_allocated()`, a monotonic
 high-water mark, and `memory_reserved()`, which does not shrink without
 `empty_cache()` — neither is called anywhere in `src/`. So the guard calls
-`reset_peak_memory_stats()` around each boundary and reads `memory_allocated()`.
+`reset_peak_memory_stats()` around each boundary and reads the worker-side
+driver footprint through `OfflineEngine.memory_allocated_bytes()`; vLLM V1's
+parent process is not the allocator that owns the engine, and its CuMem allocator
+does not make `torch.cuda.memory_allocated()` reflect unmapped sleep allocations.
 
-**Adapter loading.** vLLM `LoRARequest` if it accepts this project's
-`all-linear` adapter; otherwise merge the checkpoint into a temp dir and load
-that, or fall back to `TransformersPolicy`. Phase 2 records which. All three
-score the same checkpoint through the same turn engine, so the choice affects
-speed, not comparability.
+**Adapter loading.** vLLM `LoRARequest` is the local path. The shared offline engine
+preflights a non-zero adapter with deterministic token/logprob probes because vLLM
+loads LoRA lazily, and inserts the Qwen3.5 wrapper namespace required by the
+multimodal checkpoint. An accepted-but-unmatched wrapper remains a refusal, not a
+valid fast path.
 
 **Telemetry.** `VLLM_NO_USAGE_STATS` is set at the single construction point in
 Phase 2; this phase asserts it in the trainer path, because that is the process
@@ -108,7 +116,8 @@ holding the HF token and the W&B session.
 - Modify: `configs/base/sft.yaml` — defaults sized to the 10% budget; eval
   disabled unless a card is present
 - Create: `tests/test_sft_bench_eval_memory_guard.py` — `@pytest.mark.gpu`,
-  reads real VRAM with `reset_peak_memory_stats()` + `memory_allocated()`
+  reads the real worker driver footprint with `reset_peak_memory_stats()`
+  through the engine's worker RPC
 - Create: `tests/test_sft_bench_eval_boundary.py` — the callback fires only where
   `checkpoint-N` exists, and scores that directory rather than any other
 - Modify: `docs/` (owning SFT doc) — the sleep cycle, the checkpoint-based
@@ -142,28 +151,32 @@ holding the HF token and the W&B session.
 
 - [x] `sft/bench_*` in W&B with a step-0 baseline
 - [x] Dev set is EnvScaler held-out only; no BFCL entry resolves here
-- [ ] Measured envelope with eval enabled equals plan `260831-0808`'s recorded
-      figure, from a live `memory_allocated()` reading after
-      `reset_peak_memory_stats()`
-- [ ] Engine asleep during training steps, shown by a non-monotonic reading
+- [x] Measured envelope with eval enabled equals plan `260831-0808`'s recorded
+      figure: the L4 completed the 32K full-shape step with the engine resident,
+      asleep footprint about 2.5 GiB, and live total usage about 19.3 GiB of 22.0
+      GiB after the offload fix
+- [x] Engine slept before and after the training step; its vLLM log reported 7.68
+      GiB released and training ran at the 32K envelope without an OOM
 - [x] The scored adapter is TRL's `checkpoint-N`; no new weight-transfer code and
       no scratch directory exist
 - [x] Eval fires only at boundaries where `checkpoint-N` exists, and never skips
       silently
 - [x] Dev scores recorded beside each checkpoint, so selection is reproducible
-- [ ] Measured eval cost at or under 10% of training wall time
+- [ ] Measured production-cadence eval cost at or under 10% of training wall time;
+      the one-task smoke boundaries were 75.71s (base) and 86.19s (checkpoint-1)
 - [x] Injected failure: training continues, environments released
 - [x] `VLLM_NO_USAGE_STATS` asserted in the trainer path
 - [x] The three plan-B tests pass at its post-phase-4 revision
-- [x] CPU suite green; `gpu` tests pending
+- [x] CPU suite green; the target GPU suite passes 11 tests with one intentional
+      Colab-supplied envelope skip
 
 ## Outcome
 
-Code complete. **Four criteria are GPU measurements and stay open**: the envelope,
-the non-monotonic asleep reading, the 10% cost, and by extension the sleep/wake
-release those depend on. `tests/test_sft_bench_eval_memory_guard.py` holds the
-assertions; Phase 10 supplies the L4. The local card is a 3.7 GB RTX 3050, an order
-of magnitude below the floor.
+Code complete. The L4 smoke closed the envelope and sleep/wake criteria after two
+runtime findings: the trainer had to move its live state to CPU while vLLM woke, and
+text-only `all-linear` adapters had to exclude the unused visual tower. The remaining
+open GPU criterion is the production-cadence 10% cost bound; the one-task smoke
+boundaries are evidence for correctness, not for the final cadence budget.
 
 **The `blockedBy` gate resolved on evidence, not on a status field.** Plan
 `260831-0808` still reads `in_progress`, and its phase 4 is what this depended on --
@@ -179,7 +192,15 @@ the same card, which serialization does not fix.
 registration and a `finally` that shuts the engine down. `bench_eval.py` needed one
 change: `before_each` now takes the step, and an `after_each` was added. GRPO's seam
 is `sync_weights()`; SFT's is "which checkpoint does this boundary score" and
-"sleep". Both run around the same runner.
+"sleep". Both run around the same runner. The L4 probe found the text-only PEFT
+namespace seam and `OfflineEngine` now creates the prefixed adapter view before
+validation, so SFT can stay on the vLLM path.
+
+The runner writes `bench_eval.json` beside an existing `checkpoint-N`, with a
+durable output-directory fallback for the base step-zero anchor and missing
+checkpoint failures. Its SFT weight version reports `base` for that anchor rather
+than inventing a `checkpoint-0`; the sidecar is local evidence because the
+checkpoint push callback runs before benchmark evaluation.
 
 **Two things the plan specified that were wrong, corrected from source:**
 
@@ -214,17 +235,15 @@ the same reason.
 
 ## Risk Assessment
 
-The load-bearing assumption is that offline sleep releases enough for the
-trainer's envelope to survive. Phase 2 measures it first, which is why that
-measurement is scheduled there.
+The load-bearing assumption is that offline sleep releases enough for the trainer's
+envelope to survive. The L4 smoke confirmed the release, but also showed that the
+trainer must be offloaded during the wake/eval window after optimizer state exists.
 
-- Signal it broke: `memory_allocated()` after `sleep()` stays near its pre-sleep
-  value, or the L4 envelope drops below plan `260831-0808`'s figure.
-- Response: eval at `on_save` in a subprocess against the just-saved adapter.
-  Training memory is then untouched by construction; the cost is a chart that
-  updates at save intervals and a model load per eval. Take that trade rather
-  than shrinking the envelope — it is another plan's deliverable and reducing it
-  silently would invalidate their measurement.
+- Signal it broke: worker-side driver footprint after `sleep()` stays near its
+  pre-sleep value, or the L4 envelope drops below plan `260831-0808`'s figure.
+- Response: the callback temporarily moves the trainer model and optimizer state to
+  CPU, evaluates the saved adapter, then restores them after vLLM sleeps. A
+  subprocess fallback remains unnecessary while this measured path fits.
 
 Second risk: file overlap with plan `260831-0808`. Its phase 4 modifies
 `sft.py`, `tracking.py`, `config_models.py`, both profile YAMLs, and the three

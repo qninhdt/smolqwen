@@ -1,14 +1,15 @@
-"""In-training held-out benchmark eval, shared by both training stages.
+"""In-training benchmark eval, run by GRPO.
 
-Neither stage reports a benchmark number today. SFT computes teacher-forced
-validation loss; GRPO logs verifier reward over curriculum-weighted *training*
-scenarios, a biased sample by construction. So nothing measures held-out capability
-until a run finishes and someone invokes `evaluate` by hand.
+GRPO logs verifier reward over uniformly sampled *training* scenarios. The bench
+callback adds a fixed dev slice -- BFCL
+multi-turn base in the current config -- scored through the same engine and the
+same aggregation `smolqwen evaluate` calls, which is the whole point: a number that
+means something different in training than in `evaluate` is worse than no number.
+Dev and test coincide in this lab's design; the benchmark is named in config
+rather than derived from `eval.yaml`'s adapter list.
 
 The callback is deliberately thin. It owns no benchmark logic, no scoring, and no
-turn loop -- it calls the same engine and the same aggregation `smolqwen evaluate`
-calls, which is the whole point: a number that means something different in
-training than in `evaluate` is worse than no number.
+turn loop.
 
 Four things it does own:
 
@@ -19,11 +20,8 @@ per accumulation window, so the engine can be up to `grad_accum` steps stale. An
 when `bench_*` is later compared against `evaluate` "at the same revision". So the
 weight version is logged as a field on every row, and the sync is explicit.
 
-**The dev set, named.** `eval.yaml` lists both `bfcl_multi_turn` and
-`envscaler_heldout`. A callback iterating that list would score BFCL every
-boundary, and a benchmark used to pick checkpoints is a dev set -- which would void
-the final Base | SFT | SFT+RL table. The adapter is named in config and asserted
-here.
+**A named adapter.** `bench_config.adapter` names the benchmark directly; the
+callback never iterates `eval.yaml`'s adapter list.
 
 **A stable subset.** A subset that varies between evals produces a curve mixing
 policy change with sample change. The adapter's own selection is deterministic, so
@@ -37,9 +35,14 @@ removed from its cause.
 
 from __future__ import annotations
 
+import json
+import signal
+import threading
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from smolqwen.config_models import BenchEvalConfig, EvalConfig
@@ -51,15 +54,57 @@ from smolqwen.eval.trajectories import TrajectoryRecord, write_trajectories
 
 LOG = logger(__name__)
 
-# Benchmark names that must never be reachable from an in-training path. Spelled
-# the way a leak would spell them, matching `test_dev_test_integrity.py`.
-TEST_BENCHMARK_TOKENS = ("bfcl", "gorilla", "berkeley")
-
-MetricSink = Callable[[Mapping[str, float]], None]
+MetricValue = float | str
+MetricSink = Callable[[Mapping[str, MetricValue]], None]
 
 
-class BenchEvalError(RuntimeError):
-    """Raised when in-training eval is configured incoherently. Never at runtime."""
+class BenchEvalTimeout(TimeoutError):
+    """Raised internally when a training-time benchmark exceeds its wall budget."""
+
+
+@contextmanager
+def _wall_clock_timeout(timeout_s: float) -> Iterator[None]:
+    """Interrupt a synchronous eval so a hung boundary cannot hang training.
+
+    Training callbacks run on the main thread in the supported runtime, which is the
+    only place Python can install a process signal handler. The environment worker
+    pool has its own per-call timeout in child processes; this outer timeout covers
+    adapter setup, generation, and aggregation as one training boundary.
+    """
+    if threading.current_thread() is not threading.main_thread():
+        raise BenchEvalTimeout("benchmark eval timeout requires the main thread")
+
+    previous_handler = signal.getsignal(signal.SIGALRM)
+    previous_timer = signal.setitimer(signal.ITIMER_REAL, 0.0)
+    timer_started = time.monotonic()
+
+    def _restore_alarm() -> None:
+        signal.setitimer(signal.ITIMER_REAL, 0.0)
+        signal.signal(signal.SIGALRM, previous_handler)
+        previous_delay, previous_interval = previous_timer
+        if previous_delay > 0.0 or previous_interval > 0.0:
+            # Preserve a caller's alarm relative to the time it had remaining when
+            # this context started. A tiny positive delay preserves an alarm that
+            # elapsed while this context owned SIGALRM instead of silently dropping
+            # it; nested timeout contexts therefore unwind in the right order.
+            remaining = max(previous_delay - (time.monotonic() - timer_started), 1e-6)
+            signal.setitimer(signal.ITIMER_REAL, remaining, previous_interval)
+
+    def _alarm(_signum: int, _frame: Any) -> None:
+        raise BenchEvalTimeout(f"benchmark eval exceeded {timeout_s:g}s")
+
+    try:
+        signal.signal(signal.SIGALRM, _alarm)
+        signal.setitimer(signal.ITIMER_REAL, timeout_s)
+    except BaseException:
+        # If installing the handler/timer itself fails, restore the caller's signal
+        # state before allowing the setup error to be recorded by the runner.
+        _restore_alarm()
+        raise
+    try:
+        yield
+    finally:
+        _restore_alarm()
 
 
 @dataclass
@@ -74,28 +119,10 @@ class BenchEvalOutcome:
     task_count: int = 0
 
 
-def assert_dev_adapter(name: str) -> str:
-    """Refuse a test-set adapter at the in-training boundary.
-
-    The check is here rather than only in config validation because this is the one
-    place a name becomes a scored benchmark. A run that scored BFCL every hundred
-    steps would produce a plausible-looking curve and an invalid final comparison.
-    """
-    lowered = name.casefold()
-    for token in TEST_BENCHMARK_TOKENS:
-        if token in lowered:
-            raise BenchEvalError(
-                f"{name!r} is the test benchmark; in-training eval scores the dev set "
-                "only. A benchmark used to select checkpoints is a dev set, and using "
-                "the test set here voids the final Base | SFT | SFT+RL comparison."
-            )
-    return name
-
-
 def dev_subset(adapter: BenchmarkAdapter, *, task_limit: int) -> list[EvalTask]:
     """A stable prefix of the adapter's own deterministic selection.
 
-    Prefix rather than sample: the adapter already orders its held-out slice
+    Prefix rather than sample: the adapter already orders its task list
     deterministically and records the exact ids in its manifest contribution, so a
     prefix is reproducible without this module owning selection. Sampling per call
     would mix policy change with sample change in the resulting curve.
@@ -123,16 +150,18 @@ class BenchEvalRunner:
         sink: MetricSink | None = None,
         weight_version: Callable[[], str] | None = None,
         artifact_dir: str | None = None,
+        outcome_path: Callable[[int], Path | str] | None = None,
     ) -> None:
         self.eval_config = eval_config
         self.bench_config = bench_config
-        self.adapter_name = assert_dev_adapter(bench_config.adapter)
+        self.adapter_name = bench_config.adapter
         self._engine_source = engine_source
         self._tokenizer_source = tokenizer_source
         self.metric_prefix = metric_prefix
         self._sink = sink
         self._weight_version = weight_version or (lambda: "unknown")
         self._artifact_dir = artifact_dir
+        self._outcome_path = outcome_path
         self.outcomes: list[BenchEvalOutcome] = []
 
     def run(self, step: int) -> BenchEvalOutcome:
@@ -145,25 +174,27 @@ class BenchEvalRunner:
         started = time.monotonic()
         adapter: BenchmarkAdapter | None = None
         try:
-            adapter = create_adapter(self.adapter_name, self.eval_config)
-            tasks = dev_subset(adapter, task_limit=self.bench_config.task_limit)
-            records: list[TrajectoryRecord] = []
-            metrics = evaluate_batched(
-                self.eval_config,
-                adapter,
-                backend=self._engine_source(),
-                tokenizer=self._tokenizer_source(),
-                tasks=tasks,
-                records=records,
-            )
-            outcome = BenchEvalOutcome(
-                step=step,
-                weight_version=version,
-                metrics=self._flatten(metrics),
-                wall_s=time.monotonic() - started,
-                task_count=len(tasks),
-            )
-            self._write_records(step, records)
+            with _wall_clock_timeout(self.bench_config.timeout_s):
+                adapter = create_adapter(self.adapter_name, self.eval_config)
+                tasks = dev_subset(adapter, task_limit=self.bench_config.task_limit)
+                records: list[TrajectoryRecord] = []
+                metrics = evaluate_batched(
+                    self.eval_config,
+                    adapter,
+                    backend=self._engine_source(),
+                    tokenizer=self._tokenizer_source(),
+                    tasks=tasks,
+                    records=records,
+                    label=self.metric_prefix,
+                )
+                outcome = BenchEvalOutcome(
+                    step=step,
+                    weight_version=version,
+                    metrics=self._flatten(metrics),
+                    wall_s=time.monotonic() - started,
+                    task_count=len(tasks),
+                )
+                self._write_records(step, records)
         except Exception as exc:
             outcome = BenchEvalOutcome(
                 step=step,
@@ -182,9 +213,22 @@ class BenchEvalRunner:
                     except Exception:
                         pass
 
+        self._write_outcome(outcome)
         self.outcomes.append(outcome)
         if self._sink is not None:
-            self._sink(self.log_payload(outcome))
+            try:
+                self._sink(self.log_payload(outcome))
+            except Exception as exc:
+                # Metric transport is observability, not part of the training
+                # invariant. A transient Trainer/W&B logging failure must not turn
+                # an otherwise completed eval boundary into a failed training run.
+                LOG.warning(
+                    "%s bench eval metrics could not be logged at step %d: %s: %s",
+                    self.metric_prefix,
+                    step,
+                    type(exc).__name__,
+                    exc,
+                )
         if outcome.failed_reason is not None:
             # Never raised, so it must be visible: a silently failing eval otherwise
             # shows up only as `bench_failed=1` in a dashboard nobody is watching.
@@ -208,17 +252,18 @@ class BenchEvalRunner:
             )
         return outcome
 
-    def log_payload(self, outcome: BenchEvalOutcome) -> dict[str, float]:
+    def log_payload(self, outcome: BenchEvalOutcome) -> dict[str, MetricValue]:
         """The metric row for this boundary, prefixed for the training stage.
 
         `bench_weight_version` and `bench_wall_s` ride alongside every score: the
         first makes the later comparison against `evaluate` falsifiable, the second
         makes the 10% budget checkable.
         """
-        payload: dict[str, float] = {
+        payload: dict[str, MetricValue] = {
             f"{self.metric_prefix}/bench_wall_s": outcome.wall_s,
             f"{self.metric_prefix}/bench_task_count": float(outcome.task_count),
             f"{self.metric_prefix}/bench_failed": float(outcome.failed_reason is not None),
+            f"{self.metric_prefix}/bench_weight_version": outcome.weight_version,
         }
         payload.update(
             {f"{self.metric_prefix}/bench_{name}": value for name, value in outcome.metrics.items()}
@@ -250,6 +295,38 @@ class BenchEvalRunner:
         except OSError:
             # Losing a record file must not end training; the metrics already logged.
             return
+
+    def _write_outcome(self, outcome: BenchEvalOutcome) -> None:
+        """Persist the boundary result when the caller owns a checkpoint sidecar."""
+        if self._outcome_path is None:
+            return
+        try:
+            path = Path(self._outcome_path(outcome.step))
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(
+                json.dumps(
+                    {
+                        "step": outcome.step,
+                        "weight_version": outcome.weight_version,
+                        "metrics": outcome.metrics,
+                        "wall_s": outcome.wall_s,
+                        "failed_reason": outcome.failed_reason,
+                        "task_count": outcome.task_count,
+                    },
+                    sort_keys=True,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+        except Exception as exc:
+            # A sidecar is evidence, not a reason to kill a training run whose metric
+            # sink already received the boundary result.
+            LOG.warning(
+                "%s bench eval sidecar could not be written at step %d: %s",
+                self.metric_prefix,
+                outcome.step,
+                exc,
+            )
 
 
 def should_evaluate(config: BenchEvalConfig, *, step: int, at_save: bool) -> bool:
@@ -292,6 +369,25 @@ class BenchEvalCallback:
         # a failed eval holds VRAM the next training step needs -- which would turn
         # one recoverable failure into an OOM one step later.
         self._after_each = after_each
+        # Trainer emits both hooks when an interval and save boundary coincide. Keep
+        # one successful result for that step, but leave failed boundaries retryable:
+        # SFT's interval hook can run before `checkpoint-N` is written.
+        self._completed_steps: set[int] = set()
+
+    def __getattr__(self, name: str) -> Any:
+        """Supply no-op lifecycle hooks expected by Transformers' handler.
+
+        This class intentionally does not import ``transformers`` at module
+        scope. The handler invokes every ``on_*`` event on every callback, so
+        unowned events must still return the current control object.
+        """
+        if not name.startswith("on_"):
+            raise AttributeError(name)
+
+        def no_op(*args: Any, **kwargs: Any) -> Any:
+            return kwargs.get("control", args[2] if len(args) > 2 else None)
+
+        return no_op
 
     @property
     def config(self) -> BenchEvalConfig:
@@ -317,10 +413,16 @@ class BenchEvalCallback:
         return control
 
     def _evaluate(self, step: int) -> None:
+        if step in self._completed_steps:
+            return
+        completed = False
         try:
             if self._before_each is not None:
                 self._before_each(step)
-            self.runner.run(step)
+            outcome = self.runner.run(step)
+            completed = outcome.failed_reason is None
         finally:
             if self._after_each is not None:
                 self._after_each(step)
+        if completed:
+            self._completed_steps.add(step)

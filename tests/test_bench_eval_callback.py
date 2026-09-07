@@ -14,6 +14,7 @@ is worth having, and none of them is visible in the number itself:
 
 from __future__ import annotations
 
+import time
 from collections.abc import Mapping, Sequence
 from types import SimpleNamespace
 from typing import Any
@@ -25,9 +26,8 @@ from smolqwen.eval.adapters.base import AdapterResult, EvalTask, StepResult
 from smolqwen.eval.metrics import TaskMetrics, aggregate
 from smolqwen.training.bench_eval import (
     BenchEvalCallback,
-    BenchEvalError,
+    BenchEvalOutcome,
     BenchEvalRunner,
-    assert_dev_adapter,
     dev_subset,
     should_evaluate,
 )
@@ -47,7 +47,7 @@ class Adapter:
 
     def load_tasks(self) -> list[EvalTask]:
         return [
-            EvalTask(f"task-{index:03d}", "envscaler_heldout", "do it", ())
+            EvalTask(f"task-{index:03d}", "fixture", "do it", ())
             for index in range(self.task_count)
         ]
 
@@ -71,7 +71,7 @@ class Adapter:
         return 0
 
     def manifest_invariants(self, tasks: Sequence[EvalTask]) -> Mapping[str, Any]:
-        return {"held_out": [task.task_id for task in tasks]}
+        return {"task_ids": [task.task_id for task in tasks]}
 
     def summarize(self, tasks: Sequence[TaskMetrics]) -> dict[str, dict[str, float]]:
         return aggregate(tasks)
@@ -93,7 +93,7 @@ def make_runner(
     *,
     bench: BenchEvalConfig | None = None,
     fail: bool = False,
-    sink: list[Mapping[str, float]] | None = None,
+    sink: list[Mapping[str, Any]] | None = None,
     versions: list[str] | None = None,
     artifact_dir: str | None = None,
 ) -> BenchEvalRunner:
@@ -113,7 +113,7 @@ def make_runner(
     tokenizer = OfflineTokenizer(token_size=1)
     version_log = versions if versions is not None else []
     return BenchEvalRunner(
-        eval_config=EvalConfig(adapters=("envscaler_heldout",), max_steps_per_task=6),
+        eval_config=EvalConfig(adapters=("fixture",), max_steps_per_task=6),
         bench_config=bench or BenchEvalConfig(enabled=True, task_limit=4),
         engine_source=lambda: scripted_backend(tokenizer),
         tokenizer_source=lambda: tokenizer,
@@ -127,28 +127,6 @@ def make_runner(
 def _next_version(log: list[str]) -> str:
     log.append(f"step-{len(log)}.sync-{len(log) + 1}")
     return log[-1]
-
-
-def test_the_test_benchmark_is_refused_at_the_boundary() -> None:
-    """A benchmark used to select checkpoints is a dev set. Scoring BFCL here would
-    void the final Base | SFT | SFT+RL comparison, and nothing in the resulting
-    number would show it."""
-    for name in ("bfcl_multi_turn", "BFCL", "gorilla_v3", "berkeley_fc"):
-        with pytest.raises(BenchEvalError, match="test benchmark"):
-            assert_dev_adapter(name)
-
-    assert assert_dev_adapter("envscaler_heldout") == "envscaler_heldout"
-
-
-def test_the_runner_refuses_a_test_adapter_at_construction() -> None:
-    with pytest.raises(BenchEvalError, match="test benchmark"):
-        BenchEvalRunner(
-            eval_config=EvalConfig(),
-            bench_config=BenchEvalConfig(enabled=True, adapter="bfcl_multi_turn"),
-            engine_source=lambda: None,
-            tokenizer_source=lambda: None,
-            metric_prefix="grpo",
-        )
 
 
 def test_the_subset_is_identical_across_evals() -> None:
@@ -169,7 +147,7 @@ def test_a_successful_eval_logs_scores_with_its_weight_version(
     """The weight version is what makes the later comparison against `evaluate`
     falsifiable. At a callback boundary the engine can hold weights up to
     `grad_accum` optimizer steps old, and that drift is invisible in the score."""
-    sink: list[Mapping[str, float]] = []
+    sink: list[Mapping[str, Any]] = []
     runner = make_runner(monkeypatch, sink=sink)
 
     outcome = runner.run(step=40)
@@ -177,15 +155,32 @@ def test_a_successful_eval_logs_scores_with_its_weight_version(
     assert outcome.failed_reason is None
     assert outcome.task_count == 4
     assert outcome.weight_version == "step-0.sync-1"
-    assert outcome.metrics["envscaler_heldout_score"] == 1.0
+    assert outcome.metrics["fixture_score"] == 1.0
     assert outcome.wall_s >= 0.0
 
     payload = sink[0]
-    assert payload["grpo/bench_envscaler_heldout_score"] == 1.0
+    assert payload["grpo/bench_fixture_score"] == 1.0
     assert payload["grpo/bench_failed"] == 0.0
     assert payload["grpo/bench_task_count"] == 4.0
+    assert payload["grpo/bench_weight_version"] == outcome.weight_version
     # The cost per boundary, so the 10% budget is checked against a measurement.
     assert "grpo/bench_wall_s" in payload
+
+
+def test_metric_sink_failure_does_not_end_the_training_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner = make_runner(monkeypatch)
+
+    def fail_sink(_payload: Mapping[str, Any]) -> None:
+        raise RuntimeError("tracker unavailable")
+
+    runner._sink = fail_sink
+
+    outcome = runner.run(step=40)
+
+    assert outcome.failed_reason is None
+    assert runner.outcomes == [outcome]
 
 
 def test_a_failed_eval_logs_and_releases_environments_without_raising(
@@ -209,6 +204,33 @@ def test_a_failed_eval_logs_and_releases_environments_without_raising(
     adapter = Adapter.instances[-1]
     assert adapter.closed == 1
     assert not adapter.live, f"episodes leaked: {sorted(adapter.live)}"
+
+
+def test_a_timed_out_eval_logs_failure_and_closes_the_adapter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sink: list[Mapping[str, Any]] = []
+    runner = make_runner(
+        monkeypatch,
+        bench=BenchEvalConfig(enabled=True, task_limit=4, timeout_s=0.01),
+        sink=sink,
+    )
+
+    def hang(*_args: Any, **_kwargs: Any) -> Any:
+        time.sleep(0.1)
+        return {}
+
+    monkeypatch.setattr("smolqwen.training.bench_eval.evaluate_batched", hang)
+
+    outcome = runner.run(step=20)
+
+    assert outcome.failed_reason is not None
+    assert "BenchEvalTimeout" in outcome.failed_reason
+    assert "0.01s" in outcome.failed_reason
+    assert sink[0]["grpo/bench_failed"] == 1.0
+    adapter = Adapter.instances[-1]
+    assert adapter.closed == 1
+    assert not adapter.live
 
 
 def test_every_boundary_records_its_cost_so_the_budget_is_measured(
@@ -235,7 +257,9 @@ def test_records_land_beside_the_checkpoint_they_were_scored_at(
     runner = make_runner(monkeypatch, artifact_dir=str(tmp_path))
     runner.run(step=60)
 
-    path = trajectory_path(tmp_path, tag="step-60", adapter="envscaler_heldout")
+    # The trajectory file is keyed by the adapter the runner was configured with
+    # (the bench config's default), not by the fake's category label.
+    path = trajectory_path(tmp_path, tag="step-60", adapter=runner.adapter_name)
     assert path.is_file()
     rows = read_trajectories(path)
     assert len(rows) == 4
@@ -288,6 +312,17 @@ def test_the_callback_skips_every_boundary_when_disabled(
     assert runner.outcomes == []
 
 
+def test_the_callback_supports_unowned_trainer_events(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner = make_runner(monkeypatch, bench=BenchEvalConfig(enabled=False))
+    callback = BenchEvalCallback(runner)
+    control = SimpleNamespace()
+
+    assert callback.on_step_begin(None, None, control) is control
+    assert callback.on_log(None, None, control) is control
+
+
 def test_a_save_boundary_evaluates_and_syncs_first(monkeypatch: pytest.MonkeyPatch) -> None:
     runner = make_runner(
         monkeypatch, bench=BenchEvalConfig(enabled=True, task_limit=2, baseline_at_step_zero=False)
@@ -305,6 +340,55 @@ def test_a_save_boundary_evaluates_and_syncs_first(monkeypatch: pytest.MonkeyPat
     callback.on_save(None, SimpleNamespace(global_step=20), SimpleNamespace())
     assert [outcome.step for outcome in runner.outcomes] == [20]
     assert order == ["prepare:20", "release:20"]
+
+
+def test_interval_and_save_hooks_do_not_evaluate_a_successful_step_twice(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner = make_runner(
+        monkeypatch,
+        bench=BenchEvalConfig(enabled=True, every_steps=10, task_limit=2),
+    )
+    order: list[str] = []
+    callback = BenchEvalCallback(
+        runner,
+        before_each=lambda step: order.append(f"prepare:{step}"),
+        after_each=lambda step: order.append(f"release:{step}"),
+    )
+
+    callback.on_step_end(None, SimpleNamespace(global_step=20), SimpleNamespace())
+    callback.on_save(None, SimpleNamespace(global_step=20), SimpleNamespace())
+
+    assert [outcome.step for outcome in runner.outcomes] == [20]
+    assert order == ["prepare:20", "release:20"]
+
+
+def test_save_hook_retries_a_failed_interval_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner = make_runner(
+        monkeypatch,
+        bench=BenchEvalConfig(enabled=True, every_steps=10, task_limit=2),
+    )
+    outcomes = iter(
+        [
+            BenchEvalOutcome(step=20, weight_version="pending", failed_reason="not saved"),
+            BenchEvalOutcome(step=20, weight_version="checkpoint-20"),
+        ]
+    )
+    calls: list[int] = []
+
+    def run(step: int) -> BenchEvalOutcome:
+        calls.append(step)
+        return next(outcomes)
+
+    monkeypatch.setattr(runner, "run", run)
+    callback = BenchEvalCallback(runner)
+
+    callback.on_step_end(None, SimpleNamespace(global_step=20), SimpleNamespace())
+    callback.on_save(None, SimpleNamespace(global_step=20), SimpleNamespace())
+
+    assert calls == [20, 20]
 
 
 def test_the_release_seam_runs_even_when_the_eval_boundary_raises(

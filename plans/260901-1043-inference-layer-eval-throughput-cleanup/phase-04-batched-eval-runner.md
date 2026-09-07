@@ -9,6 +9,10 @@ dependencies: [3]
 
 # Phase 4: Batched evaluation runner
 
+> **Decision update — 2026-09-05:** Local evaluation is vLLM-only. The earlier
+> requirement to retain `TransformersPolicy` is superseded; missing vLLM or a LoRA
+> refusal now fails directly. The HTTP endpoint path remains supported.
+
 ## Overview
 
 Drive evaluation through the shared turn engine on an in-process vLLM engine, add
@@ -225,8 +229,8 @@ naming the consumer, which is what the audit's own inventory should have demande
 for a symbol introduced by a still-open phase.
 
 What landed with the fix: `generation_for` selects the path and records it in
-`recorded_free.generation_path`, with three logged fallbacks to `TransformersPolicy`
-(endpoint, vllm absent, adapter refused) and everything else raising. And
+`recorded_free.generation_path`, with three logged alternatives (HTTP endpoint,
+vllm absent, adapter refused) and everything else raising. And
 `recorded_free.dtype` now comes from the engine rather than the constant
 `"bfloat16"`, which was about to become actively wrong: a Turing card resolves
 float16, and a report claiming bf16 would present two numeric regimes as one
@@ -255,6 +259,15 @@ The engine gained `generate_ids`: the turn engine renders and tokenizes itself, 
 re-tokenizing a decoded string would let a BPE seam move the boundary the mask
 builder depends on. A position whose logprob vLLM did not report stays NaN rather
 than shortening the row.
+
+**Fallback wiring correction (2026-09-03).** The first command wiring only selected
+the shared engine when vLLM was available; a local Transformers fallback still used
+the old text loop. `TransformersPolicyBackend` now carries that policy through the
+same token-id `TurnEngine` (serially, because the HF policy exposes one model), and
+its paired tokenizer comes from the loaded policy. HTTP remains text-native because
+the remote server does not accept pre-tokenized prompts. Batched evaluation also
+restored per-task stderr progress, so this path keeps the CLI's non-TTY observability
+contract.
 
 ## Risk Assessment
 

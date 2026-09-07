@@ -29,18 +29,31 @@ PY
 
 uv sync --locked --no-dev --extra colab
 
-git submodule update --init --recursive --checkout third_party/EnvScaler
-git submodule status --recursive third_party/EnvScaler
+if git -C "$project_root" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  git submodule update --init --recursive --checkout third_party/EnvScaler
+  git submodule status --recursive third_party/EnvScaler
+elif [[ -f "$project_root/third_party/EnvScaler/rl/roll/pipeline/agentic/env/envscaler_env/data/191_env_metadata.json" ]]; then
+  echo "using archived EnvScaler sources (no Git metadata)"
+else
+  echo "EnvScaler sources are missing from the source archive" >&2
+  exit 1
+fi
 
 if command -v nvidia-smi >/dev/null 2>&1; then
   nvidia-smi
 fi
 
-# The kernel libraries are mandatory, not opportunistic. Falling back to sdpa and
-# an unfused loss head materializes a dense [batch, seq, 248320] logits tensor and
-# the unfused GDN recurrence, neither of which fits in 24 GB -- so a missing
-# kernel is a setup failure, not a slower run. Each is exercised on the device,
-# because importable and ABI-compatible are different claims.
+# The GDN mixer, causal convolution and fused loss kernels are mandatory, not
+# opportunistic. Falling back to an unfused loss head materializes a dense
+# [batch, seq, 248320] logits tensor and the unfused GDN recurrence, neither of
+# which fits in 24 GB -- so a missing kernel there is a setup failure, not a
+# slower run. Each is exercised on the device, because importable and
+# ABI-compatible are different claims.
+#
+# Attention is the exception: FlashAttention-2's kernels are Ampere-and-newer, and
+# `sdpa` is a correct fallback, so on Turing the wheel is expected to be unusable
+# and only its absence-of-crash matters. FP16 is used below sm80 because bf16 has
+# no tensor cores there.
 uv run --no-sync python - <<'PY'
 import torch
 
@@ -52,37 +65,57 @@ print(f"gpu={torch.cuda.get_device_name(0)}")
 print(f"compute_capability={major}.{minor}")
 print(f"vram_gb={properties.total_memory / 1024**3:.2f}")
 
-from flash_attn import flash_attn_func
+if (major, minor) < (7, 5):
+    raise SystemExit(f"smolqwen requires sm75 or newer, found sm{major}{minor}")
 
-qkv = torch.randn(1, 128, 8, 64, device="cuda", dtype=torch.bfloat16)
-flash_attn_func(qkv, qkv, qkv, causal=True)
-print("verified flash_attn")
+ampere = (major, minor) >= (8, 0)
+attention_dtype = torch.bfloat16 if ampere else torch.float16
+
+if ampere:
+    from flash_attn import flash_attn_func
+
+    qkv = torch.randn(1, 128, 8, 64, device="cuda", dtype=attention_dtype)
+    flash_attn_func(qkv, qkv, qkv, causal=True)
+    print("verified flash_attn")
+else:
+    query = torch.randn(1, 8, 128, 256, device="cuda", dtype=attention_dtype)
+    key = torch.randn(1, 8, 128, 256, device="cuda", dtype=attention_dtype)
+    torch.nn.functional.scaled_dot_product_attention(query, key, key, is_causal=True)
+    print(f"verified sdpa (sm{major}{minor} predates flash_attention_2)")
 
 from causal_conv1d import causal_conv1d_fn
 
 causal_conv1d_fn(
-    torch.randn(2, 16, 64, device="cuda", dtype=torch.bfloat16),
-    torch.randn(16, 4, device="cuda", dtype=torch.bfloat16),
+    torch.randn(2, 16, 64, device="cuda", dtype=attention_dtype),
+    torch.randn(16, 4, device="cuda", dtype=attention_dtype),
 )
 print("verified causal_conv1d")
 
 from fla.ops.gated_delta_rule import chunk_gated_delta_rule
 
+# `use_qk_l2norm_in_kernel=True` matches how modeling_qwen3_5 calls this at both
+# of its call sites, and it is load-bearing in FP16: it bounds ||q||/||k|| to 1
+# before the kernel's intra-chunk accumulation. Omitting it makes unit-variance
+# FP16 keys overflow to NaN under a weak decay -- measured 0/5 seeds finite on a
+# T4 without it, 5/5 with it -- which would fail a card the model runs fine on.
 shape = (1, 64, 4, 64)
-chunk_gated_delta_rule(
-    torch.randn(*shape, device="cuda", dtype=torch.bfloat16),
-    torch.randn(*shape, device="cuda", dtype=torch.bfloat16),
-    torch.randn(*shape, device="cuda", dtype=torch.bfloat16),
+output, _state = chunk_gated_delta_rule(
+    torch.randn(*shape, device="cuda", dtype=attention_dtype),
+    torch.randn(*shape, device="cuda", dtype=attention_dtype),
+    torch.randn(*shape, device="cuda", dtype=attention_dtype),
     g=torch.rand(*shape[:3], device="cuda", dtype=torch.float32).log(),
-    beta=torch.rand(*shape[:3], device="cuda", dtype=torch.bfloat16),
+    beta=torch.rand(*shape[:3], device="cuda", dtype=attention_dtype),
+    use_qk_l2norm_in_kernel=True,
 )
+if not torch.isfinite(output).all():
+    raise SystemExit("flash_linear_attention produced non-finite values on this card")
 print("verified flash_linear_attention")
 
 from liger_kernel.transformers import LigerFusedLinearCrossEntropyLoss
 
 LigerFusedLinearCrossEntropyLoss()(
-    torch.randn(1000, 128, device="cuda", dtype=torch.bfloat16),
-    torch.randn(8, 128, device="cuda", dtype=torch.bfloat16),
+    torch.randn(1000, 128, device="cuda", dtype=attention_dtype),
+    torch.randn(8, 128, device="cuda", dtype=attention_dtype),
     torch.randint(0, 1000, (8,), device="cuda"),
 )
 print("verified liger_kernel")

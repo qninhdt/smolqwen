@@ -14,12 +14,15 @@ from smolqwen.console import LOG_LEVEL_ENV, resolve_level
 
 
 def test_every_stage_subcommand_dry_runs(capsys: pytest.CaptureFixture[str]) -> None:
-    for command, stage in SUBCOMMAND_STAGES.items():
-        exit_code = main([command, "--profile", "l4", "--dry-run"])
+    for command in SUBCOMMAND_STAGES:
+        profile = [] if command == "prepare-sft" else ["--profile", "l4"]
+        exit_code = main([command, *profile, "--dry-run"])
         assert exit_code == 0, f"{command} failed to dry-run"
         payload = json.loads(capsys.readouterr().out)
         assert isinstance(payload, dict)
-        assert "profile" in payload, f"{command} resolved {stage} without a profile section"
+        assert ("profile" in payload) is (command != "prepare-sft"), (
+            f"{command} resolved an unexpected profile section"
+        )
 
 
 def test_verbose_logging_keeps_the_dry_run_stdout_parseable(
@@ -33,7 +36,8 @@ def test_verbose_logging_keeps_the_dry_run_stdout_parseable(
     another program parses, so the purity is asserted at the loudest level.
     """
     for command in SUBCOMMAND_STAGES:
-        assert main([command, "--profile", "l4", "--dry-run", "--verbose"]) == 0
+        profile = [] if command == "prepare-sft" else ["--profile", "l4"]
+        assert main([command, *profile, "--dry-run", "--verbose"]) == 0
         captured = capsys.readouterr()
         assert isinstance(json.loads(captured.out), dict), command
 
@@ -136,17 +140,6 @@ def test_probe_subcommand_needs_no_config(capsys: pytest.CaptureFixture[str]) ->
     assert main(["probe", "--no-write"]) == 0
     out = capsys.readouterr().out
     assert "gpu available" in out
-
-
-def test_train_grpo_without_a_profile_names_the_required_preflight(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    exit_code = main(["train-grpo", "--profile", "l4"])
-    assert exit_code == 2
-    captured = capsys.readouterr()
-    assert "profile-difficulty" in captured.err
-    assert "GRPO error" in captured.err
-    assert captured.out == ""
 
 
 def test_parser_exposes_pinned_revision_on_evaluate() -> None:

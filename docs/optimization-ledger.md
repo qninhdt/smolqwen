@@ -8,9 +8,10 @@ workload and must not be used to size it.
 
 ## Current contract
 
-- One released teacher trajectory produces one schema-v2 record. Historical
-  assistant reasoning, tool calls, and text all remain in the context and are
-  supervised; system/user/tool-observation tokens are masked.
+- One released teacher trajectory produces one schema-v2 record. With the selected
+  non-reasoning contract (`data.enable_thinking: false`), tool calls and answer text
+  remain in the context while teacher reasoning is omitted; system/user/tool-
+  observation tokens are masked.
 - The initial cap is 32,768 tokens per trajectory. A longer trajectory is skipped
   whole during conversion; it is never split to manufacture extra samples.
 - A padding-free micro-batch is a single flattened token array with complete
@@ -20,79 +21,81 @@ workload and must not be used to size it.
   by a fixed row count or the 32K token envelope.
 - The trainer rejects the old segmented shard schema before loading a model.
 
+## Runtime paths
+
+`train-sft` resolves attention and dtype from the card it is on. There are two
+attention implementations and no third:
+
+| Card | Attention | Batch shape | Dtype |
+|---|---|---|---|
+| Ampere-plus (sm80+) | `flash_attention_2` | padding-free, `cu_seq_lens` boundaries | BF16 |
+| Turing (sm75) | `sdpa` | right-padded rows with `attention_mask` | FP16 |
+
+FlashAttention-2's kernels are Ampere-and-newer, so on sm75 having the wheel
+installed changes nothing — the capability number decides. `sdpa` is a correct
+attention path rather than an approximation, and it reads the padding mask
+natively, so the padded collator supplies the mask instead of working around a
+kernel that cannot take one. Only FA2 consumes the `cu_seq_lens` boundary
+metadata, so the padding-free sampler and collator are selected by the attention
+decision rather than by a separate switch. On sm75 the token sampler budgets
+`batch_size * max_row_length`, which is the dense tensor that actually executes.
+
+BF16 tensor cores also arrive with Ampere. Torch emulates BF16 on Turing rather
+than refusing it, which would be slower than FP16 *and* not the numerics an
+Ampere run produced, so sm75 resolves to FP16 with the downgrade recorded in the
+ledger. FP16 keeps LoRA parameters in FP32 because `GradScaler` rejects FP16
+gradients. T4 measurements are a separate experiment and do not transfer to the
+L4/A100 envelope.
+
+One extra covers every GPU:
+
+```sh
+bash scripts/setup_colab.sh
+```
+
+`flash-attn` is installed by that extra and simply goes unused below sm80. The
+GDN mixer, causal convolution and fused loss kernels have no usable fallback at
+this model's sizes, so their absence is a setup failure on any card.
+
 ## Toggle status
 
 | Toggle | Setting | Status |
 |---|---|---|
-| `bf16` | on | Required on L4/A100 target hardware. |
+| `bf16` | on | Honoured on Ampere-plus; sm75 resolves the effective run to FP16 because it has no BF16 tensor cores. |
 | `gradient_checkpointing` | on, non-reentrant | Required for the initial 32K attempt; final memory headroom is unmeasured. |
 | `liger_fused_linear_cross_entropy` | on | Required to avoid materializing the large vocabulary logits activation. |
-| `adapter_dtype` | `bfloat16` | Avoids PEFT's fp32 adapter path for this bf16 LoRA run. |
-| `attn_implementation` | `flash_attention_2` | Required for the target fused-kernel validation. |
-| `regional_torch_compile` | on | Uses the known-safe regional exclusions; throughput benefit must be remeasured. |
+| `selective_logit_loss` | on | Padding-free SFT gathers supervised next-token positions through Qwen3.5's `logits_to_keep` before Liger FLCE. Padded runs refuse the gather because one index cannot describe different rows safely. |
+| `adapter_dtype` | `bfloat16` | Default config; BF16 adapters match the BF16 base, while an FP16 run keeps LoRA params in FP32 because GradScaler rejects FP16 gradients. |
+| `attn_implementation` | `flash_attention_2` | Resolved per card: FA2 on sm80+, `sdpa` below it. An explicit `sdpa`/`eager` request is honoured as-is. |
+| `regional_torch_compile` | off | Same-shape L4 measurement was faster with compile off and it avoids a long Inductor startup on reclaimable Colab VMs. |
 
-## In-training dev eval and the envelope
+## Training and evaluation boundary
 
-`bench_eval` scores a held-out dev subset during SFT, so a run produces a
-capability curve rather than only a loss curve. It is off by default because it
-needs a card, and because it shares that card with the trainer.
+SFT is train-only, matching upstream EnvScaler's SFT setup. `prepare-sft` emits
+only `train.jsonl`; the trainer logs training loss and throughput, while BFCL
+multi-turn evaluation belongs to the GRPO `bench_eval` callback and the final
+explicit `evaluate` command.
 
-```yaml
-bench_eval:
-  enabled: true
-  adapter: envscaler_heldout
-  every_steps: 0         # save boundaries only — see below
-  task_limit: 16
-```
+The conversion keeps one complete released trajectory per record. Rows over the
+profile cap are skipped as whole rows, and the trainer rejects older segmented
+schemas before loading a model. No validation shard or SFT benchmark callback is
+maintained.
 
-`every_steps: 0` is not merely the cheapest cadence here, it is the only correct
-one. The scored weights are `checkpoint-N` on disk, which exists only at a save
-boundary; an interval eval would have nothing to score. With `save_steps: 100`
-that is every 100 optimizer steps.
+Qwen3.5's released checkpoint wraps a visual tower beside the language model.
+`all-linear` remains the configured LoRA target, but the text-only SFT and GRPO
+builders exclude that unused `visual` subtree; otherwise a saved adapter contains
+keys that vLLM's text-only LoRA mapper rejects.
 
-There is no weight sync. GRPO syncs because generation is part of its algorithm
-and must run under the current policy; SFT evaluation scores a saved checkpoint,
-and base weights never change during SFT — only the adapter does. So the cycle is:
+## T4 fallback evidence
 
-```
-on_save (TRL wrote checkpoint-N; the store copied and pushed it)
-   → wake_up()                     # base weights back in VRAM
-   → register checkpoint-N as a LoRA adapter under a fresh id
-   → score the dev subset ; log sft/bench_*
-   → sleep()                       # weights offloaded, KV freed
-   → training continues, optimizer state never touched
-```
-
-Two ordering facts this depends on:
-
-- **The engine is built and slept before the trainer exists.**
-  `gpu_memory_utilization` sizes vLLM's KV pool against *total* GPU memory, not
-  against what is free. Built after a resident trainer it either OOMs or reserves
-  against a figure it cannot honour on 24 GB. Built first, the trainer sizes
-  itself against what remains.
-- **Each boundary registers a fresh adapter name.** vLLM caches LoRA weights by
-  integer id, and the id is derived from how many adapters have been registered.
-  Reusing one name would hand vLLM the same id with a new path and serve step
-  100's weights for step 200's score — a flat curve made of plausible numbers.
-
-The step-0 anchor scores the **base model with no adapter**, because TRL has saved
-nothing yet. That is also the `base` arm of the final `Base | SFT | SFT+RL` table,
-so the anchor is a number that already means something.
-
-`eval_loss` and `sft/bench_*` are not the same measurement and are not expected to
-move together. `eval_loss` is teacher-forced likelihood on `val.jsonl`;
-`sft/bench_*` is generation under the real tool harness, scored by the verifier.
-A run can improve one and not the other.
-
-Whether both fit on an L4 is the open measurement. `sleep(level=1)` offloads
-weights to the host and discards the KV cache, but how much that returns is a
-runtime property of the pin and the card.
-`tests/test_sft_bench_eval_memory_guard.py` measures it with
-`reset_peak_memory_stats()` plus `memory_allocated()` — `max_memory_allocated()`
-is a monotonic high-water mark and `memory_reserved()` does not shrink without
-`empty_cache()`, so neither can show a release. If the release is too small to
-hold the 32K envelope beside the engine, the fallback is to eval in a subprocess
-against the saved adapter; do not shrink the envelope, which this document owns.
+The T4 route is executable but is not a 32K replacement. Its checked-in profile
+uses a 16K sequence cap and a 16K dense padded-token envelope; whether the
+current all-linear LoRA setup fits in 14.56 GiB still requires a live T4
+measurement. A valid T4 run must record FP16, the padded sampler budget, finite
+loss, and a short unequal-row forward/backward smoke step. The original package
+has passed a live T4 D64 forward/backward probe, but its unpatched D256 backward
+path failed the shared-memory limit; the patched D256 and SFT claims remain
+pending until Colab assigns another T4.
 
 ## Required L4 evidence before an SFT run is accepted
 
@@ -114,10 +117,10 @@ On an L4 with the `colab` dependencies installed, the validation sequence is:
    finite loss, compile behavior, and stable post-warm-up memory.
 4. With `bench_eval.enabled: true`, confirm `sleep()` returns enough that the 32K
    envelope survives, that the engine is asleep during training steps (a
-   non-monotonic `memory_allocated()` reading), and that the summed
+   non-monotonic worker-side driver-footprint reading), and that the summed
    `sft/bench_wall_s` stays at or under 10% of training wall time.
 
-If any boundary check fails, padding-free must remain disabled for training. If
-the 32K envelope lacks safe headroom, measure 24,576, record the evidence, and
-regenerate the full-trajectory artifacts with that cap. Do not infer either
-decision from the previous segmented benchmark.
+If any L4/A100 boundary check fails, padding-free must remain disabled for that
+hardware path. If the 32K envelope lacks safe headroom, measure 24,576, record
+the evidence, and regenerate the full-trajectory artifacts with that cap. Do not
+infer either decision from the previous segmented benchmark or from a T4 run.

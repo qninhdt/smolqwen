@@ -103,7 +103,11 @@ class BoundedPoolDriver:
 
 
 def build_engine(
-    *, driver: Any, config: TurnEngineConfig, tokenizer: OfflineTokenizer | None = None
+    *,
+    driver: Any,
+    config: TurnEngineConfig,
+    tokenizer: OfflineTokenizer | None = None,
+    on_episode_done: Any = None,
 ) -> TurnEngine:
     from smolqwen.data.render import render_prefix
     from smolqwen.inference.decoding import decode_completion
@@ -125,6 +129,7 @@ def build_engine(
         render_prefix_ids=render_prefix_ids,
         decode=lambda ids: decode_completion(tokenizer, list(ids)),
         config=config,
+        on_episode_done=on_episode_done,
     )
 
 
@@ -161,6 +166,29 @@ def test_more_tasks_than_pool_capacity_completes_under_a_window() -> None:
         f"capacity of {CAPACITY}"
     )
     assert not driver.live
+
+
+def test_episode_completion_is_reported_before_run_returns() -> None:
+    """A long batch must expose completed tasks while the remaining ones run."""
+    bindings = fixture_bindings(episodes=TASKS)
+    driver = BoundedPoolDriver(CAPACITY, tool_names=bindings[0].tool_names)
+    returned = False
+    completed: list[str] = []
+
+    def on_done(episode: Episode) -> None:
+        assert not returned
+        assert episode.state == "done"
+        completed.append(episode.episode_id)
+
+    engine = build_engine(
+        driver=driver,
+        config=engine_config(max_in_flight=CAPACITY),
+        on_episode_done=on_done,
+    )
+    episodes = engine.run(bindings)
+    returned = True
+
+    assert sorted(completed) == sorted(episode.episode_id for episode in episodes)
 
 
 def test_the_same_workload_without_a_window_hits_the_capacity_error() -> None:

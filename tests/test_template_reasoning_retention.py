@@ -58,6 +58,68 @@ def test_inference_template_still_strips_reasoning_before_last_user() -> None:
     assert "REASON_NEW" in rendered
 
 
+def test_non_reasoning_render_strips_teacher_reasoning_and_keeps_the_scaffold() -> None:
+    """The non-reasoning SFT target: answers only, but the template still emits the
+    empty think scaffold on post-query assistant turns -- exactly what an
+    `enable_thinking=False` generation prompt pre-fills at inference."""
+    tokenizer = OfflineTokenizer()
+    messages = [
+        Message("system", "sys"),
+        Message("user", "first"),
+        Message("assistant", content="answer-a", reasoning_content="REASON_A"),
+        Message("tool", "obs"),
+        Message("assistant", content="interim", reasoning_content="REASON_B"),
+        Message("user", "second"),
+        Message("assistant", content="final", reasoning_content="REASON_C"),
+    ]
+    sample = render_training_sample(
+        tokenizer,
+        messages,
+        trajectory_uid="task:conversation",
+        task_id="task",
+        mode="conversation",
+        reasoning=False,
+    )
+    rendered = tokenizer.decode(list(sample.input_ids))
+    assert all(reason not in rendered for reason in ("REASON_A", "REASON_B", "REASON_C"))
+    # Every post-query assistant turn carries the empty think scaffold -- the
+    # non-thinking history shape, not just the final turn.
+    assert rendered.count("<think>\n\n</think>") == 3
+    # And the reasoning variant of the same conversation is strictly longer.
+    reasoning_sample = render_training_sample(
+        tokenizer,
+        messages,
+        trajectory_uid="task:conversation",
+        task_id="task",
+        mode="conversation",
+    )
+    assert reasoning_sample.total_tokens > sample.total_tokens
+
+
+def test_inline_think_tags_in_content_are_stripped_in_non_reasoning_render() -> None:
+    tokenizer = OfflineTokenizer()
+    messages = [
+        Message("system", "sys"),
+        Message("user", "task"),
+        Message("assistant", content="musing</think>answer"),
+    ]
+    sample = render_training_sample(
+        tokenizer, messages, trajectory_uid="t:c", task_id="t", mode="c", reasoning=False
+    )
+    rendered = tokenizer.decode(list(sample.input_ids))
+    assert "musing" not in rendered
+    assert "answer" in rendered
+
+
+def test_non_thinking_prefix_pre_closes_the_think_block() -> None:
+    tokenizer = OfflineTokenizer()
+    messages = [Message("system", "sys"), Message("user", "task")]
+    prompt = render_prefix(tokenizer, messages, add_generation_prompt=True, enable_thinking=False)
+    assert prompt.endswith("<|im_start|>assistant\n<think>\n\n</think>\n\n")
+    thinking = render_prefix(tokenizer, messages, add_generation_prompt=True)
+    assert thinking.endswith("<|im_start|>assistant\n<think>\n")
+
+
 def test_training_template_fails_closed_on_upstream_drift() -> None:
     tokenizer = OfflineTokenizer()
     tokenizer.chat_template = tokenizer.chat_template.replace(

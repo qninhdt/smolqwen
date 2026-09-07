@@ -31,6 +31,8 @@ from typing import Any
 import pytest
 
 from smolqwen.cli import SUBCOMMAND_STAGES, main
+from smolqwen.config import resolve
+from smolqwen.config_models import SftConfig
 from smolqwen.console import configure_logging, logger, progress_task
 
 SRC = Path(__file__).resolve().parents[1] / "src" / "smolqwen"
@@ -43,9 +45,7 @@ EMITTERS: dict[str, tuple[str, ...]] = {
     "eval/runner.py": ("json.dumps",),
     "rollout/bench.py": ("json.dumps",),
     "serving/server.py": ("shlex.join",),
-    "training/grpo.py": ("json.dumps",),
     "training/merge.py": ("json.dumps",),
-    "training/sft.py": ("json.dumps",),
 }
 
 
@@ -122,7 +122,8 @@ def test_dry_run_summary_is_parseable_json_on_stdout_for_every_stage(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     for command in SUBCOMMAND_STAGES:
-        assert main([command, "--profile", "l4", "--dry-run"]) == 0
+        profile = [] if command == "prepare-sft" else ["--profile", "l4"]
+        assert main([command, *profile, "--dry-run"]) == 0
         captured = capsys.readouterr()
         # Parsed, not matched: a stray line on stdout breaks `json.loads` the same
         # way it breaks the notebook cell that pipes this into `jq`.
@@ -148,7 +149,13 @@ def test_build_workload_paths_are_json_on_stdout(
     from smolqwen import tokenizer as tokenizer_module
     from smolqwen.eval import workload
 
-    monkeypatch.setattr(tokenizer_module, "load_tokenizer", lambda *_a, **_k: object())
+    requested: list[tuple[Any, Any]] = []
+
+    def fake_tokenizer(model_id: Any, *, revision: Any = None, **_: Any) -> object:
+        requested.append((model_id, revision))
+        return object()
+
+    monkeypatch.setattr(tokenizer_module, "load_tokenizer", fake_tokenizer)
     monkeypatch.setattr(
         workload,
         "build_bfcl_agentic_workload",
@@ -157,6 +164,14 @@ def test_build_workload_paths_are_json_on_stdout(
     assert main(["build-workload", "--profile", "l4", "--output", str(tmp_path / "t.jsonl")]) == 0
     payload = json.loads(capsys.readouterr().out)
     assert set(payload) == {"workload", "composition"}
+
+    # The template comes from the pinned base model. `EvalConfig.http_model` is the
+    # name a server answers to (`--served-model-name smolqwen`), never a repo id, so
+    # loading a tokenizer from it failed outright on the shipped config -- and the
+    # emitter's own test did not see it because the tokenizer was stubbed.
+    sft = resolve("sft", "l4")
+    assert isinstance(sft, SftConfig)
+    assert requested == [(sft.model_id, sft.model_revision)]
 
 
 def test_merge_report_json_stays_on_stdout(
@@ -175,58 +190,6 @@ def test_merge_report_json_stays_on_stdout(
     monkeypatch.setattr(merge_module, "merge_adapter", lambda **_: result)
     assert main(["merge-adapter", "--profile", "l4"]) == 0
     assert json.loads(capsys.readouterr().out) == result.to_dict()
-
-
-def test_difficulty_counts_json_stays_on_stdout(
-    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """`notebooks/03-grpo.ipynb` reads these counts from stdout.
-
-    The trainer needs a GPU; the profiling loop, the classifier, and the writer do
-    not, so only assembly is substituted.
-    """
-    from smolqwen.tracking import Tracker
-    from smolqwen.training import grpo as grpo_module
-
-    task_ids = ("task-a", "task-b")
-    dataset = [{"task_id": task_id, "prompt": f"prompt-{task_id}"} for task_id in task_ids]
-    rewards = iter([1.0, 1.0, 0.0, 0.5] * 4)
-
-    def rollout_func(prompts: Sequence[Any], _trainer: Any) -> dict[str, list[float]]:
-        return {"rollout_reward": [next(rewards) for _ in prompts]}
-
-    trainer = SimpleNamespace(
-        train_dataset=dataset,
-        rollout_func=rollout_func,
-        vllm_generation=None,
-    )
-    monkeypatch.setattr(
-        grpo_module,
-        "build_grpo_trainer",
-        lambda *_a, **_k: SimpleNamespace(
-            trainer=trainer,
-            train_task_ids=task_ids,
-            tracker=Tracker(project="t", enabled=False),
-            shutdown=lambda: None,
-        ),
-    )
-    profile_path = tmp_path / "difficulty.json"
-    exit_code = main(
-        [
-            "profile-difficulty",
-            "--profile",
-            "l4",
-            "--override",
-            f"curriculum.difficulty_profile_path={profile_path}",
-            "--override",
-            "curriculum.profile_rollouts=2",
-        ]
-    )
-    assert exit_code == 0
-    counts = json.loads(capsys.readouterr().out)
-    assert set(counts) == {"always_zero", "band", "always_one"}
-    assert sum(counts.values()) == len(task_ids)
-    assert profile_path.exists()
 
 
 def test_selftest_report_json_stays_on_stdout_and_failures_go_to_stderr(
@@ -303,6 +266,8 @@ def test_evaluation_report_paths_are_json_while_progress_goes_to_stderr(
     from smolqwen.eval.adapters.base import AdapterResult, EvalTask, StepResult
     from smolqwen.eval.metrics import TaskMetrics, aggregate
     from smolqwen.eval.policies import GenerationResult
+    from smolqwen.rollout.rollout_func import encode_ids
+    from tests.helpers import OfflineTokenizer
 
     configure_logging(level=logging.INFO)
 
@@ -310,10 +275,16 @@ def test_evaluation_report_paths_are_json_while_progress_goes_to_stderr(
         revision = "a" * 40
         adapter_revision = None
 
+        def __init__(self) -> None:
+            self.tokenizer = OfflineTokenizer(token_size=1)
+
         def generate(
             self, messages: Sequence[Mapping[str, Any]], tools: Sequence[Mapping[str, Any]]
         ) -> GenerationResult:
             return GenerationResult("done", 3, "stop")
+
+        def generate_ids(self, prompt_ids: Sequence[int], **_: Any) -> tuple[int, ...]:
+            return tuple(encode_ids(self.tokenizer, "done"))
 
     class _Adapter:
         def load_tasks(self) -> list[EvalTask]:
@@ -341,12 +312,12 @@ def test_evaluation_report_paths_are_json_while_progress_goes_to_stderr(
         def summarize(self, tasks: Sequence[TaskMetrics]) -> dict[str, dict[str, float]]:
             return aggregate(tasks)
 
-    monkeypatch.setattr(runner, "load_policy", lambda **_: _Policy())
+    monkeypatch.setattr(runner, "load_http_policy", lambda **_: _Policy())
     monkeypatch.setattr(runner, "create_adapter", lambda *_a, **_k: _Adapter())
     args = SimpleNamespace(
-        checkpoint=str(tmp_path),
+        checkpoint=None,
         revision="a" * 40,
-        endpoint=None,
+        endpoint="http://127.0.0.1:8000/v1",
         adapter_path=None,
         adapter_revision=None,
         adapter="fixture",

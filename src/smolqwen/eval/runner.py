@@ -17,7 +17,7 @@ from smolqwen.eval.batched import evaluate_batched, generation_for
 from smolqwen.eval.checkpoints import resolve as resolve_checkpoint
 from smolqwen.eval.manifest import EvalManifest
 from smolqwen.eval.metrics import TaskMetrics
-from smolqwen.eval.policies import Policy, load_policy
+from smolqwen.eval.policies import Policy, load_http_policy
 from smolqwen.eval.report import write_report
 from smolqwen.eval.serving_pairing import load_quality_result
 from smolqwen.eval.trajectories import TrajectoryRecord, write_trajectories
@@ -49,6 +49,10 @@ def build_manifest(
 ) -> EvalManifest:
     invariant = {
         "decoding": config.decoding.model_dump(mode="json"),
+        # The render mode belongs beside decoding: a thinking-prompt run and a
+        # non-thinking-prompt run ask the model different things, so the two are
+        # not comparable even with identical sampling parameters.
+        "enable_thinking": config.enable_thinking,
         "max_context_tokens": config.profile.max_seq_length,
         "max_steps": config.max_steps_per_task,
         "seed": config.decoding.seed,
@@ -77,11 +81,14 @@ def evaluate_adapter(
     records: list[TrajectoryRecord] | None = None,
     label: str = "evaluation",
 ) -> dict[str, dict[str, float]]:
-    """Advance every task to terminal, score it, and keep its trajectory.
+    """Advance every task to terminal through the text-native baseline path.
 
     `records` collects one `TrajectoryRecord` per task when supplied. The history
     was previously built and discarded, which left an all-or-nothing `0.0`
     unattributable and a re-grade impossible.
+
+    The command uses `evaluate_batched` for local vLLM; this helper remains the
+    text-policy path used for agreement checks and HTTP compatibility.
 
     Progress goes to stderr per task. This loop runs for hours and used to emit
     nothing until the final JSON line, so a stalled run and a slow one looked
@@ -181,14 +188,7 @@ def _evaluate_named_adapter(
     backend: Any | None = None,
     tokenizer: Any | None = None,
 ) -> tuple[dict[str, dict[str, float]], Mapping[str, Any]]:
-    """Score one benchmark, batched through the engine when there is one.
-
-    The two paths are the reason `evaluate_batched` exists: with a backend, tasks
-    advance concurrently and each cycle issues one batched generation call; without
-    one, `evaluate_adapter` walks tasks serially at batch size 1. Same adapters, same
-    aggregation, same trajectory records -- only the generation width differs, which
-    is what makes the agreement measurement meaningful.
-    """
+    """Score one benchmark through local vLLM or the HTTP compatibility path."""
     adapter = create_adapter(name, config)
     tasks = adapter.load_tasks()
     try:
@@ -201,6 +201,7 @@ def _evaluate_named_adapter(
                 tokenizer=tokenizer,
                 tasks=tasks,
                 records=records,
+                label=name,
             )
         else:
             if policy is None:
@@ -246,20 +247,11 @@ def run_evaluation(config: EvalConfig, args: Any) -> int:
         endpoint=args.endpoint,
         store=_checkpoint_store(config, args),
     )
-    # The in-process engine first: this is the whole point of the inference layer.
-    # `generation_for` returns an empty backend for an endpoint, for a host without
-    # vllm, and for an adapter vLLM refuses -- each recorded, each falling back to a
-    # policy rather than failing the run.
     generation = generation_for(config, resolved)
     policy = (
-        None
-        if generation.backend is not None
-        else load_policy(
-            checkpoint=resolved.path,
+        load_http_policy(
             revision=resolved.revision,
             endpoint=args.endpoint,
-            adapter=resolved.adapter_path,
-            adapter_revision=resolved.adapter_revision,
             model=config.http_model,
             max_new_tokens=config.decoding.max_new_tokens,
             temperature=config.decoding.temperature,
@@ -267,9 +259,13 @@ def run_evaluation(config: EvalConfig, args: Any) -> int:
             top_k=config.decoding.top_k,
             seed=config.decoding.seed,
             http_timeout_s=config.http_timeout_s,
+            enable_thinking=config.enable_thinking,
         )
+        if generation.path == "http"
+        else None
     )
-    tokenizer = _tokenizer_for(resolved) if generation.backend is not None else None
+    inference_backend = generation.backend
+    tokenizer = _tokenizer_for(resolved) if inference_backend is not None else None
     adapter_invariants: dict[str, Mapping[str, Any]] = {}
     metrics: dict[str, dict[str, float]] = {}
     tag = args.tag or "evaluation"
@@ -298,7 +294,7 @@ def run_evaluation(config: EvalConfig, args: Any) -> int:
                 policy,
                 adapter_name,
                 records=records,
-                backend=generation.backend,
+                backend=inference_backend,
                 tokenizer=tokenizer,
             )
             duplicates = sorted(set(metrics) & set(adapter_metrics))
@@ -330,14 +326,11 @@ def run_evaluation(config: EvalConfig, args: Any) -> int:
                 **resolved.to_recorded(),
                 "endpoint": args.endpoint,
                 "served_model": config.http_model if args.endpoint else None,
-                "dtype": getattr(args, "served_dtype", None) or _recorded_dtype(generation),
-                "quantization": getattr(args, "quantization", None),
-                "speculative_decoding": getattr(args, "speculative_decoding", None),
-                "kv_budget": getattr(args, "kv_budget", None),
-                "max_num_seqs": getattr(args, "max_num_seqs", None),
-                "max_num_batched_tokens": getattr(args, "max_num_batched_tokens", None),
-                "chunked_prefill": getattr(args, "chunked_prefill", None),
-                "prefix_caching": getattr(args, "prefix_caching", None),
+                # The serving config generation actually ran under, read off the
+                # engine. The nine flags that used to assert these are gone; with
+                # nothing recording them the eight fields stayed None and
+                # `--require-serving-match` could not match any real serving row.
+                **_serving_config(generation),
                 "library_versions": _library_versions(),
                 # What generation actually used, so a row is self-describing without
                 # the caller having asserted it on the command line.
@@ -371,6 +364,29 @@ def run_evaluation(config: EvalConfig, args: Any) -> int:
     return 0
 
 
+def _serving_config(generation: Any) -> dict[str, Any]:
+    """The eight serving fields a paired speed/quality row compares.
+
+    From the in-process engine when there is one -- it is the only party that knows
+    what it resolved. An endpoint's serving fields stay `None`: the server is a
+    separate process this command cannot inspect. `assert_quality_matches_serving`
+    compares only fields the measurement recorded, so a `None` makes no claim.
+    """
+    engine = getattr(generation, "engine", None)
+    read = getattr(engine, "serving_config", None)
+    if callable(read):
+        try:
+            return dict(read())
+        except Exception as exc:  # noqa: BLE001 - provenance must not fail a scored run
+            LOG.warning(
+                "could not read the engine's serving config (%s: %s); "
+                "the report records it as unknown",
+                type(exc).__name__,
+                exc,
+            )
+    return {"dtype": _recorded_dtype(generation)}
+
+
 def _recorded_dtype(generation: Any) -> str | None:
     """The dtype generation actually ran at, from the engine when there is one.
 
@@ -381,7 +397,7 @@ def _recorded_dtype(generation: Any) -> str | None:
     engine = getattr(generation, "engine", None)
     if engine is not None:
         return str(engine.profile.dtype)
-    return "bfloat16" if generation.path == "transformers" else None
+    return None
 
 
 def _tokenizer_for(resolved: Any) -> Any:

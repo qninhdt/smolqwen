@@ -397,9 +397,7 @@ def _run_child(candidate: str) -> dict[str, Any]:
     gradient_accumulation = EFFECTIVE_BATCH // micro_batch
     dataset = load_dataset("json", data_files=str(SHARD), split="train")
     # Precomputed length avoids a tokenizer/model-column probe at dataloader creation.
-    dataset = dataset.add_column(
-        "length", [len(row["input_ids"]) for row in dataset]
-    )
+    dataset = dataset.add_column("length", [len(row["input_ids"]) for row in dataset])
     tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, revision=MODEL_REVISION)
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token = tokenizer.eos_token

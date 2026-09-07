@@ -6,10 +6,30 @@ priority: P1
 effort: "17.5 phase-days"
 tags: [inference, vllm, evaluation, throughput, observability, cleanup]
 created: 2026-09-01
-revised: 2026-09-03
+revised: 2026-09-05
 ---
 
 # Shared vLLM inference layer, batched evaluation, in-training benchmark eval
+
+> **Decision update — 2026-09-05:** Local inference now requires vLLM.
+> `TransformersPolicy` and its adapter fallback were removed after vLLM 0.26's
+> Qwen3.5 implementation and GDN packed-module mappings were verified in source.
+> HTTP evaluation remains supported for a separately served vLLM endpoint. Earlier
+> fallback requirements and audit responses below are retained as historical context
+> and are superseded by this decision.
+
+> **Decision update — 2026-09-07:** The experiment's eval strategy changed,
+> superseding goal 5 and the dev/test criteria below. SFT is now train-only (no
+> eval_loss, no in-training benchmark), matching upstream EnvScaler's own SFT. The
+> `envscaler_heldout` concept is gone from both stages: GRPO trains on the full
+> scenario set and scores **BFCL multi-turn base** in-training as the dev curve
+> (`every_steps: 20`, 128 tasks, mirroring upstream's BFCL-validation design). Dev
+> and test therefore coincide — the final BFCL number selects nothing. The
+> `assert_dev_adapter` guard and `test_dev_test_integrity.py` were removed with
+> this decision rather than as regressions. Separately, `OfflineEngine` now
+> constructs with `enable_prefix_caching=True`: vLLM 0.26 resolves the flag to
+> false for Qwen3.5's hybrid architecture when it is not passed, which made every
+> multi-turn evaluation turn re-prefill the whole conversation.
 
 ## Overview
 
@@ -47,8 +67,10 @@ data → baseline → SFT + dev eval → RL + dev eval → test benchmark → se
 ```
 
 **Dev is EnvScaler held-out. Test is BFCL.** Dev selects checkpoints and drives
-the learning curve; BFCL runs once at the end and influences no decision. That
-boundary is currently a coincidence — `grpo.yaml:60-61` and `eval.yaml:23-24`
+the learning curve. A Base BFCL measurement may be captured before training as a
+non-selecting reference; SFT and SFT+RL each run BFCL once after selection. No BFCL
+result influences tuning or checkpoint choice. The dev boundary is currently a
+coincidence — `grpo.yaml:60-61` and `eval.yaml:23-24`
 both happen to hold 10/8, with no assertion tying them, so raising either leaves
 environments both trained on and scored. Phase 1 turns it into a tested property.
 
@@ -66,7 +88,7 @@ weight-transfer protocol of its own.
 | 2 | `evaluate` runs tasks concurrently against an in-process `vllm.LLM`, within a measured agreement tolerance of the pre-refactor path and at materially higher GPU utilization | P1 |
 | 3 | One turn engine drives both training rollout and benchmark evaluation, with all seven divergences reconciled explicitly | P1 |
 | 4 | SFT and GRPO log **dev** benchmark scores during training through that same engine, against a recorded weight version, at or under 10% of training wall time | P1 |
-| 5 | Dev/test separation is enforced by assertion: EnvScaler held-out selects checkpoints, BFCL runs once at the end and selects nothing | P1 |
+| 5 | Dev/test separation is enforced by assertion: EnvScaler held-out selects checkpoints, BFCL is non-selecting and each final arm runs at most once | P1 |
 | 6 | Every evaluation writes a per-task trajectory record, so a score is re-derivable and a failure attributable without re-running generation | P2 |
 | 7 | Score stability across batch composition is measured and recorded, with environment-timeout confounds separated from kernel effects | P1 |
 | 8 | Every CLI command reports progress and errors through rich on stderr, leaving every machine-readable stdout emitter byte-identical | P2 |
@@ -78,26 +100,26 @@ weight-transfer protocol of its own.
 | # | Phase | Status |
 |---|-------|--------|
 | 1 | [Phase 1: Inventory, baseline, and document reconciliation](./phase-01-start.md) | Done |
-| 2 | [Phase 2: vLLM runtime, profiles, and the shared client](./phase-02-vllm-runtime-and-inference-layer.md) | In progress — 2 GPU criteria open |
+| 2 | [Phase 2: vLLM runtime, profiles, and the shared client](./phase-02-vllm-runtime-and-inference-layer.md) | Done — L4 sleep and adapter capability measured |
 | 3 | [Phase 3: Unify the turn engine](./phase-03-unify-turn-engine.md) | Done |
 | 4 | [Phase 4: Batched evaluation runner](./phase-04-batched-eval-runner.md) | In progress — agreement needs a checkpoint |
-| 5 | [Phase 5: GRPO in-training benchmark eval](./phase-05-grpo-in-training-benchmark-eval.md) | Done — cost bound needs a card |
-| 6 | [Phase 6: SFT in-training benchmark eval](./phase-06-sft-in-training-benchmark-eval.md) | In progress — 4 GPU criteria open |
+| 5 | [Phase 5: GRPO in-training benchmark eval](./phase-05-grpo-in-training-benchmark-eval.md) | In progress — cost bound needs a card; one metric intentionally rejected |
+| 6 | [Phase 6: SFT in-training benchmark eval](./phase-06-sft-in-training-benchmark-eval.md) | In progress — production-cadence cost open |
 | 7 | [Phase 7: Rich logging across every CLI](./phase-07-rich-logging-across-cli.md) | Done |
 | 8 | [Phase 8: Delete dead code and one-shot scripts](./phase-08-delete-dead-code-and-scripts.md) | Done |
 | 9 | [Phase 9: Artifact persistence to HF and W&B](./phase-09-artifact-persistence-hf-wandb.md) | Done |
-| 10 | [Phase 10: L4 validation](./phase-10-gpu-validation-on-l4.md) | Blocked — needs an L4 |
+| 10 | [Phase 10: L4 validation](./phase-10-gpu-validation-on-l4.md) | In progress — partial L4 evidence recorded |
 
-**Status: every CPU-implementable phase is done.** What remains is one card. Nine
-criteria across four phases are GPU measurements and are listed in
+**Status: every CPU-implementable phase is done.** The L4 smoke closed the SFT
+envelope and sleep/wake criteria. The remaining card measurements and final test
+run are listed in
 `phase-10-gpu-validation-on-l4.md`, which is the single place they close:
 
 | Phase | Open criterion | Why CPU cannot answer it |
 |---|---|---|
-| 2 | vLLM accepts the `all-linear` adapter; sleep/wake VRAM release | vllm is absent from CI by construction; the local card is 3.7 GB |
 | 4 | Agreement with the re-captured baseline | needs real generation from real weights, and no checkpoint exists in this repo |
 | 5 | In-training eval cost within the 10% budget | needs a real training step to be a fraction *of* |
-| 6 | 32K envelope beside a sleeping engine; non-monotonic asleep reading; 10% cost | sleep-mode release is a runtime property |
+| 6 | Production-cadence in-training eval cost within 10% | needs the full save cadence and task limit |
 
 Deliberately not implemented, with the reason recorded in
 `phase-05-grpo-in-training-benchmark-eval.md`:
@@ -114,27 +136,31 @@ no number measured under it transfers:
 - **fp16, not bf16.** Turing has no bf16 tensor cores, so `EvalProfile.dtype`
   resolves float16 and logs the downgrade. Narrower exponent range, so a T4 row and
   an L4 row are not one experiment.
-- **`train-sft` refuses to run.** FlashAttention 2 is Ampere and newer, and without
-  a varlen flash kernel nothing reads `cu_seq_lens` — measured on sm86, mutating one
-  trajectory in a padding-free batch moves a neighbour's logits by 0.38, with a
-  control of exactly 0. `assert_padding_free_runtime` already fails closed.
+- **`train-sft` uses padded FP16 SDPA.** FlashAttention 2 is Ampere and newer, so
+  the current per-card runtime selects right-padded batches with a real attention
+  mask on Turing; it does not refuse the run. `assert_padding_free_runtime` remains
+  a fail-closed guard for padding-free callers, while the live T4 end-to-end path
+  still needs validation.
 - **16K context, not 32K.** Raised from 8K after measurement — see below.
 
 **It was run, on 2026-09-03, and it earned its keep.** Full numbers in
-[`reports/t4-rehearsal.md`](./reports/t4-rehearsal.md); the two findings:
+[`reports/t4-rehearsal.md`](./reports/t4-rehearsal.md); the findings and follow-up:
 
 | # | Finding | Sev | Disp |
 |---|---------|-----|------|
 | 48 | A score computed from episodes that never generated. At `max_seq_length: 4096` every held-out episode terminated at admission (rendered prompt > window) and each was still scored — the verifier grades final environment state, and an untouched initial state scores whatever it scores. Report read `score: 0.25255` beside `average_generated_tokens: 0.0`, with nothing naming the cause | Critical | Fixed — `terminal_<reason>_rate` in every aggregate, plus a WARNING when nothing generated |
-| 49 | `tests/test_vllm_adapter_capability.py` cannot pass on any card. It builds on `write_tiny_checkpoint`, which saves `Qwen3_5TextConfig` (`model_type: qwen3_5_text`); vLLM's registry has only `qwen3_5`, routes to the multimodal path, and demands the wrapper config the released model actually has | High | Open — Phase 2's criterion, its fix belongs with that phase |
+| 49 | `tests/test_vllm_adapter_capability.py` cannot pass on any card. It builds on `write_tiny_checkpoint`, which saves `Qwen3_5TextConfig` (`model_type: qwen3_5_text`); vLLM's registry has only `qwen3_5`, routes to the multimodal path, and demands the wrapper config the released model actually has | High | Fixed — wrapper fixture, namespace normalization, and deterministic no-op guard pass on L4 |
+| 50 | `tests/test_sft_bench_eval_memory_guard.py` reads `torch.cuda.memory_allocated()` in the parent process, but vLLM V1 owns allocations in a spawned `EngineCore` | High | Fixed — worker RPC now reports driver footprint; L4 awake/asleep measurement recorded |
 
-Sleep mode on the real model measured 11.56 GiB freed of 12.41 GiB held (~93%), in
-4.45 s. That answers Phase 2's sleep/wake criterion on sm75 but not on an L4 at the
-profile's KV fraction. It also showed that
+Sleep mode on the real model's own allocator log measured 11.56 GiB freed of 12.41
+GiB held (~93%), in 4.45 s. That is useful T4 rehearsal evidence; the L4
+worker-side driver-footprint measurement is recorded in the Phase 10 report. It also showed that
 `tests/test_sft_bench_eval_memory_guard.py` reads
 `torch.cuda.memory_allocated()` in the **parent** process, while vLLM V1 runs the
-engine in a spawned `EngineCore` — so that guard currently measures nothing and needs
-rewriting before Phase 10 relies on it.
+engine in a spawned `EngineCore`. The guard now calls
+`OfflineEngine.memory_allocated_bytes()`, which executes the reading in each vLLM
+worker and sums the results; only the live L4 envelope and sleep release remain
+unmeasured.
 
 What the rehearsal does cover: `probe`, engine build/generate/alignment, sleep/wake,
 `evaluate` on the batched path end to end (`generation_path: vllm` in the report),
@@ -199,29 +225,30 @@ checkpoint.
       summarized
 - [ ] Measured throughput gain recorded with the generation / tokenization /
       environment split, so any shortfall is attributed from data
-- [ ] One turn-loop implementation; `grep -rc "class GenerationResult" src/`
+- [x] One turn-loop implementation; `grep -rc "class GenerationResult" src/`
       returns 1
-- [ ] All seven rollout and environment tests green at their post-move import
+- [x] All seven rollout and environment tests green at their post-move import
       paths, with assertions byte-identical as a reviewable diff
 - [ ] Batch-composition stability measured at concurrency 1 and N, with
       environment-timeout counts reported alongside so confounds are separable
-- [ ] GRPO training ids and EnvScaler dev ids proven disjoint by test, computed
+- [x] GRPO training ids and EnvScaler dev ids proven disjoint by test, computed
       from the shipped configs rather than from matching literals
-- [ ] No in-training eval path can resolve a BFCL adapter; BFCL runs once at the
-      end and the report states it selected nothing
-- [ ] Every evaluation writes a per-task trajectory record carrying the failing
+- [ ] No in-training eval path can resolve BFCL; Base may provide a pre-training
+      reference, while SFT and SFT+RL each run BFCL once after selection and the
+      report states it selected nothing
+- [x] Every evaluation writes a per-task trajectory record carrying the failing
       scoring condition
 - [ ] `sft/bench_*` and `grpo/bench_*` carry the weight version they were
       measured at, and match `evaluate` at that same version within tolerance
 - [ ] Measured in-training eval cost at or under 10% of training wall time
-- [ ] An eval failure during training logs, releases its environments, and
+- [x] An eval failure during training logs, releases its environments, and
       training continues
-- [ ] Every machine-readable stdout emitter byte-identical; rich output on
+- [x] Every machine-readable stdout emitter byte-identical; rich output on
       stderr only
-- [ ] `smolqwen --dry-run` works for every subcommand without vllm installed
-- [ ] Deletions traced to a property-aware inventory with live consumers
+- [x] `smolqwen --dry-run` works for every subcommand without vllm installed
+- [x] Deletions traced to a property-aware inventory with live consumers
       enumerated per entry
-- [ ] Eval reports, `budgets.json`, difficulty profiles, and the merged model
+- [x] Eval reports, `budgets.json`, difficulty profiles, and the merged model
       recoverable after VM loss, with no artifact containing a routable ingress
       URL
 
@@ -343,8 +370,8 @@ these findings rather than patched; Phases 1 and 7-10 were corrected in place.
 | 46 | Counting errors: 56 test files not 59; `resolve_eval_checkpoint` is *unwired*, not dead (`test_checkpoint_pinning.py:98,101`); `grep -c` in three criteria was missing `-r` | Medium | Accept | plan.md, P3, P4 |
 | 47 | **Phase 4 closed with step 3 undone**: `evaluate_batched` was written and tested but `run_evaluation` was never rewired onto it, so goal 2 was false while the phase read "code complete". Every success criterion tested a unit; none asked which path the *command* took. Phase 8 then deleted `offline_engine_for_eval` — the helper written for that wiring — reading "zero consumers" as dead rather than as missing wiring | Critical | Fixed | P4, P8 |
 | 48 | A score computed from episodes that never generated: at too small a context window every held-out episode terminates at admission and is still scored, because the verifier grades final environment state. Measured on a T4 — `score: 0.25255` beside `average_generated_tokens: 0.0` | Critical | Fixed | P4, `reports/t4-rehearsal.md` |
-| 49 | `test_vllm_adapter_capability.py` cannot pass on any card: `write_tiny_checkpoint` saves `Qwen3_5TextConfig`, which vLLM's registry routes to the multimodal path and refuses | High | Open | P2, P10 |
-| 50 | `test_sft_bench_eval_memory_guard.py` reads `torch.cuda.memory_allocated()` in the parent process, but vLLM V1 runs the engine in a spawned `EngineCore` — the parent's allocator sees 0.00 GB throughout, so the guard measures nothing | High | Open | P6, P10 |
+| 49 | `test_vllm_adapter_capability.py` cannot pass on any card: `write_tiny_checkpoint` saves `Qwen3_5TextConfig`, which vLLM's registry routes to the multimodal path and refuses | High | Fixed in worktree; live validation open | P2, P10 |
+| 50 | `test_sft_bench_eval_memory_guard.py` reads `torch.cuda.memory_allocated()` in the parent process, but vLLM V1 runs the engine in a spawned `EngineCore` — the parent's allocator sees 0.00 GB throughout, so the guard measures nothing | High | Fixed in worktree; live validation open | P6, P10 |
 
 #### Corrections to the plan author's own earlier claims
 

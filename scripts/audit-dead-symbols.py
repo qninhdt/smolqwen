@@ -44,6 +44,7 @@ EXCLUDED_PREFIXES = ("plans/", "third_party/")
 # transformers `TrainerCallback` hooks, `Trainer` overrides, the pydantic and
 # dataclass surfaces, and the adapter-discovery contract in
 # `eval/adapters/__init__.py`, which resolves modules through `pkgutil`.
+# vLLM also resolves the worker extension by its fully-qualified class name.
 FRAMEWORK_INVOKED = frozenset(
     {
         "on_init_end",
@@ -72,6 +73,7 @@ FRAMEWORK_INVOKED = frozenset(
         "create_optimizer",
         "create_scheduler",
         "model_config",
+        "MemoryWorkerExtension",
         "ADAPTER_NAME",
         "ADAPTER_ROLE",
         "create_adapter",

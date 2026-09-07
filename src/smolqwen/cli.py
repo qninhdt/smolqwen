@@ -13,7 +13,7 @@ import argparse
 import json
 from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import TypeVar
 
 from smolqwen.config import resolve, resolved_summary
 from smolqwen.config_models import (
@@ -31,12 +31,10 @@ from smolqwen.console import configure_logging, report_error
 # subcommand -> which stage config it resolves. `probe` is absent: it reads no
 # config, because it must run on a fresh VM before anything is set up.
 SUBCOMMAND_STAGES: dict[str, str] = {
-    "profile-data": "data",
     "prepare-sft": "data",
     "train-sft": "sft",
     "merge-adapter": "sft",
     "env-selftest": "grpo",
-    "profile-difficulty": "grpo",
     "rollout-bench": "grpo",
     "train-grpo": "grpo",
     "evaluate": "eval",
@@ -66,9 +64,12 @@ def _add_logging(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def _add_common(parser: argparse.ArgumentParser) -> None:
+def _add_common(
+    parser: argparse.ArgumentParser, *, include_profile: bool = True, include_budgets: bool = True
+) -> None:
     parser.add_argument("--config", type=Path, default=None, help="explicit base config path")
-    parser.add_argument("--profile", choices=PROFILES, default=None, help="GPU sizing profile")
+    if include_profile:
+        parser.add_argument("--profile", choices=PROFILES, default=None, help="GPU sizing profile")
     parser.add_argument(
         "--override",
         action="append",
@@ -81,12 +82,13 @@ def _add_common(parser: argparse.ArgumentParser) -> None:
         action="store_true",
         help="resolve and validate config, print it, and exit without touching the GPU",
     )
-    parser.add_argument(
-        "--budgets",
-        type=Path,
-        default=None,
-        help="path to budgets.json (defaults to artifacts/data/budgets.json)",
-    )
+    if include_budgets:
+        parser.add_argument(
+            "--budgets",
+            type=Path,
+            default=None,
+            help="path to budgets.json (defaults to artifacts/data/budgets.json)",
+        )
     _add_logging(parser)
 
 
@@ -106,15 +108,10 @@ def build_parser() -> argparse.ArgumentParser:
     probe_parser.add_argument("--no-write", action="store_true", help="print only")
     _add_logging(probe_parser)
 
-    profile_data = subparsers.add_parser(
-        "profile-data", help="measure the trajectory distribution and write budgets.json"
-    )
-    _add_common(profile_data)
-
     prepare_sft = subparsers.add_parser(
         "prepare-sft", help="convert trajectories into rendered SFT samples"
     )
-    _add_common(prepare_sft)
+    _add_common(prepare_sft, include_profile=False, include_budgets=False)
     prepare_sft.add_argument(
         "--workers",
         type=_positive_int,
@@ -147,13 +144,6 @@ def build_parser() -> argparse.ArgumentParser:
     _add_common(selftest)
     selftest.add_argument("--scenario-id", default=None)
     selftest.add_argument("--limit", type=int, default=1)
-
-    difficulty = subparsers.add_parser(
-        "profile-difficulty", help="classify scenarios into always-zero / band / always-one"
-    )
-    _add_common(difficulty)
-    difficulty.add_argument("--checkpoint", type=Path, default=None)
-    difficulty.add_argument("--revision", default=None)
 
     bench_rollout = subparsers.add_parser(
         "rollout-bench", help="verify rollout equivalence and emit rollout diagnostics"
@@ -231,10 +221,10 @@ def _resolve_for(args: argparse.Namespace) -> StrictModel:
     stage = SUBCOMMAND_STAGES[args.command]
     return resolve(
         stage,
-        profile=args.profile,
+        profile=getattr(args, "profile", None),
         overrides=args.override,
         config_path=args.config,
-        budgets_path=args.budgets,
+        budgets_path=getattr(args, "budgets", None),
     )
 
 
@@ -250,12 +240,6 @@ def _cmd_probe(args: argparse.Namespace) -> int:
         path = write_probe(report, args.output_dir)
         print(f"\nwrote {path}")
     return 0
-
-
-def _cmd_profile_data(args: argparse.Namespace, config: StrictModel) -> int:
-    from smolqwen.data.cli_actions import run_profile_data
-
-    return run_profile_data(_as(config, DataConfig))
 
 
 def _cmd_prepare_sft(args: argparse.Namespace, config: StrictModel) -> int:
@@ -320,32 +304,12 @@ def _cmd_rollout_bench(args: argparse.Namespace, config: StrictModel) -> int:
     return run_bench(config, args=args)
 
 
-def _cmd_profile_difficulty(args: argparse.Namespace, config: StrictModel) -> int:
-    from smolqwen.training.difficulty import DifficultyError
-    from smolqwen.training.grpo import GrpoError, run_profile_difficulty
-
-    grpo = _as(config, GrpoConfig)
-    update: dict[str, Any] = {}
-    if args.checkpoint is not None:
-        update["model_id"] = str(args.checkpoint)
-    if args.revision is not None:
-        update["model_revision"] = args.revision
-    if update:
-        grpo = grpo.model_copy(update=update)
-    try:
-        return run_profile_difficulty(grpo)
-    except (DifficultyError, GrpoError) as exc:
-        report_error(f"GRPO error: {exc}", exception=exc)
-        return 2
-
-
 def _cmd_train_grpo(args: argparse.Namespace, config: StrictModel) -> int:
-    from smolqwen.training.difficulty import DifficultyError
     from smolqwen.training.grpo import GrpoError, run_train_grpo
 
     try:
         return run_train_grpo(_as(config, GrpoConfig), resume=args.resume)
-    except (DifficultyError, GrpoError) as exc:
+    except GrpoError as exc:
         report_error(f"GRPO error: {exc}", exception=exc)
         return 2
 
@@ -367,12 +331,21 @@ def _cmd_build_workload(args: argparse.Namespace, config: StrictModel) -> int:
     workload: `--dataset-name random` measures token throughput on synthetic prompts,
     which says nothing about an agentic request's prefill shape or tool-schema
     overhead. The upstream commands own execution; this owns the traffic.
+
+    The template comes from the **pinned base model**, not from
+    `EvalConfig.http_model`. That field is the name a server answers to
+    (`--served-model-name smolqwen`), never a repo id, so loading a tokenizer from
+    it fails outright on the shipped config. The merged checkpoint a benchmark
+    serves carries the base tokenizer verbatim (`merge.py` saves it from the pinned
+    base revision), so rendering against the base is rendering against what the
+    server will see.
     """
     from smolqwen.eval.workload import build_bfcl_agentic_workload
     from smolqwen.tokenizer import load_tokenizer
 
     evaluation = _as(config, EvalConfig)
-    tokenizer = load_tokenizer(evaluation.http_model or "Qwen/Qwen3.5-2B")
+    training = _as(resolve("sft", profile=args.profile, budgets_path=args.budgets), SftConfig)
+    tokenizer = load_tokenizer(training.model_id, revision=training.model_revision)
     workload, composition = build_bfcl_agentic_workload(
         evaluation, tokenizer=tokenizer, output_path=args.output
     )
@@ -381,14 +354,12 @@ def _cmd_build_workload(args: argparse.Namespace, config: StrictModel) -> int:
 
 
 DISPATCH: dict[str, Callable[[argparse.Namespace, StrictModel], int]] = {
-    "profile-data": _cmd_profile_data,
     "prepare-sft": _cmd_prepare_sft,
     "train-sft": _cmd_train_sft,
     "merge-adapter": _cmd_merge_adapter,
     "env-selftest": _cmd_env_selftest,
     "evaluate": _cmd_evaluate,
     "rollout-bench": _cmd_rollout_bench,
-    "profile-difficulty": _cmd_profile_difficulty,
     "train-grpo": _cmd_train_grpo,
     "serve": _cmd_serve,
     "build-workload": _cmd_build_workload,

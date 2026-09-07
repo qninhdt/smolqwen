@@ -89,10 +89,8 @@ import yaml
 
 source = Path("configs/base/eval.yaml")
 payload = yaml.safe_load(source.read_text(encoding="utf-8"))
-payload["adapters"] = ["envscaler_heldout"]
-heldout = payload["adapter_options"]["envscaler_heldout"]
-heldout["env_count"] = 1
-heldout["scenarios_per_env"] = 1
+# Dev and test coincide: multi-turn base is the shipped benchmark. The smoke
+# shrinks it to the first task and one turn so the card time stays trivial.
 payload["decoding"]["max_new_tokens"] = 32
 payload["max_steps_per_task"] = 1
 Path("/content/eval-smoke.yaml").write_text(
@@ -315,7 +313,7 @@ def serve_smoke() -> None:
                 timeout=60,
             )
             run(
-                "heldout-eval-smoke",
+                "eval-smoke",
                 [
                     "uv",
                     "run",
@@ -332,7 +330,7 @@ def serve_smoke() -> None:
                     "--tag",
                     "l4-smoke",
                     "--adapter",
-                    "envscaler_heldout",
+                    "bfcl_multi_turn",
                     "--endpoint",
                     "http://127.0.0.1:8000",
                     "--serving-backend",

@@ -206,7 +206,3 @@ def write_comparison_report(
         encoding="utf-8",
     )
     return json_path, markdown_path
-
-
-# A descriptive alias for callers that already use "compare" terminology.
-compare_reports = write_comparison_report

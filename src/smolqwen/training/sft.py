@@ -1,8 +1,12 @@
-"""Assemble full-trajectory, token-budget, padding-free LoRA SFT.
+"""Assemble full-trajectory, token-budget LoRA SFT.
 
 The shards already carry exact full-render ``input_ids`` and ``labels``, so this
 module deliberately does **not** let TRL re-tokenize or re-derive assistant
 ownership. ``skip_prepare_dataset=True`` keeps those persisted labels authoritative.
+
+Ampere-plus runs use FlashAttention-2 and the padding-free boundary path. Older
+cards fall back to ``sdpa`` with padded batches and FP16, selected by
+``resolve_sft_runtime``.
 
 Two more decisions worth stating because they are not defaults:
 
@@ -36,25 +40,142 @@ from smolqwen.tracking import Tracker
 from smolqwen.training.collate import (
     IGNORE_INDEX,
     CollateError,
+    collator,
     padding_free_collator,
     record_to_sequence,
+    supervised_positions,
 )
 from smolqwen.training.optim import (
+    FLASH_ATTENTION_2_MIN_CAPABILITY,
+    TEXT_ONLY_PEFT_EXCLUDE_MODULES,
     Toggle,
     apply_regional_compile,
     cast_adapters,
+    cuda_available,
     format_ledger,
     ledger,
     resolve_attn_implementation,
     resolve_liger,
+    resolve_precision,
+    resolve_selective_logits,
 )
 from smolqwen.training.token_batching import TokenBudgetBatchSampler
 
 LOG = logger(__name__)
 
+# sm75 (Turing) is the oldest card this project runs: below it, `sdpa`'s
+# memory-efficient backend and the FLA/causal-conv Triton kernels are not
+# validated, so a production run refuses rather than silently degrading.
+TURING_MIN_CAPABILITY: tuple[int, int] = (7, 5)
+
 
 class SftError(RuntimeError):
     """Raised when the run cannot be assembled from the resolved config."""
+
+
+@dataclass(frozen=True)
+class SftRuntime:
+    """The effective device-specific execution path for one SFT run.
+
+    `precision` carries the dtype decision's reason into the ledger; it is None
+    for the CPU assembly path, which resolves its dtype from config alone.
+    """
+
+    attention: Toggle
+    dtype_name: str
+    bf16: bool
+    fp16: bool
+    padding_free: bool
+    precision: Toggle | None = None
+
+
+def resolve_sft_runtime(
+    config: SftConfig,
+    *,
+    capability: tuple[int, int] | None = None,
+    has_cuda: bool | None = None,
+    has_flash_attn: bool | None = None,
+    require_cuda: bool = False,
+    require_kernels: bool = False,
+) -> SftRuntime:
+    """Resolve attention, dtype, and batch shape from the actual GPU.
+
+    Two attention implementations exist, and the card picks between them:
+    FlashAttention-2 on Ampere-plus, `sdpa` below that.  FA2 is what carries the
+    `cu_seq_lens` boundary contract, so the padding-free path is available exactly
+    when FA2 is, and a pre-Ampere card runs padded batches with a real attention
+    mask under FP16.
+    """
+    # `require_kernels=True` is the production-run guard.  Assembly tests may run
+    # with a CUDA-enabled host but without the optional binary kernels, and must
+    # retain the old downgrade-only inspection behavior.
+    strict = require_kernels
+    cuda = cuda_available() if has_cuda is None else has_cuda
+    if not cuda:
+        if require_cuda or require_kernels:
+            raise SftError(
+                "train-sft requires a CUDA GPU; use build_trainer for CPU assembly tests"
+            )
+        # CPU assembly keeps the padding-free shapes so the boundary contract is
+        # still what the tests inspect, even though no kernel consumes them here.
+        attention = resolve_attn_implementation(
+            config.optimization.attn_implementation,
+            has_flash_attn=has_flash_attn,
+            has_cuda=False,
+        )
+        dtype_name = "bfloat16" if config.optimization.bf16 else "float32"
+        return SftRuntime(
+            attention=attention,
+            dtype_name=dtype_name,
+            bf16=config.optimization.bf16,
+            fp16=False,
+            padding_free=True,
+        )
+
+    if capability is None:
+        import torch
+
+        major, minor = torch.cuda.get_device_capability()
+        capability = (int(major), int(minor))
+    if capability < TURING_MIN_CAPABILITY and strict:
+        raise SftError(
+            "Qwen3.5 SFT requires compute capability "
+            f"{TURING_MIN_CAPABILITY[0]}.{TURING_MIN_CAPABILITY[1]} or newer; "
+            f"found sm{capability[0]}{capability[1]}"
+        )
+
+    requested = config.optimization.attn_implementation
+    attention = resolve_attn_implementation(
+        requested,
+        has_flash_attn=has_flash_attn,
+        has_cuda=True,
+        capability=capability,
+    )
+    precision = resolve_precision(config.optimization.bf16, capability=capability)
+    # Only FlashAttention-2 consumes the `cu_seq_lens` boundary metadata, so a
+    # production run's batch shape follows its attention decision rather than a
+    # separate switch.  Assembly inspection (`require_kernels=False`) keeps the
+    # padding-free shapes either way, so the boundary contract stays testable on a
+    # dev box that has no kernel wheels.
+    padding_free = attention.name == "flash_attention_2" or not strict
+    if (
+        strict
+        and capability >= FLASH_ATTENTION_2_MIN_CAPABILITY
+        and requested == "flash_attention_2"
+        and attention.name != "flash_attention_2"
+    ):
+        raise SftError(
+            "Ampere-plus padding-free SFT requires the official flash_attn wheel; "
+            f"resolved {attention.name}"
+        )
+    return SftRuntime(
+        attention=attention,
+        dtype_name=precision.name,
+        bf16=precision.name == "bfloat16",
+        fp16=precision.name == "float16",
+        padding_free=padding_free,
+        precision=precision,
+    )
 
 
 def iter_records(path: Path | str) -> Iterator[dict[str, Any]]:
@@ -186,12 +307,22 @@ def load_shard_dataset(path: Path | str) -> Any:
 
 @dataclass(frozen=True)
 class Shards:
-    """Both splits, each already validated against the mask contract."""
+    """The train shard, already validated against the mask contract."""
 
     train: Any
-    eval: Any | None
     train_stats: ShardStats
-    eval_stats: ShardStats | None
+
+    @property
+    def supervised_fraction(self) -> float | None:
+        """Share of train positions carrying a target, or None for an empty shard.
+
+        How much a selective head saves is a property of the shard rather than of
+        the card: a reasoning shard supervises most of its positions, while a
+        non-reasoning one supervises the answers only. Recorded in the toggle ledger
+        so the measured win can be read against it.
+        """
+        total = self.train_stats.total_tokens
+        return self.train_stats.supervised_tokens / total if total else None
 
 
 def load_shards(
@@ -200,10 +331,9 @@ def load_shards(
     max_sequence_length: int | None = None,
     max_tokens_per_microbatch: int | None = None,
 ) -> Shards:
-    """Validate `train.jsonl` / `val.jsonl`, then hand back Arrow-backed datasets."""
+    """Validate `train.jsonl`, then hand back the Arrow-backed dataset."""
     directory = Path(dataset_dir)
     train_path = directory / "train.jsonl"
-    val_path = directory / "val.jsonl"
     if not train_path.is_file():
         raise SftError(f"{train_path} missing -- run `smolqwen prepare-sft` first")
 
@@ -215,22 +345,10 @@ def load_shards(
     )
     if not train_stats.samples:
         raise SftError(f"{train_path} is empty")
-    eval_stats = (
-        validate_shard(
-            val_path,
-            label="val",
-            max_sequence_length=max_sequence_length,
-            max_tokens_per_microbatch=max_tokens_per_microbatch,
-        )
-        if val_path.is_file()
-        else None
-    )
 
     return Shards(
         train=load_shard_dataset(train_path),
-        eval=load_shard_dataset(val_path) if eval_stats and eval_stats.samples else None,
         train_stats=train_stats,
-        eval_stats=eval_stats,
     )
 
 
@@ -241,20 +359,11 @@ class Assembled:
     trainer: Any
     toggles: tuple[Toggle, ...]
     train_stats: ShardStats
-    eval_stats: ShardStats | None
     resume_from: str | None
-    # The sleeping vLLM engine backing in-training dev eval, when it is enabled.
-    # Carried here so `run_train_sft` can shut it down after training, and so a
-    # smoke test can assert it was built before the trainer.
-    bench_engine: Any | None = None
 
     @property
     def train_size(self) -> int:
         return self.train_stats.samples
-
-    @property
-    def eval_size(self) -> int:
-        return self.eval_stats.samples if self.eval_stats else 0
 
 
 def _lora_config(config: SftConfig) -> Any:
@@ -267,12 +376,25 @@ def _lora_config(config: SftConfig) -> Any:
         lora_alpha=lora.lora_alpha,
         lora_dropout=lora.lora_dropout,
         target_modules=target if isinstance(target, str) else list(target),
+        # `all-linear` is the project contract; exclude Qwen3.5's unused visual
+        # tower so a text-only adapter remains loadable by vLLM.
+        exclude_modules=(
+            TEXT_ONLY_PEFT_EXCLUDE_MODULES
+            if any(marker in config.model_id.casefold() for marker in ("qwen3.5", "qwen3_5"))
+            else None
+        ),
         task_type="CAUSAL_LM",
         bias="none",
     )
 
 
-def _sft_config(config: SftConfig, *, attn: Toggle, use_liger: bool, report_to: list[str]) -> Any:
+def _sft_config(
+    config: SftConfig,
+    *,
+    runtime: SftRuntime,
+    use_liger: bool,
+    report_to: list[str],
+) -> Any:
     """Build `SFTConfig`, with TRL's own preprocessing switched off.
 
     `max_length=None` is deliberate: truncation happens in the Phase 3 collator
@@ -302,17 +424,20 @@ def _sft_config(config: SftConfig, *, attn: Toggle, use_liger: bool, report_to: 
         lr_scheduler_type=training.lr_scheduler_type,
         logging_steps=training.logging_steps,
         save_steps=training.save_steps,
-        eval_steps=training.eval_steps,
-        eval_strategy="steps",
+        # Train-only, matching upstream EnvScaler's SFT (LlamaFactory, no
+        # validation set): overfitting is not gated on a val curve, and the
+        # capability curve is GRPO's bench_eval boundary.
+        eval_strategy="no",
         save_strategy="steps",
         seed=training.seed,
-        bf16=optimization.bf16,
+        bf16=runtime.bf16,
+        fp16=runtime.fp16,
         gradient_checkpointing=optimization.gradient_checkpointing,
         gradient_checkpointing_kwargs={"use_reentrant": False},
         use_liger_kernel=use_liger,
         model_init_kwargs={
-            "dtype": "bfloat16" if optimization.bf16 else "float32",
-            "attn_implementation": attn.name,
+            "dtype": runtime.dtype_name,
+            "attn_implementation": runtime.attention.name,
         },
         # Ours: the Phase 2 mask is authoritative, so nothing re-derives it.
         dataset_kwargs={"skip_prepare_dataset": True},
@@ -336,8 +461,17 @@ def _token_budget_trainer_class() -> Any:
     from trl import SFTTrainer  # type: ignore[attr-defined]
 
     class TokenBudgetSFTTrainer(SFTTrainer):
-        def __init__(self, *args: Any, max_tokens_per_microbatch: int, **kwargs: Any) -> None:
+        def __init__(
+            self,
+            *args: Any,
+            max_tokens_per_microbatch: int,
+            padding_free: bool,
+            selective_logits: bool = False,
+            **kwargs: Any,
+        ) -> None:
             self.max_tokens_per_microbatch = max_tokens_per_microbatch
+            self._project_padding_free = padding_free
+            self._selective_logits = selective_logits
             self.token_batch_sampler: TokenBudgetBatchSampler | None = None
             self._token_dataloaders: dict[str, Any] = {}
             self._step_tokens = 0
@@ -346,6 +480,7 @@ def _token_budget_trainer_class() -> Any:
             self._step_microbatches = 0
             self._step_max_trajectory_length = 0
             self._step_padding_saved = 0
+            self._step_projected_positions = 0
             super().__init__(*args, **kwargs)
 
         def reset_step_metrics(self) -> None:
@@ -355,6 +490,41 @@ def _token_budget_trainer_class() -> Any:
             self._step_microbatches = 0
             self._step_max_trajectory_length = 0
             self._step_padding_saved = 0
+            self._step_projected_positions = 0
+
+        def compute_loss(
+            self,
+            model: Any,
+            inputs: dict[str, Any],
+            return_outputs: bool = False,
+            num_items_in_batch: Any = None,
+        ) -> Any:
+            """Narrow the head's input to supervised positions before delegating.
+
+            `logits_to_keep` as an index tensor is upstream's own contract for this
+            (`modeling_qwen3_5.py:1643`), and Liger's fused head forwards it
+            unchanged -- so the 248,320-wide projection runs on the rows that carry
+            a target instead of all of them. `shift_labels` must accompany it: the
+            rows are no longer contiguous, so the internal `labels[..., 1:]` shift
+            would align targets against the wrong positions.
+
+            `num_items_in_batch` is untouched. `Trainer._get_num_items_in_batch`
+            already prefers a collator-supplied `shift_labels`, and either way it
+            counts non-`-100` targets -- a quantity selection does not change. That
+            is what keeps the loss numerically identical rather than merely close.
+            """
+            if self._selective_logits and "labels" in inputs:
+                inputs = dict(inputs)
+                labels = inputs.pop("labels")
+                index, shift_labels = supervised_positions(labels)
+                inputs["logits_to_keep"] = index
+                inputs["shift_labels"] = shift_labels
+                self._step_projected_positions += int(index.numel())
+            elif "labels" in inputs:
+                self._step_projected_positions += int(inputs["labels"].shape[-1])
+            return super().compute_loss(  # type: ignore[no-untyped-call]
+                model, inputs, return_outputs=return_outputs, num_items_in_batch=num_items_in_batch
+            )
 
         def training_step(
             self,
@@ -362,21 +532,34 @@ def _token_budget_trainer_class() -> Any:
             inputs: dict[str, Any],
             num_items_in_batch: Any = None,
         ) -> Any:
-            # The flattened collator has no padding, so the final dimension is
-            # the exact valid-token count.  Counting shape metadata avoids a
-            # device synchronization just for telemetry.
-            tokens = int(inputs["input_ids"].shape[-1])
-            trajectories = int(inputs["cu_seq_lens_q"].shape[0]) - 1
-            max_trajectory = int(inputs["max_length_q"])
+            if self._project_padding_free:
+                # The flattened collator has no padding, so the final dimension
+                # is the exact valid-token count.  Counting shape metadata avoids
+                # a device synchronization just for telemetry.
+                tokens = int(inputs["input_ids"].shape[-1])
+                trajectories = int(inputs["cu_seq_lens_q"].shape[0]) - 1
+                max_trajectory = int(inputs["max_length_q"])
+                padding_saved = trajectories * max_trajectory - tokens
+            else:
+                # Padded mode is budgeted by the dense tensor it executes, not
+                # by the sum of the unpadded source rows.
+                tokens = int(inputs["input_ids"].numel())
+                trajectories = int(inputs["input_ids"].shape[0])
+                max_trajectory = int(inputs["input_ids"].shape[-1])
+                padding_saved = 0
             self._step_tokens += tokens
             self._step_trajectories += trajectories
             self._step_microbatches += 1
             self._step_max_trajectory_length = max(self._step_max_trajectory_length, max_trajectory)
-            self._step_padding_saved += trajectories * max_trajectory - tokens
+            self._step_padding_saved += padding_saved
             # Transformers computes this once across the whole accumulation
             # window and passes the same total into every micro-step.
             if num_items_in_batch is not None and not self._step_supervised_tokens:
                 self._step_supervised_tokens = int(num_items_in_batch)
+            elif num_items_in_batch is None:
+                labels = inputs.get("labels")
+                if labels is not None:
+                    self._step_supervised_tokens += int((labels[..., 1:] != IGNORE_INDEX).sum())
             return super().training_step(  # type: ignore[no-untyped-call]
                 model, inputs, num_items_in_batch
             )
@@ -390,6 +573,7 @@ def _token_budget_trainer_class() -> Any:
                 max_tokens=self.max_tokens_per_microbatch,
                 seed=int(self.args.seed),
                 shuffle=training,
+                padding_free=self._project_padding_free,
             )
             if training:
                 self.token_batch_sampler = sampler
@@ -408,12 +592,6 @@ def _token_budget_trainer_class() -> Any:
             if self.train_dataset is None:
                 raise SftError("training requires a train dataset")
             return self._token_dataloader(self.train_dataset, training=True)
-
-        def get_eval_dataloader(self, eval_dataset: Any | None = None) -> Any:
-            dataset = eval_dataset if eval_dataset is not None else self.eval_dataset
-            if dataset is None:
-                raise SftError("evaluation requires an eval dataset")
-            return self._token_dataloader(dataset, training=False)
 
     return TokenBudgetSFTTrainer
 
@@ -435,6 +613,30 @@ def assert_padding_free_runtime() -> None:
             "padding-free Qwen3.5 requires real CUDA FlashAttention, FLA GDN, "
             f"and causal-conv boundary kernels; {detail}"
         )
+
+
+def assert_sft_runtime(runtime: SftRuntime) -> None:
+    """Fail before model loading if the selected SFT kernels are absent."""
+    import importlib.util
+
+    import torch
+
+    if not torch.cuda.is_available():
+        raise SftError("train-sft requires a CUDA GPU")
+
+    # The GDN mixer and its causal convolution have no usable fallback at this
+    # model's sizes, so they are required on every card. Attention does have one:
+    # `sdpa` needs no wheel.
+    missing = [
+        package for package in ("fla", "causal_conv1d") if importlib.util.find_spec(package) is None
+    ]
+    if (
+        runtime.attention.name == "flash_attention_2"
+        and importlib.util.find_spec("flash_attn") is None
+    ):
+        missing.append("flash_attn")
+    if missing:
+        raise SftError(f"selected SFT runtime is missing required kernels: {', '.join(missing)}")
 
 
 class ThroughputCallback(TrainerCallback):
@@ -469,6 +671,11 @@ class ThroughputCallback(TrainerCallback):
                 "sft/microbatches": self.trainer._step_microbatches,
                 "sft/max_trajectory_length": self.trainer._step_max_trajectory_length,
                 "sft/padding_tokens_saved": self.trainer._step_padding_saved,
+                # Rows the 248,320-wide head actually projected. Equals the token
+                # count when the head is dense, and the supervised count when it is
+                # selective -- which is what makes the toggle's effect a measured
+                # number rather than a claim.
+                "sft/projected_positions": self.trainer._step_projected_positions,
             }
         self.tracker.log_step(tokens=tokens, step=int(state.global_step), **extra)
 
@@ -536,7 +743,7 @@ def build_trainer(
     tracker: Tracker | None = None,
     store: CheckpointStore | None = None,
     dataset_dir: Path | str | None = None,
-    bench_engine: Any | None = None,
+    runtime: SftRuntime | None = None,
 ) -> Assembled:
     """Assemble the trainer without starting it, so a smoke test can inspect it."""
     shards = load_shards(
@@ -554,15 +761,15 @@ def build_trainer(
     if pad_token_id is None:
         raise SftError(f"{config.model_id} tokenizer has neither a pad nor an eos token id")
 
-    # Before the trainer exists, and before any model weights are resident:
-    # `gpu_memory_utilization` sizes vLLM's KV pool against *total* GPU memory, so an
-    # engine built after the trainer either OOMs or reserves against a figure it
-    # cannot honour. Built here and immediately slept, the trainer then sizes itself
-    # against what remains.
-    engine = _bench_engine(config, engine=bench_engine)
+    runtime = runtime or resolve_sft_runtime(config)
 
-    attn = resolve_attn_implementation(config.optimization.attn_implementation)
     liger = resolve_liger(config.optimization.liger_fused_linear_cross_entropy)
+    selective = resolve_selective_logits(
+        config.optimization.selective_logit_loss,
+        liger_enabled=liger.enabled,
+        padding_free=runtime.padding_free,
+        supervised_fraction=shards.supervised_fraction,
+    )
 
     checkpoint_store = store or CheckpointStore(
         config.tracking.hub_repo_id, Path(config.output_dir) / "adapter"
@@ -578,100 +785,82 @@ def build_trainer(
     )
 
     trainer_class = _token_budget_trainer_class()
-    trainer = trainer_class(
-        model=config.model_id,
-        args=_sft_config(config, attn=attn, use_liger=liger.enabled, report_to=[]),
-        data_collator=padding_free_collator(
+    data_collator = (
+        padding_free_collator(
             config.profile.max_tokens_per_microbatch,
             max_sequence_length=config.profile.max_seq_length,
-        ),
+        )
+        if runtime.padding_free
+        else collator(
+            pad_token_id,
+            max_length=config.profile.max_seq_length,
+        )
+    )
+    trainer = trainer_class(
+        model=config.model_id,
+        args=_sft_config(config, runtime=runtime, use_liger=liger.enabled, report_to=[]),
+        data_collator=data_collator,
         train_dataset=shards.train,
-        eval_dataset=shards.eval,
         processing_class=tokenizer,
         peft_config=_lora_config(config),
         max_tokens_per_microbatch=config.profile.max_tokens_per_microbatch,
+        padding_free=runtime.padding_free,
+        selective_logits=selective.enabled,
     )
 
-    adapters = cast_adapters(trainer.model, config.lora.adapter_dtype)
+    # FP16 runs must keep trainable adapters in FP32: GradScaler rejects FP16
+    # gradients. On the BF16 path, honor the explicit adapter dtype setting so a
+    # caller can retain PEFT's FP32 adapters when that trade-off is intentional.
+    adapter_dtype = runtime.dtype_name if runtime.fp16 else config.lora.adapter_dtype
+    adapters = cast_adapters(trainer.model, adapter_dtype)
     compiled = apply_regional_compile(
         trainer.model,
         exclude_patterns=config.optimization.compile_exclude_patterns,
         enabled=config.optimization.regional_torch_compile,
     )
-    toggles = (attn, liger, adapters, compiled)
+    dtype = Toggle(
+        "training_dtype",
+        runtime.precision.enabled if runtime.precision is not None else True,
+        f"effective model dtype: {runtime.dtype_name}; "
+        f"{'padding-free' if runtime.padding_free else 'padded'} SFT path"
+        + (f"; {runtime.precision.detail}" if runtime.precision is not None else ""),
+    )
+    toggles = (runtime.attention, dtype, liger, selective, adapters, compiled)
 
     throughput = ThroughputCallback(run)
     throughput.bind_trainer(trainer)
     trainer.add_callback(throughput)
     trainer.add_callback(CheckpointPushCallback(checkpoint_store, run))
-    if engine is not None:
-        from smolqwen.training.checkpoint_eval import build_bench_eval_callback
-
-        # Registered after `CheckpointPushCallback`, so at `on_save` the checkpoint
-        # exists and has already been backed up before anything scores it.
-        trainer.add_callback(build_bench_eval_callback(config, trainer, tokenizer, engine=engine))
     run.config.update(ledger(toggles))
 
     return Assembled(
         trainer=trainer,
         toggles=toggles,
         train_stats=shards.train_stats,
-        eval_stats=shards.eval_stats,
         resume_from=resume_from,
-        bench_engine=engine,
     )
 
 
-def _bench_engine(config: SftConfig, *, engine: Any | None = None) -> Any | None:
-    """The sleeping eval engine, or None when in-training eval is off.
-
-    Failing to build it is fatal rather than a warning: `bench_eval.enabled` is an
-    explicit request for a dev curve, and a run that silently produced none while
-    reporting success is the outcome the flag exists to prevent.
-    """
-    if engine is not None:
-        return engine
-    if not config.bench_eval.enabled:
-        return None
-    from smolqwen.training.checkpoint_eval import CheckpointEngine
-
-    return CheckpointEngine.build(config)
-
-
 def run_train_sft(config: SftConfig, *, resume: bool = False) -> int:
-    """`smolqwen train-sft`: train, evaluate once at the end, record the ledger."""
-    assert_padding_free_runtime()
-    assembled = build_trainer(config, resume=resume)
+    """`smolqwen train-sft`: train and record the ledger. No evaluation.
+
+    Train-only matches upstream EnvScaler's SFT: LlamaFactory with no validation
+    set, loss curve on the training loss alone. Capability is measured by GRPO's
+    benchmark boundary after SFT.
+    """
+    runtime = resolve_sft_runtime(config, require_cuda=True, require_kernels=True)
+    assert_sft_runtime(runtime)
+    assembled = build_trainer(config, resume=resume, runtime=runtime)
     trainer = assembled.trainer
     console().print(format_ledger(list(assembled.toggles)))
     train = assembled.train_stats
     LOG.info(
-        "train %d samples / %d tokens (%d supervised); val %d samples",
+        "train %d samples / %d tokens (%d supervised)",
         train.samples,
         train.total_tokens,
         train.supervised_tokens,
-        assembled.eval_size,
     )
 
-    try:
-        trainer.train(resume_from_checkpoint=assembled.resume_from)
-        trainer.save_model(config.output_dir)
-        if assembled.eval_size:
-            # Machine-readable: one JSON line of final eval metrics on stdout.
-            # `eval_loss` here is teacher-forced likelihood on `val.jsonl`; the
-            # `sft/bench_*` series is generation under the real tool harness. They
-            # measure different things and are not expected to move together.
-            metrics = trainer.evaluate()
-            print(
-                json.dumps(
-                    {key: float(value) for key, value in metrics.items() if _is_number(value)}
-                )
-            )
-    finally:
-        if assembled.bench_engine is not None:
-            assembled.bench_engine.shutdown()
+    trainer.train(resume_from_checkpoint=assembled.resume_from)
+    trainer.save_model(config.output_dir)
     return 0
-
-
-def _is_number(value: Any) -> bool:
-    return isinstance(value, (int, float)) and not isinstance(value, bool)

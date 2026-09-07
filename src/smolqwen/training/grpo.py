@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import functools
-import json
+import random
 from collections.abc import Iterator, Mapping, Sized
-from contextlib import suppress
+from contextlib import contextmanager, nullcontext, suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
@@ -15,11 +15,10 @@ from transformers import TrainerCallback
 
 from smolqwen.artifacts import CheckpointStore, ResumeState
 from smolqwen.config_models import EvalConfig, GrpoConfig
-from smolqwen.console import console, logger, progress_task
+from smolqwen.console import console, logger
 from smolqwen.env.pool import WorkerPool
 from smolqwen.env.registry import EnvSpec, load_env_specs
-from smolqwen.env.scenarios import Scenario, build_scenario_set
-from smolqwen.eval.adapters.envscaler_heldout import select_heldout_scenarios
+from smolqwen.env.scenarios import Scenario, load_scenarios
 from smolqwen.inference.profiles import turn_engine_config
 from smolqwen.prompts import build_system_prompt
 from smolqwen.rollout.factory_env import make_environment_factories
@@ -29,20 +28,15 @@ from smolqwen.rollout.rollout_func import Prompts, make_rollout_func
 from smolqwen.rollout.scheduler import PoolDispatcher, ScenarioBinding
 from smolqwen.tokenizer import assert_text_only_processing_class, load_tokenizer
 from smolqwen.tracking import Tracker
-from smolqwen.training.difficulty import (
-    DifficultyProfile,
-    profile_rewards,
-    read_profile,
-    weighted_scenario_order,
-    write_profile,
-)
 from smolqwen.training.optim import (
+    TEXT_ONLY_PEFT_EXCLUDE_MODULES,
     Toggle,
     cast_adapters,
     format_ledger,
     ledger,
     resolve_attn_implementation,
     resolve_liger,
+    resolve_precision,
 )
 from smolqwen.training.reward import verifier_reward
 
@@ -54,7 +48,7 @@ class GrpoError(RuntimeError):
 
 
 @dataclass(frozen=True)
-class CurriculumCursor:
+class ScenarioCursor:
     """Convert completed optimizer steps into consumed scenario groups."""
 
     start: int
@@ -72,7 +66,7 @@ class CurriculumCursor:
 
 
 class CursorRepeatSampler(Sampler[int]):
-    """TRL's structured repeat sampler, rotated to a persisted curriculum cursor."""
+    """TRL's structured repeat sampler, rotated to a persisted scenario cursor."""
 
     def __init__(
         self,
@@ -108,10 +102,10 @@ class CursorRepeatSampler(Sampler[int]):
         return complete * self.mini_repeat_count * self.repeat_count
 
 
-class CurriculumGRPOTrainerMixin:
-    """Sampler override mixed into TRL's trainer at module import time below."""
+class ScenarioGRPOTrainerMixin:
+    """Sampler override mixed into TRL's trainer."""
 
-    curriculum_cursor: CurriculumCursor
+    scenario_cursor: ScenarioCursor
 
     def _get_train_sampler(self, dataset: Any | None = None) -> Sampler[int]:
         trainer = cast(Any, self)
@@ -124,41 +118,14 @@ class CurriculumGRPOTrainerMixin:
             mini_repeat_count=num_generations,
             batch_size=int(args.generation_batch_size) // num_generations,
             repeat_count=num_iterations * int(args.steps_per_generation),
-            cursor=self.curriculum_cursor.start,
+            cursor=self.scenario_cursor.start,
         )
-
-
-class GroupVarianceStopCallback(TrainerCallback):
-    """Stop when observed degenerate groups materially exceed the profile."""
-
-    def __init__(self, *, after_steps: int, multiplier: float, margin: float) -> None:
-        self.after_steps = after_steps
-        self.multiplier = multiplier
-        self.margin = margin
-
-    def on_log(
-        self,
-        args: Any,
-        state: Any,
-        control: Any,
-        logs: Mapping[str, float] | None = None,
-        **kwargs: Any,
-    ) -> Any:
-        if logs is None or int(state.global_step) < self.after_steps:
-            return control
-        actual = logs.get("group_reward_variance/zero_fraction")
-        predicted = logs.get("group_reward_variance/predicted_zero_fraction")
-        if actual is not None and predicted is not None:
-            threshold = min(1.0, float(predicted) * self.multiplier + self.margin)
-            if float(actual) > threshold:
-                control.should_training_stop = True
-        return control
 
 
 class GrpoCheckpointCallback(TrainerCallback):
     """Push adapter, optimizer checkpoint, run id, and sampler cursor together."""
 
-    def __init__(self, store: CheckpointStore, tracker: Tracker, cursor: CurriculumCursor) -> None:
+    def __init__(self, store: CheckpointStore, tracker: Tracker, cursor: ScenarioCursor) -> None:
         self.store = store
         self.tracker = tracker
         self.cursor = cursor
@@ -188,9 +155,8 @@ class GrpoAssembly:
     pool: WorkerPool
     toggles: tuple[Toggle, ...]
     resume_from: str | None
-    cursor: CurriculumCursor
+    cursor: ScenarioCursor
     train_task_ids: tuple[str, ...]
-    eval_task_ids: tuple[str, ...]
 
     def shutdown(self) -> None:
         self.dispatcher.shutdown()
@@ -241,13 +207,26 @@ def _lora_config(config: GrpoConfig) -> Any:
         lora_alpha=config.lora.lora_alpha,
         lora_dropout=config.lora.lora_dropout,
         target_modules=target if isinstance(target, str) else list(target),
+        # Keep the all-linear contract on the language branch only: this run is
+        # text-only and the vision tower is not part of the vLLM LoRA surface.
+        exclude_modules=(
+            TEXT_ONLY_PEFT_EXCLUDE_MODULES
+            if any(marker in config.model_id.casefold() for marker in ("qwen3.5", "qwen3_5"))
+            else None
+        ),
         task_type="CAUSAL_LM",
         bias="none",
     )
 
 
 def _grpo_args(
-    config: GrpoConfig, *, attn: Toggle, use_liger: bool, report_to: list[str], use_vllm: bool
+    config: GrpoConfig,
+    *,
+    attn: Toggle,
+    precision: Toggle,
+    use_liger: bool,
+    report_to: list[str],
+    use_vllm: bool,
 ) -> Any:
     from trl import GRPOConfig as TrlGrpoConfig  # type: ignore[attr-defined]
 
@@ -256,10 +235,19 @@ def _grpo_args(
     generation_batch_size = profile.generation_batch_size
     if generation_batch_size % profile.num_generations:
         raise GrpoError("generation_batch_size must be divisible by num_generations")
+    # TRL evaluates a whole prompt group at once, so it requires the global eval
+    # batch to be a multiple of `num_generations`. `micro_batch` is an SFT-side
+    # sizing field and is 1 or 2 in every profile, which is never a multiple of the
+    # group size -- so eval batch size is derived from the group size instead of
+    # reusing `micro_batch`. MEASURED: with `micro_batch` here, `train-grpo` raised
+    # `ValueError: The global eval batch size (1 * 1) must be divisible by the
+    # number of generations used for evaluation (2)` at config construction on
+    # every profile, before any weight loaded.
+    eval_batch_size = profile.num_generations
     return TrlGrpoConfig(
         output_dir=config.output_dir,
         per_device_train_batch_size=profile.micro_batch,
-        per_device_eval_batch_size=profile.micro_batch,
+        per_device_eval_batch_size=eval_batch_size,
         gradient_accumulation_steps=profile.grad_accum,
         generation_batch_size=generation_batch_size,
         num_generations=profile.num_generations,
@@ -271,16 +259,20 @@ def _grpo_args(
         lr_scheduler_type=training.lr_scheduler_type,
         logging_steps=training.logging_steps,
         save_steps=training.save_steps,
-        eval_steps=training.eval_steps,
-        eval_strategy="steps",
+        # GRPO's dev benchmark is driven by `BenchEvalCallback`, which uses
+        # the shared turn engine and records `grpo/bench_*`. Native Trainer eval
+        # instead runs the GRPO/Liger loss over `eval_dataset`, which is a separate
+        # loss path, so keep that duplicate path disabled.
+        eval_strategy="no",
         save_strategy="steps",
         seed=training.seed,
-        bf16=config.optimization.bf16,
+        bf16=precision.name == "bfloat16",
+        fp16=precision.name == "float16",
         gradient_checkpointing=config.optimization.gradient_checkpointing,
         gradient_checkpointing_kwargs={"use_reentrant": False},
         use_liger_kernel=use_liger,
         model_init_kwargs={
-            "dtype": "bfloat16" if config.optimization.bf16 else "float32",
+            "dtype": precision.name,
             "attn_implementation": attn.name,
         },
         beta=config.beta,
@@ -295,7 +287,7 @@ def _grpo_args(
         vllm_enable_sleep_mode=config.vllm_enable_sleep_mode,
         vllm_importance_sampling_correction=True,
         log_completions=True,
-        num_completions_to_print=config.curriculum.trajectory_samples_per_log,
+        num_completions_to_print=config.trajectory_samples_per_log,
         remove_unused_columns=False,
         ignore_data_skip=True,
         report_to=report_to,
@@ -340,6 +332,40 @@ def _weight_version(trainer: Any, syncs: list[int]) -> str:
     return f"step-{step}.sync-{len(syncs)}"
 
 
+def bench_eval_config(config: GrpoConfig) -> EvalConfig:
+    """The eval stage's config, resized by this GRPO run's own engine.
+
+    Resolved from the same YAML `smolqwen evaluate` reads, so the adapter's options
+    and decoding are identical -- that is what makes one number mean one thing in
+    both places. Its `profile` subtree is then replaced, for two reasons:
+
+    - `resolve("eval")` takes no `--profile`, so it would otherwise carry
+      `ProfileConfig` defaults. A bench eval at the default generation width while
+      the trainer was sized by `--profile t4` is two sets of numbers for one card.
+    - The context bound is `vllm_max_model_len`, **not** `profile.max_seq_length`.
+      The colocated engine TRL built is sized by the former (`_grpo_args`), while
+      `EvalProfile.max_model_len` reads the latter. Left unequal, the turn engine
+      admits a prefix wider than the engine can accept and vLLM raises
+      `The decoder prompt (length N) is longer than the maximum model length`,
+      turning every boundary into `bench_failed`.
+
+    The SFT path has no in-training benchmark callback; only GRPO owns this
+    checkpoint-independent boundary.
+    """
+    from smolqwen.config import resolve
+
+    resolved = resolve("eval")
+    if not isinstance(resolved, EvalConfig):
+        raise GrpoError(f"expected EvalConfig from the eval stage, got {type(resolved).__name__}")
+    profile = config.profile.model_copy(update={"max_seq_length": config.vllm_max_model_len})
+    # The boundary scores the same distribution the rollout trains on: a
+    # thinking-rendered dev set would measure a capability the rollout never
+    # exercises (and the reverse), silently bending the checkpoint-selection curve.
+    return resolved.model_copy(
+        update={"profile": profile, "enable_thinking": config.enable_thinking}
+    )
+
+
 def build_bench_eval_callback(
     config: GrpoConfig,
     trainer: Any,
@@ -349,23 +375,16 @@ def build_bench_eval_callback(
 ) -> Any | None:
     """The in-training dev-eval callback, or None when it is disabled.
 
-    The eval config is resolved from the same YAML `evaluate` reads, so the adapter's
-    held-out selection and decoding are identical -- that is what makes one number
-    mean one thing. Only the dev adapter is named; `bench_eval.assert_dev_adapter`
-    refuses a test-set entry.
+    The benchmark is named in `bench_eval.adapter` and resolved against the eval
+    stage's config.
     """
     if not config.bench_eval.enabled:
         return None
-    from smolqwen.config import resolve
     from smolqwen.training.bench_eval import BenchEvalCallback, BenchEvalRunner
-
-    resolved = resolve("eval")
-    if not isinstance(resolved, EvalConfig):
-        raise GrpoError(f"expected EvalConfig from the eval stage, got {type(resolved).__name__}")
 
     syncs: list[int] = []
     runner = BenchEvalRunner(
-        eval_config=resolved,
+        eval_config=bench_eval_config(config),
         bench_config=config.bench_eval,
         engine_source=lambda: VllmColocateBackend(trainer),
         tokenizer_source=lambda: tokenizer,
@@ -373,13 +392,12 @@ def build_bench_eval_callback(
         sink=(lambda payload: trainer.log(dict(payload))) if hasattr(trainer, "log") else None,
         weight_version=lambda: _weight_version(trainer, syncs),
         artifact_dir=config.output_dir,
+        outcome_path=lambda step: Path(config.output_dir) / "bench-eval" / f"step-{step}.json",
     )
     return BenchEvalCallback(runner, before_each=lambda _step: _sync_weights(trainer))
 
 
-def _dataset_row(
-    scenario: Scenario, spec: EnvSpec, difficulty_success_rate: float
-) -> dict[str, Any]:
+def _dataset_row(scenario: Scenario, spec: EnvSpec) -> dict[str, Any]:
     return {
         "prompt": [
             {
@@ -394,7 +412,6 @@ def _dataset_row(
         # TRL reads this control field only for a dict environment_factory. It is
         # harmless on the async path and keeps both trainers on identical rows.
         "environment": scenario.env_id,
-        "difficulty_success_rate": difficulty_success_rate,
     }
 
 
@@ -464,18 +481,17 @@ def _make_resolver(
 
 
 def _load_catalog(config: GrpoConfig) -> tuple[dict[str, EnvSpec], tuple[Scenario, ...]]:
-    scenario_set = build_scenario_set(
+    scenarios = load_scenarios(
         config.env.vendored_rl_scenarios,
-        env_split_manifest=config.env.env_split_manifest,
         sha256=config.env.vendored_rl_scenarios_sha256,
     )
     specs = load_env_specs(
         config.env.vendored_env_metadata, sha256=config.env.vendored_env_metadata_sha256
     )
-    missing = sorted({scenario.env_id for scenario in scenario_set.scenarios} - specs.keys())
+    missing = sorted({scenario.env_id for scenario in scenarios} - specs.keys())
     if missing:
         raise GrpoError(f"scenario environments missing from metadata: {missing[:5]}")
-    return specs, scenario_set.scenarios
+    return specs, tuple(scenarios)
 
 
 def _assert_prefix_caching(trainer: Any) -> None:
@@ -491,11 +507,47 @@ def _assert_prefix_caching(trainer: Any) -> None:
         )
 
 
+@contextmanager
+def _force_trl_prefix_caching() -> Iterator[None]:
+    """Pass the required cache flag through TRL versions that omit it.
+
+    TRL 1.12 constructs its colocated ``vllm.LLM`` without an
+    ``enable_prefix_caching`` argument. vLLM therefore resolves the flag to false
+    for hybrid models such as Qwen3.5, even though this project's GRPO contract
+    requires prefix caching. Keep the compatibility bridge limited to the
+    synchronous trainer construction and restore TRL's module global immediately
+    afterwards.
+    """
+    try:
+        from trl.generation import vllm_generation
+    except ImportError as exc:
+        raise GrpoError(
+            "colocated GRPO requires TRL's vLLM generation module to wire enable_prefix_caching"
+        ) from exc
+
+    original_llm = getattr(vllm_generation, "LLM", None)
+    if original_llm is None:
+        raise GrpoError("TRL's vLLM generation module exposes no LLM constructor")
+
+    def prefix_cached_llm(*args: Any, **kwargs: Any) -> Any:
+        kwargs["enable_prefix_caching"] = True
+        # This project sends text only. Keep the Qwen3.5 wrapper contract while
+        # avoiding a resident vision encoder in the colocated training engine.
+        kwargs["language_model_only"] = True
+        return original_llm(*args, **kwargs)
+
+    patch_target: Any = vllm_generation
+    patch_target.LLM = prefix_cached_llm
+    try:
+        yield
+    finally:
+        patch_target.LLM = original_llm
+
+
 def build_grpo_trainer(
     config: GrpoConfig,
     *,
     resume: bool = False,
-    require_difficulty: bool = True,
     use_vllm: bool = True,
     tracker: Tracker | None = None,
     store: CheckpointStore | None = None,
@@ -504,43 +556,17 @@ def build_grpo_trainer(
     from datasets import Dataset
     from trl import GRPOTrainer  # type: ignore[attr-defined]
 
-    class CurriculumGRPOTrainer(CurriculumGRPOTrainerMixin, GRPOTrainer):
+    class ScenarioGRPOTrainer(ScenarioGRPOTrainerMixin, GRPOTrainer):
         pass
 
     specs, all_scenarios = _load_catalog(config)
-    heldout = select_heldout_scenarios(
-        all_scenarios,
-        env_count=config.curriculum.heldout_env_count,
-        per_env=config.curriculum.heldout_scenarios_per_env,
-    )
-    heldout_ids = {scenario.task_id for scenario in heldout}
-    candidates = [scenario for scenario in all_scenarios if scenario.task_id not in heldout_ids]
-
-    profile: DifficultyProfile | None = None
-    if config.curriculum.enabled and require_difficulty:
-        profile = read_profile(
-            config.curriculum.difficulty_profile_path,
-            model_id=config.model_id,
-            model_revision=config.model_revision,
-        )
-        candidates = [scenario for scenario in candidates if scenario.task_id in profile.by_task]
-    if not candidates:
-        raise GrpoError("no training scenarios remain after held-out and curriculum selection")
-    order = weighted_scenario_order(
-        [scenario.task_id for scenario in candidates],
-        profile,
-        seed=config.training.seed,
-        band_weight=config.curriculum.band_weight,
-        always_zero_weight=config.curriculum.always_zero_weight,
-        always_one_weight=config.curriculum.always_one_weight,
-    )
-    if not order:
-        raise GrpoError("curriculum weights excluded every training scenario")
+    order = [scenario.task_id for scenario in all_scenarios]
+    random.Random(config.training.seed).shuffle(order)
     groups_per_generation = config.profile.generation_batch_size // config.profile.num_generations
     usable_scenarios = (len(order) // groups_per_generation) * groups_per_generation
     if usable_scenarios == 0:
         raise GrpoError(
-            f"curriculum has {len(order)} scenarios but one generation batch needs "
+            f"{len(order)} scenarios cannot fill one generation batch of "
             f"{groups_per_generation} distinct scenarios"
         )
     # TRL drops a final incomplete generation chunk. Trim it once here so the
@@ -548,25 +574,15 @@ def build_grpo_trainer(
     order = order[:usable_scenarios]
     by_id = {scenario.task_id: scenario for scenario in all_scenarios}
     train_scenarios = [by_id[task_id] for task_id in order]
-    rates = profile.by_task if profile is not None else {}
     train_dataset = Dataset.from_list(
-        [
-            _dataset_row(
-                scenario,
-                specs[scenario.env_id],
-                rates[scenario.task_id].success_rate if scenario.task_id in rates else 0.5,
-            )
-            for scenario in train_scenarios
-        ]
-    )
-    eval_dataset = Dataset.from_list(
-        [_dataset_row(scenario, specs[scenario.env_id], 0.5) for scenario in heldout]
+        [_dataset_row(scenario, specs[scenario.env_id]) for scenario in train_scenarios]
     )
 
     tokenizer = assert_text_only_processing_class(
         load_tokenizer(config.model_id, revision=config.model_revision)
     )
     attn = resolve_attn_implementation(config.optimization.attn_implementation)
+    precision = resolve_precision(config.optimization.bf16)
     liger = resolve_liger(config.optimization.liger_fused_linear_cross_entropy)
     checkpoint_store = store or CheckpointStore(
         config.tracking.hub_repo_id, Path(config.output_dir) / "adapter"
@@ -586,12 +602,13 @@ def build_grpo_trainer(
         args = _grpo_args(
             config,
             attn=attn,
+            precision=precision,
             use_liger=liger.enabled,
             report_to=["wandb"] if run.enabled else [],
             use_vllm=use_vllm,
         )
         start_cursor = resume_state.sampler_cursor if resume_state else 0
-        cursor = CurriculumCursor(
+        cursor = ScenarioCursor(
             start=start_cursor,
             dataset_size=len(train_dataset),
             groups_per_generation=args.generation_batch_size // config.profile.num_generations,
@@ -632,13 +649,12 @@ def build_grpo_trainer(
         else:
             environment_factories = make_environment_factories(
                 env_specs=specs,
-                scenarios=[*train_scenarios, *heldout],
+                scenarios=train_scenarios,
                 pool=pool,
             )
         reward = functools.partial(
             verifier_reward,
-            num_generations=config.profile.num_generations,
-            trajectory_sample_limit=config.curriculum.trajectory_samples_per_log,
+            trajectory_sample_limit=config.trajectory_samples_per_log,
         )
         rollout_kwargs = _trainer_rollout_kwargs(
             config.rollout_path,
@@ -646,30 +662,36 @@ def build_grpo_trainer(
             rollout_func=rollout_func,
             environment_factories=environment_factories,
         )
-        trainer = CurriculumGRPOTrainer(
-            model=config.model_id,
-            args=args,
-            train_dataset=train_dataset,
-            eval_dataset=eval_dataset,
-            processing_class=tokenizer,
-            peft_config=_lora_config(config),
-            **rollout_kwargs,
-        )
-        trainer.curriculum_cursor = cursor
+        with _force_trl_prefix_caching() if use_vllm else nullcontext():
+            trainer = ScenarioGRPOTrainer(
+                model=config.model_id,
+                args=args,
+                train_dataset=train_dataset,
+                processing_class=tokenizer,
+                peft_config=_lora_config(config),
+                **rollout_kwargs,
+            )
+        if liger.enabled:
+            # ponytail: keep Liger's fused loss, skip only its torch.compile guard
+            # path; torch 2.11/Liger 0.8.2 raises on dynamic sequence shapes.
+            trainer.liger_loss.compiled = False
+        trainer.scenario_cursor = cursor
         if use_vllm:
             _assert_prefix_caching(trainer)
-        adapters = cast_adapters(trainer.model, config.lora.adapter_dtype)
-        toggles = (attn, liger, adapters)
+        # FP16 runs must keep trainable adapters in FP32: GradScaler rejects FP16
+        # gradients. `cast_adapters` owns that rule; give it the effective dtype
+        # rather than the configured one so a downgraded card is handled.
+        adapter_dtype = precision.name if precision.name == "float16" else config.lora.adapter_dtype
+        adapters = cast_adapters(trainer.model, adapter_dtype)
+        dtype = Toggle(
+            "training_dtype",
+            precision.enabled,
+            f"effective model dtype: {precision.name}; {precision.detail}",
+        )
+        toggles = (attn, dtype, liger, adapters)
         trainer.add_callback(GrpoCheckpointCallback(checkpoint_store, run, cursor))
         trainer.add_callback(
             cast(Any, LogpDifferenceStopCallback(config.logp_difference_stop_threshold))
-        )
-        trainer.add_callback(
-            GroupVarianceStopCallback(
-                after_steps=config.curriculum.zero_variance_stop_after_steps,
-                multiplier=config.curriculum.zero_variance_stop_multiplier,
-                margin=config.curriculum.zero_variance_stop_margin,
-            )
         )
         bench_eval = build_bench_eval_callback(config, trainer, tokenizer, tracker=run)
         if bench_eval is not None:
@@ -690,7 +712,6 @@ def build_grpo_trainer(
         resume_from=resume_from,
         cursor=cursor,
         train_task_ids=tuple(order),
-        eval_task_ids=tuple(scenario.task_id for scenario in heldout),
     )
 
 
@@ -699,68 +720,11 @@ def run_train_grpo(config: GrpoConfig, *, resume: bool = False) -> int:
     try:
         console().print(format_ledger(list(assembled.toggles)))
         LOG.info(
-            "train %d curriculum scenarios / eval %d held-out scenarios",
+            "train %d scenarios",
             len(assembled.train_task_ids),
-            len(assembled.eval_task_ids),
         )
         assembled.trainer.train(resume_from_checkpoint=assembled.resume_from)
         assembled.trainer.save_model(config.output_dir)
-        return 0
-    finally:
-        assembled.shutdown()
-
-
-def run_profile_difficulty(config: GrpoConfig) -> int:
-    """Run the SFT policy repeatedly and persist verifier-derived difficulty."""
-    if config.rollout_path != "async":
-        raise GrpoError("profile-difficulty requires rollout_path=async")
-    assembled = build_grpo_trainer(config, require_difficulty=False)
-    try:
-        trainer = assembled.trainer
-        sync = getattr(getattr(trainer, "vllm_generation", None), "sync_weights", None)
-        if callable(sync):
-            sync()
-        dataset = trainer.train_dataset
-        sample_count = min(config.curriculum.profile_scenario_sample, len(dataset))
-        task_ids = tuple(assembled.train_task_ids[:sample_count])
-        rows_by_id = {str(row["task_id"]): row for row in dataset}
-        rewards: dict[str, list[float]] = {task_id: [] for task_id in task_ids}
-        batch_width = config.profile.generation_batch_size
-        prompts: list[Any] = []
-        owners: list[str] = []
-        for task_id in task_ids:
-            for _ in range(config.curriculum.profile_rollouts):
-                prompts.append(rows_by_id[task_id]["prompt"])
-                owners.append(task_id)
-        # This loop is the longest unreported wait in the pipeline -- a few hundred
-        # scenarios times `profile_rollouts` generations, with one JSON line at the
-        # end and nothing before it.
-        with progress_task(
-            "profile-difficulty", total=len(prompts), unit="rollouts", every=batch_width
-        ) as advance:
-            for offset in range(0, len(prompts), batch_width):
-                batch_prompts = prompts[offset : offset + batch_width]
-                batch_owners = owners[offset : offset + batch_width]
-                output = trainer.rollout_func(batch_prompts, trainer)
-                for task_id, value in zip(batch_owners, output["rollout_reward"], strict=True):
-                    rewards[task_id].append(float(value))
-                    advance()
-        profile = profile_rewards(
-            rewards,
-            model_id=config.model_id,
-            model_revision=config.model_revision,
-            seed=config.training.seed,
-        )
-        path = write_profile(profile, config.curriculum.difficulty_profile_path)
-        counts = profile.to_dict()["counts"]
-        # The profile gates every later GRPO run (`read_profile` refuses a missing
-        # one) and costs a full profiling pass to rebuild.
-        assembled.tracker.log_artifact(path, name="difficulty-profile", artifact_type="curriculum")
-        assembled.tracker.log({f"difficulty/{band}": float(n) for band, n in counts.items()})
-        # Machine-readable: `notebooks/03-grpo.ipynb` reads these counts from stdout,
-        # and notebook changes are a non-goal -- this line cannot move to stderr.
-        print(json.dumps(counts, sort_keys=True))
-        LOG.info("wrote %s", path)
         return 0
     finally:
         assembled.shutdown()

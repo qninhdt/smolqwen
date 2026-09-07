@@ -12,6 +12,7 @@ both the arithmetic and the completion it buys.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -26,7 +27,7 @@ CONFIG_DIR = REPO_ROOT / "configs"
 
 
 class PoolBackedAdapter:
-    """Shaped like `EnvScalerHeldoutAdapter`: a `_pool` with the real attributes."""
+    """An adapter with a live worker-pool capacity."""
 
     def __init__(self, worker_count: int, episodes_per_worker: int) -> None:
         self._pool = type(
@@ -36,33 +37,36 @@ class PoolBackedAdapter:
         )()
 
 
+class LazyPoolAdapter:
+    """An adapter before its pool exists, which is when it is asked.
+
+    The real adapter builds its pool on the first `build_prompt` -- after the window
+    is computed -- so reading `_pool` alone reported `None` and `min()` degraded to
+    the generation width. `pool_capacity` is the declaration that closes the gap.
+    """
+
+    _pool = None
+
+    def __init__(self, capacity: int) -> None:
+        self.pool_capacity = capacity
+
+
 class InProcessAdapter:
     """Shaped like `BfclMultiTurnAdapter`: no environment layer at all."""
 
     _pool = None
 
 
-def shipped_eval(profile: str = "l4") -> EvalConfig:
-    config = resolve("eval", profile, config_dir=CONFIG_DIR, budgets_path=Path("/nonexistent"))
+def shipped_eval(profile: str = "l4", *, overrides: Sequence[str] = ()) -> EvalConfig:
+    config = resolve(
+        "eval",
+        profile,
+        overrides=overrides,
+        config_dir=CONFIG_DIR,
+        budgets_path=Path("/nonexistent"),
+    )
     assert isinstance(config, EvalConfig)
     return config
-
-
-def test_the_shipped_configs_really_do_hold_more_tasks_than_pool_capacity() -> None:
-    """The premise, read from the configs rather than asserted as a constant.
-
-    If a future edit made the pool larger than the held-out set, the window would
-    stop mattering and this test says so instead of passing quietly.
-    """
-    config = shipped_eval()
-    options = config.adapter_options["envscaler_heldout"]
-    tasks = int(str(options["env_count"])) * int(str(options["scenarios_per_env"]))
-    capacity = config.profile.env_worker_count * config.profile.env_episodes_per_worker
-
-    assert tasks > capacity, (
-        f"{tasks} held-out tasks against {capacity} pool episodes; the admission "
-        "window is no longer load-bearing and this test should be re-derived"
-    )
 
 
 def test_the_window_is_the_smaller_of_generation_width_and_pool_capacity() -> None:
@@ -85,6 +89,22 @@ def test_an_adapter_with_no_pool_is_bounded_only_by_generation_width() -> None:
     adapter = InProcessAdapter()
     assert pool_capacity_of(adapter) is None  # type: ignore[arg-type]
     assert admission_window(config, adapter) == config.profile.generation_concurrency  # type: ignore[arg-type]
+
+
+def test_a_capacity_declared_before_the_pool_exists_still_binds_the_window() -> None:
+    """The window is computed before the first `build_prompt` builds the pool.
+
+    So a lazily-built pool made `pool_capacity_of` return `None` for an adapter that
+    does have a capacity, and the `min()` this file exists to pin silently became the
+    generation width alone. With a concurrency above capacity that is the failure the
+    window prevents: the first task past capacity raises `PoolError` and the run
+    produces no report at all.
+    """
+    config = shipped_eval(overrides=["profile.generation_concurrency=64"])
+    adapter = LazyPoolAdapter(capacity=8)
+
+    assert pool_capacity_of(adapter) == 8  # type: ignore[arg-type]
+    assert admission_window(config, adapter) == 8  # type: ignore[arg-type]
 
 
 def test_the_engine_config_carries_the_window_and_disables_mask_building() -> None:
