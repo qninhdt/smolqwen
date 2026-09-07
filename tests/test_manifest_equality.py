@@ -34,7 +34,7 @@ def test_pinned_checkpoint_revisions_can_differ_between_arms() -> None:
     assert sft.to_dict()["recorded_free"]["checkpoint_revision"] == "def"
 
 
-def test_manifest_retains_adapter_owned_invariants_without_interpreting_them() -> None:
+def test_manifest_retains_benchmark_invariants_without_interpreting_them() -> None:
     config = resolve("eval")
     assert isinstance(config, EvalConfig)
     first = build_manifest(
@@ -61,8 +61,8 @@ def test_manifest_retains_adapter_owned_invariants_without_interpreting_them() -
             }
         },
     )
-    assert first.invariant["adapters"] != second.invariant["adapters"]
-    assert first.invariant["adapters"]["fixture"]["heldout_ids"] == ["case"]
+    assert first.invariant["benchmark"] != second.invariant["benchmark"]
+    assert first.invariant["benchmark"]["fixture"]["heldout_ids"] == ["case"]
     assert first.recorded_free["checkpoint_revision"] == "abc"
 
 

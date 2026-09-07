@@ -1,185 +1,149 @@
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
-from smolqwen.config import resolve
 from smolqwen.config_models import EvalConfig
 from smolqwen.eval import runner
-from smolqwen.eval.adapters.base import AdapterResult, EvalTask, StepResult
-from smolqwen.eval.manifest import EvalManifest
-from smolqwen.eval.metrics import TaskMetrics, aggregate
-from smolqwen.eval.policies import GenerationResult
-from smolqwen.eval.runner import evaluate_adapter
+from smolqwen.eval.bfcl_runner import BfclRequest, BfclRun
+from tests.helpers import OfflineTokenizer
 
-
-class _Policy:
-    revision = "a" * 40
-
-    def generate(
-        self, messages: Sequence[Mapping[str, Any]], tools: Sequence[Mapping[str, Any]]
-    ) -> GenerationResult:
-        return GenerationResult("done", 3, "stop")
-
-
-class _Adapter:
-    summarized = False
-
-    def load_tasks(self) -> list[EvalTask]:
-        return [EvalTask("case", "fixture", "prompt", ())]
-
-    def build_prompt(
-        self, task: EvalTask, history: Sequence[Mapping[str, Any]]
-    ) -> list[dict[str, Any]]:
-        return [{"role": "user", "content": task.prompt}]
-
-    def step(self, task: EvalTask, completion: str) -> StepResult:
-        return StepResult("finished", complete=True, env_steps=1)
-
-    def score(self, task: EvalTask) -> AdapterResult:
-        return AdapterResult(1.0, True)
-
-    def invalid_call_count(self, task: EvalTask) -> int:
-        return 1
-
-    def manifest_invariants(self, tasks: Sequence[EvalTask]) -> Mapping[str, Any]:
-        return {"fixture_revision": "1", "task_ids": [task.task_id for task in tasks]}
-
-    def summarize(self, tasks: Sequence[TaskMetrics]) -> dict[str, dict[str, float]]:
-        self.summarized = True
-        return aggregate(tasks)
-
-
-def test_runner_collects_secondary_metrics_from_a_structured_generation() -> None:
-    config = resolve("eval", profile="l4")
-    assert isinstance(config, EvalConfig)
-    adapter = _Adapter()
-    progress: list[tuple[str, TaskMetrics | None]] = []
-    metrics = evaluate_adapter(
-        config,
-        _Policy(),
-        adapter,
-        progress=lambda task, result: progress.append((task.task_id, result)),
-    )
-    assert adapter.summarized
-    assert [task_id for task_id, _ in progress] == ["case", "case"]
-    assert progress[0][1] is None
-    assert progress[1][1] is not None
-    assert metrics["fixture"] == {
-        "score": 1.0,
-        "invalid_call_rate": 1.0,
-        "average_steps": 1.0,
+SHA = "a" * 40
+METRICS = {
+    "multi_turn_base": {
+        "score": 0.5,
+        "invalid_call_rate": 0.0,
+        "average_steps": 2.0,
         "average_generated_tokens": 3.0,
         "truncation_rate": 0.0,
-        "exact_success_rate": 1.0,
-        # How the episode ended, aggregated as a rate. A run where this reads
-        # `terminal_step_cap_rate: 1.0` generated nothing and its score describes the
-        # environment's initial state -- which is what a T4 run reported before this
-        # existed.
-        "terminal_final_answer_rate": 1.0,
-        "terminal_reason_denominator": 1.0,
     }
+}
 
 
-def test_named_adapter_logs_exact_progress_and_summary(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
+class _Tracker:
+    def __init__(self) -> None:
+        self.finished = False
+        self.artifacts: list[tuple[Path, list[Path]]] = []
+
+    def start(self) -> None:
+        pass
+
+    def log(self, _payload: Any) -> None:
+        pass
+
+    def log_artifact(
+        self, path: Path, *, name: str, artifact_type: str, extra_paths: list[Path]
+    ) -> None:
+        self.artifacts.append((path, extra_paths))
+
+    def finish(self) -> None:
+        self.finished = True
+
+
+class _Engine:
+    profile = SimpleNamespace(dtype="bfloat16")
+
+    def __init__(self) -> None:
+        self.shutdowns = 0
+
+    def serving_config(self) -> dict[str, Any]:
+        return {"dtype": "bfloat16"}
+
+    def shutdown(self) -> None:
+        self.shutdowns += 1
+
+
+def _args(checkpoint: Path, **overrides: Any) -> SimpleNamespace:
+    payload = {
+        "checkpoint": str(checkpoint),
+        "revision": SHA,
+        "adapter_path": None,
+        "adapter_revision": None,
+        "tag": "base",
+    }
+    payload.update(overrides)
+    return SimpleNamespace(**payload)
+
+
+def _wire(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> tuple[_Engine, _Tracker]:
+    engine = _Engine()
+    tracker = _Tracker()
+    monkeypatch.setattr(runner, "load_bfcl_tasks", lambda *_: ([object()], "b" * 40))
+    monkeypatch.setattr(runner, "_engine_for", lambda *_: (engine, None))
+    monkeypatch.setattr(runner, "_tokenizer_for", lambda *_: object())
+    monkeypatch.setattr(runner, "tracker_for", lambda *_a, **_k: tracker)
+    return engine, tracker
+
+
+def test_command_runs_only_bfcl_through_vllm_and_writes_artifacts(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    config = EvalConfig(adapters=("fixture",))
-    adapter = _Adapter()
-    monkeypatch.setattr(runner, "create_adapter", lambda *_: adapter)
+    engine, tracker = _wire(monkeypatch, tmp_path)
+    seen: list[str] = []
 
-    metrics, invariants = runner._evaluate_named_adapter(config, _Policy(), "fixture")
+    def evaluate(*_args: Any, **kwargs: Any) -> BfclRun:
+        seen.append(kwargs["benchmark_revision"])
+        return BfclRun(METRICS, {"benchmark": "BFCL"})
 
-    assert metrics["fixture"]["score"] == 1.0
-    assert invariants["fixture_revision"] == "1"
-    output = capsys.readouterr().err
-    assert "fixture: 1/1 tasks" in output
-    assert "fixture complete: 1 tasks" in output
+    monkeypatch.setattr(runner, "evaluate_bfcl", evaluate)
+    config = EvalConfig(output_dir=str(tmp_path))
+
+    assert runner.run_evaluation(config, _args(tmp_path)) == 0
+
+    assert seen == ["b" * 40]
+    assert engine.shutdowns == 1
+    assert tracker.finished
+    assert (tmp_path / "base.json").is_file()
+    assert (tmp_path / "base.md").is_file()
+    assert json.loads(capsys.readouterr().out) == {
+        "json": str(tmp_path / "base.json"),
+        "markdown": str(tmp_path / "base.md"),
+    }
+    assert tracker.artifacts[0][1][-1].name == "base-bfcl_multi_turn_base.jsonl"
 
 
-def test_run_evaluation_records_actual_serving_locator_and_backend(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_engine_is_released_when_bfcl_fails(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    config = EvalConfig(adapters=("fixture",), output_dir=str(tmp_path))
-    policy = SimpleNamespace(revision="a" * 40, adapter_revision=None)
-    captured: list[EvalManifest] = []
-    monkeypatch.setattr(runner, "load_http_policy", lambda **_: policy)
+    engine, tracker = _wire(monkeypatch, tmp_path)
     monkeypatch.setattr(
         runner,
-        "_evaluate_named_adapter",
-        lambda *_args, **_kwargs: ({"fixture": {"score": 1.0}}, {"dataset_hash": "hash"}),
+        "evaluate_bfcl",
+        lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("generation failed")),
     )
 
-    def write_report(
-        output_dir: str,
-        *,
-        tag: str,
-        manifest: EvalManifest,
-        metrics: dict[str, dict[str, float]],
-    ) -> tuple[Path, Path]:
-        captured.append(manifest)
-        return tmp_path / "result.json", tmp_path / "result.md"
+    with pytest.raises(RuntimeError, match="generation failed"):
+        runner.run_evaluation(EvalConfig(output_dir=str(tmp_path)), _args(tmp_path))
 
-    monkeypatch.setattr(
-        runner,
-        "write_report",
-        write_report,
-    )
-    args = SimpleNamespace(
-        checkpoint=None,
-        revision="a" * 40,
-        endpoint="http://localhost:8000/v1",
-        adapter_path=None,
-        adapter_revision=None,
-        adapter=None,
-        tag="served",
-        serving_backend="vllm",
-        require_serving_match=None,
-        # Attributes no CLI flag produces any more. Present here to prove the runner
-        # does not read them: the eight serving-detail flags were deleted in favour
-        # of recording what the engine resolved, and reading a caller-supplied value
-        # was the way to record something other than what ran.
-        served_dtype="float8_e4m3fn",
-        quantization="fp8",
-        speculative_decoding="mtp-1",
-        kv_budget="8GiB",
-        max_num_seqs=64,
-        max_num_batched_tokens=8192,
-        chunked_prefill=True,
-        prefix_caching=True,
-    )
-    assert runner.run_evaluation(config, args) == 0
-    recorded = captured[0].recorded_free
-    assert recorded["backend"] == "vllm"
-    assert recorded["endpoint"] == args.endpoint
-    assert recorded["served_model"] == config.http_model
-    assert recorded["checkpoint_revision"] == "a" * 40
-    # An endpoint's serving config belongs to a process this command cannot inspect,
-    # so it is recorded as unknown rather than as whatever the caller typed.
-    assert recorded["quantization"] is None
-    assert recorded["max_num_seqs"] is None
-    # What generation used, recorded rather than asserted on the command line.
-    assert recorded["generation_concurrency"] == config.profile.generation_concurrency
-    assert recorded["enforce_eager"] == config.profile.enforce_eager
-    assert recorded["trajectory_records"]["fixture"].endswith("served-fixture.jsonl")
+    assert engine.shutdowns == 1
+    assert tracker.finished
 
 
-def test_run_evaluation_refuses_an_empty_adapter_selection(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_endpoint_mode_is_not_part_of_checkpoint_evaluation(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="checkpoints only"):
+        runner.run_evaluation(EvalConfig(), _args(tmp_path, endpoint="http://localhost:8000/v1"))
+
+
+def test_vllm_generator_batches_ids_and_uses_resolved_sampling() -> None:
+    tokenizer = OfflineTokenizer(token_size=1)
+    output_ids = tokenizer("answer")["input_ids"]
+    seen: list[dict[str, Any]] = []
+
+    class Engine:
+        def generate_ids(self, prompts: Any, **kwargs: Any) -> list[Any]:
+            seen.append({"prompts": prompts, **kwargs})
+            return [SimpleNamespace(token_ids=output_ids, finish_reason="stop") for _ in prompts]
+
     config = EvalConfig()
-    args = SimpleNamespace(
-        checkpoint="model",
-        revision="a" * 40,
-        endpoint=None,
-        adapter_path=None,
-        adapter_revision=None,
-        adapter=None,
-    )
-    with pytest.raises(ValueError, match="at least one benchmark adapter"):
-        runner.run_evaluation(config, args)
+    generate = runner._vllm_generator(Engine(), tokenizer, config, None)
+    results = generate([BfclRequest("a", (1, 2), 20), BfclRequest("b", (3,), 20)])
+
+    assert [result.text for result in results] == ["answer", "answer"]
+    assert seen[0]["prompts"] == [(1, 2), (3,)]
+    assert seen[0]["temperature"] == config.decoding.temperature
+    assert seen[0]["top_p"] == config.decoding.top_p
+    assert seen[0]["top_k"] == config.decoding.top_k

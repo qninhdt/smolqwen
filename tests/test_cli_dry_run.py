@@ -143,13 +143,7 @@ def test_probe_subcommand_needs_no_config(capsys: pytest.CaptureFixture[str]) ->
 
 
 def test_parser_exposes_pinned_revision_on_evaluate() -> None:
-    """The revision stays mandatory; the eight serving-detail flags are gone.
-
-    The in-process engine knows its own dtype, KV budget, batching and caching and
-    records what it used, so asserting those on the command line only created a way
-    to record something other than what ran. `--serving-backend` survives because
-    the served process is a separate one this command cannot inspect.
-    """
+    """Evaluation takes one pinned checkpoint and no benchmark/transport selector."""
     parser = build_parser()
     args = parser.parse_args(
         [
@@ -158,14 +152,13 @@ def test_parser_exposes_pinned_revision_on_evaluate() -> None:
             "org/repo",
             "--revision",
             "abc123",
-            "--serving-backend",
-            "vllm",
         ]
     )
     assert args.revision == "abc123"
-    assert args.serving_backend == "vllm"
+    assert not hasattr(args, "adapter")
+    assert not hasattr(args, "endpoint")
 
-    for removed in ("--served-dtype", "--quantization", "--max-num-seqs", "--chunked-prefill"):
+    for removed in ("--adapter", "--endpoint", "--serving-backend", "--require-serving-match"):
         with pytest.raises(SystemExit):
             parser.parse_args(["evaluate", "--revision", "abc123", removed, "x"])
 

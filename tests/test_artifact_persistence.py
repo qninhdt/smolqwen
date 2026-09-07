@@ -79,48 +79,6 @@ def test_a_missing_file_is_reported_rather_than_uploaded(
     assert "missing" in caplog.text
 
 
-def test_evaluate_logs_the_report_with_its_trajectories(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The report names its trajectory files, so uploading it alone dangles them."""
-    from smolqwen.eval import runner
-
-    run = FakeRun()
-    monkeypatch.setattr(
-        runner,
-        "load_http_policy",
-        lambda **_: SimpleNamespace(revision="a" * 40, adapter_revision=None),
-    )
-    monkeypatch.setattr(
-        runner,
-        "_evaluate_named_adapter",
-        lambda *_a, **_k: ({"fixture": _metrics()}, {"dataset_hash": "hash"}),
-    )
-    monkeypatch.setattr(runner, "tracker_for", lambda *_a, **_k: Tracker(project="t", run=run))
-    config = EvalConfig(adapters=("fixture",), output_dir=str(tmp_path))
-    args = SimpleNamespace(
-        checkpoint=None,
-        revision="a" * 40,
-        endpoint="http://127.0.0.1:8000/v1",
-        adapter_path=None,
-        adapter_revision=None,
-        adapter=None,
-        tag="sft",
-        serving_backend="vllm",
-        require_serving_match=None,
-    )
-    assert runner.run_evaluation(config, args) == 0
-
-    files = _artifact_files(run)
-    assert "sft.json" in files
-    assert "sft.md" in files
-    assert "sft-fixture.jsonl" in files
-    # Headline scalars reach the run too, so a report has a chart beside it.
-    assert any("eval/sft/fixture/score" in payload for payload in run.logged)
-    # The run is closed even though the upload happened inside the try block.
-    assert run.finished
-
-
 def test_the_merged_push_is_opt_in_and_uses_its_own_repo(tmp_path: Path) -> None:
     """Sharing the adapter repo would interleave two kinds of revision in one history."""
     from smolqwen.training.merge import MergeResult, push_merged

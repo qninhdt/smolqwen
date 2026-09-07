@@ -23,7 +23,7 @@ import ast
 import json
 import logging
 import shlex
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -262,77 +262,64 @@ def test_evaluation_report_paths_are_json_while_progress_goes_to_stderr(
     fail -- which is exactly how a Colab cell reading this would break.
     """
     from smolqwen.config_models import EvalConfig
-    from smolqwen.eval import runner
-    from smolqwen.eval.adapters.base import AdapterResult, EvalTask, StepResult
-    from smolqwen.eval.metrics import TaskMetrics, aggregate
-    from smolqwen.eval.policies import GenerationResult
-    from smolqwen.rollout.rollout_func import encode_ids
+    from smolqwen.eval import bfcl_runner, runner
+    from smolqwen.eval.bfcl_runner import BfclTask
     from tests.helpers import OfflineTokenizer
 
     configure_logging(level=logging.INFO)
+    tokenizer = OfflineTokenizer(token_size=1)
+    done_ids = tokenizer("done")["input_ids"]
 
-    class _Policy:
-        revision = "a" * 40
-        adapter_revision = None
+    class _Engine:
+        profile = SimpleNamespace(dtype="bfloat16")
 
-        def __init__(self) -> None:
-            self.tokenizer = OfflineTokenizer(token_size=1)
+        def generate_ids(self, prompts: Sequence[Any], **_: Any) -> list[Any]:
+            return [SimpleNamespace(token_ids=done_ids, finish_reason="stop") for _ in prompts]
 
-        def generate(
-            self, messages: Sequence[Mapping[str, Any]], tools: Sequence[Mapping[str, Any]]
-        ) -> GenerationResult:
-            return GenerationResult("done", 3, "stop")
+        def serving_config(self) -> dict[str, str]:
+            return {"dtype": "bfloat16"}
 
-        def generate_ids(self, prompt_ids: Sequence[int], **_: Any) -> tuple[int, ...]:
-            return tuple(encode_ids(self.tokenizer, "done"))
+        def shutdown(self) -> None:
+            pass
 
-    class _Adapter:
-        def load_tasks(self) -> list[EvalTask]:
-            return [EvalTask(f"case-{index}", "fixture", "prompt", ()) for index in range(3)]
-
-        def build_prompt(
-            self, task: EvalTask, history: Sequence[Mapping[str, Any]]
-        ) -> list[dict[str, Any]]:
-            return [dict(message) for message in history] or [
-                {"role": "user", "content": task.prompt}
-            ]
-
-        def step(self, task: EvalTask, completion: str) -> StepResult:
-            return StepResult("finished", complete=True, env_steps=1)
-
-        def score(self, task: EvalTask) -> AdapterResult:
-            return AdapterResult(1.0, True)
-
-        def invalid_call_count(self, task: EvalTask) -> int:
-            return 0
-
-        def manifest_invariants(self, tasks: Sequence[EvalTask]) -> Mapping[str, Any]:
-            return {"task_ids": [task.task_id for task in tasks]}
-
-        def summarize(self, tasks: Sequence[TaskMetrics]) -> dict[str, dict[str, float]]:
-            return aggregate(tasks)
-
-    monkeypatch.setattr(runner, "load_http_policy", lambda **_: _Policy())
-    monkeypatch.setattr(runner, "create_adapter", lambda *_a, **_k: _Adapter())
+    tasks = [
+        BfclTask(
+            f"case-{index}",
+            {
+                "id": f"case-{index}",
+                "question": [[{"role": "user", "content": "prompt"}]],
+                "function": [],
+                "initial_config": {},
+                "involved_classes": [],
+            },
+            ((),),
+        )
+        for index in range(3)
+    ]
+    tracker = SimpleNamespace(
+        start=lambda: None,
+        log=lambda *_a, **_k: None,
+        log_artifact=lambda *_a, **_k: None,
+        finish=lambda: None,
+    )
+    monkeypatch.setattr(runner, "load_bfcl_tasks", lambda *_: (tasks, "b" * 40))
+    monkeypatch.setattr(runner, "_engine_for", lambda *_: (_Engine(), None))
+    monkeypatch.setattr(runner, "_tokenizer_for", lambda *_: tokenizer)
+    monkeypatch.setattr(runner, "tracker_for", lambda *_a, **_k: tracker)
+    monkeypatch.setattr(bfcl_runner, "_check", lambda *_a, **_k: {"valid": True})
     args = SimpleNamespace(
-        checkpoint=None,
+        checkpoint=str(tmp_path),
         revision="a" * 40,
-        endpoint="http://127.0.0.1:8000/v1",
         adapter_path=None,
         adapter_revision=None,
-        adapter="fixture",
         tag="progress",
-        serving_backend=None,
-        require_serving_match=None,
     )
-    config = EvalConfig(adapters=("fixture",), output_dir=str(tmp_path))
+    config = EvalConfig(output_dir=str(tmp_path))
     assert runner.run_evaluation(config, args) == 0
     captured = capsys.readouterr()
     payload = json.loads(captured.out)
     assert set(payload) == {"json", "markdown"}
-    # Progress and the per-adapter summary are on stderr, where a pipeline ignores
-    # them and a human reads them.
-    assert "fixture" in captured.err
+    assert "multi_turn_base" in captured.err
     assert "mean" in captured.err
 
 

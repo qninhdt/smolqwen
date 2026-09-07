@@ -161,7 +161,7 @@ def build_parser() -> argparse.ArgumentParser:
     grpo.add_argument("--resume", action="store_true")
 
     evaluate = subparsers.add_parser(
-        "evaluate", help="run a benchmark adapter against a checkpoint"
+        "evaluate", help="run BFCL multi_turn_base against a checkpoint with vLLM"
     )
     _add_common(evaluate)
     evaluate.add_argument("--checkpoint", default=None, help="local path or Hub repo id")
@@ -170,33 +170,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="checkpoint revision sha; required for Hub reads, never resolved implicitly",
     )
-    evaluate.add_argument("--tag", required=False, default=None, help="column label, e.g. base/sft")
-    evaluate.add_argument("--adapter", default=None, help="benchmark adapter name")
+    evaluate.add_argument("--tag", required=False, default=None, help="report label")
     evaluate.add_argument(
         "--adapter-path", default=None, help="PEFT adapter directory or pinned Hub revision"
     )
     evaluate.add_argument(
         "--adapter-revision", default=None, help="explicit revision sha for a PEFT adapter"
-    )
-    evaluate.add_argument("--endpoint", default=None, help="OpenAI-compatible base URL")
-    evaluate.add_argument(
-        "--serving-backend",
-        default=None,
-        help="actual serving engine recorded in the manifest, for example vllm",
-    )
-    # The eight serving-detail flags this used to carry are gone. The in-process
-    # engine knows its own dtype, KV budget, batching and caching and records them,
-    # so asserting them on the command line only created a way to record something
-    # other than what ran. `--serving-backend` stays because the served process is a
-    # separate one whose engine this command cannot inspect.
-    evaluate.add_argument(
-        "--require-serving-match",
-        type=Path,
-        default=None,
-        help=(
-            "an evaluation report whose recorded serving config must match this run's; "
-            "refuses a paired speed/quality row measured under a different config"
-        ),
     )
 
     serve = subparsers.add_parser("serve", help="launch the vLLM endpoint")

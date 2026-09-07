@@ -1,15 +1,4 @@
-"""The batched path and the serial path agree, driven by one scripted policy.
-
-Batching is only worth having if it does not change what a benchmark measures. Both
-paths advance the same adapter with the same deterministic policy here, so any
-divergence is the batching, not the model -- which is what makes this a gate rather
-than a smoke test.
-
-What it cannot settle: kernel-level and reduction-order effects, which need real
-weights on a card. Those are the GPU-validation phase's job. What it does settle is
-that the two loops interpret an adapter's `StepResult` identically -- the role, the
-tool set, the completion signal, and the turn budget.
-"""
+"""The legacy batched adapter path used by in-training benchmark callbacks."""
 
 from __future__ import annotations
 
@@ -20,8 +9,6 @@ from smolqwen.config_models import EvalConfig
 from smolqwen.eval.adapters.base import AdapterResult, EvalTask, StepResult
 from smolqwen.eval.batched import evaluate_batched
 from smolqwen.eval.metrics import TaskMetrics, aggregate
-from smolqwen.eval.policies import GenerationResult
-from smolqwen.eval.runner import evaluate_adapter
 from smolqwen.eval.trajectories import TrajectoryRecord
 from smolqwen.rollout.generation import ScriptedPolicyBackend
 from smolqwen.rollout.rollout_func import encode_ids
@@ -107,24 +94,6 @@ class ScriptedAdapter:
         return aggregate(tasks)
 
 
-class SerialPolicy:
-    """The serial path's policy seam, replaying the same script per task."""
-
-    revision = "a" * 40
-
-    def __init__(self) -> None:
-        self.turn: dict[int, int] = {}
-
-    def generate(
-        self, messages: Sequence[Mapping[str, Any]], tools: Sequence[Mapping[str, Any]]
-    ) -> GenerationResult:
-        # Which turn this is, derived from the history rather than a counter, so the
-        # two paths are driven by the same function of the same state.
-        index = sum(1 for message in messages if message.get("role") == "assistant")
-        text = TURNS[min(index, len(TURNS) - 1)]
-        return GenerationResult(text, len(text), "stop")
-
-
 def scripted_backend(tokenizer: OfflineTokenizer) -> ScriptedPolicyBackend:
     """The engine's generation seam, replaying the same script by turn index."""
 
@@ -138,36 +107,6 @@ def config(**overrides: Any) -> EvalConfig:
     payload: dict[str, Any] = {"adapters": ("fixture",), "max_steps_per_task": 8}
     payload.update(overrides)
     return EvalConfig(**payload)
-
-
-def test_the_batched_path_reproduces_the_serial_path_s_scores() -> None:
-    serial_records: list[TrajectoryRecord] = []
-    serial = evaluate_adapter(config(), SerialPolicy(), ScriptedAdapter(), records=serial_records)
-
-    tokenizer = OfflineTokenizer(token_size=1)
-    batched_records: list[TrajectoryRecord] = []
-    batched = evaluate_batched(
-        config(),
-        ScriptedAdapter(),
-        backend=scripted_backend(tokenizer),
-        tokenizer=tokenizer,
-        records=batched_records,
-    )
-
-    assert serial["fixture"]["score"] == batched["fixture"]["score"] == 1.0
-    assert serial["fixture"]["exact_success_rate"] == batched["fixture"]["exact_success_rate"]
-    assert serial["fixture"]["average_steps"] == batched["fixture"]["average_steps"]
-    # The diagnostic each side computed from the adapter's own verdict.
-    assert serial["fixture"]["calls_made"] == batched["fixture"]["calls_made"] == 2.0
-
-    assert [record.task_id for record in batched_records] == [
-        record.task_id for record in serial_records
-    ]
-    for left, right in zip(serial_records, batched_records, strict=True):
-        assert (left.score, left.completed) == (right.score, right.completed)
-        assert left.failure_reason == right.failure_reason
-        assert left.env_steps == right.env_steps
-        assert left.terminal_reason == right.terminal_reason == "final_answer"
 
 
 def test_the_batched_path_issues_one_generation_call_per_cycle_not_per_task() -> None:
