@@ -89,10 +89,8 @@ import yaml
 
 source = Path("configs/base/eval.yaml")
 payload = yaml.safe_load(source.read_text(encoding="utf-8"))
-payload["adapters"] = ["envscaler_heldout"]
-heldout = payload["adapter_options"]["envscaler_heldout"]
-heldout["env_count"] = 1
-heldout["scenarios_per_env"] = 1
+# Dev and test coincide: multi-turn base is the shipped benchmark. The smoke
+# shrinks it to the first task and one turn so the card time stays trivial.
 payload["decoding"]["max_new_tokens"] = 32
 payload["max_steps_per_task"] = 1
 Path("/content/eval-smoke.yaml").write_text(
@@ -281,28 +279,30 @@ def serve_smoke() -> None:
                 finish_reason=completion["choices"][0].get("finish_reason"),
             )
 
+            # Upstream's benchmark against the proxied endpoint, tiny so the smoke
+            # run stays a smoke run. The repo-local wrapper this replaced only
+            # renamed vLLM's result fields; the command vLLM ships owns execution.
             run(
                 "vllm-bench-smoke",
                 [
                     "uv",
                     "run",
-                    "smolqwen",
+                    "vllm",
                     "bench",
-                    "--profile",
-                    "l4",
-                    "--dataset",
+                    "serve",
+                    "--base-url",
+                    "http://127.0.0.1:8000",
+                    "--model",
+                    "smolqwen",
+                    "--dataset-name",
                     "random",
-                    "--override",
-                    "model_path=Qwen/Qwen3.5-2B",
-                    "--override",
-                    f"model_revision={MODEL_REVISION}",
-                    "--override",
-                    "benchmark_num_prompts=2",
-                    "--override",
-                    "benchmark_input_len=16",
-                    "--override",
-                    "benchmark_output_len=8",
-                    "--concurrency",
+                    "--num-prompts",
+                    "2",
+                    "--random-input-len",
+                    "16",
+                    "--random-output-len",
+                    "8",
+                    "--max-concurrency",
                     "1",
                 ],
                 timeout=600,
@@ -313,7 +313,7 @@ def serve_smoke() -> None:
                 timeout=60,
             )
             run(
-                "heldout-eval-smoke",
+                "eval-smoke",
                 [
                     "uv",
                     "run",
@@ -330,7 +330,7 @@ def serve_smoke() -> None:
                     "--tag",
                     "l4-smoke",
                     "--adapter",
-                    "envscaler_heldout",
+                    "bfcl_multi_turn",
                     "--endpoint",
                     "http://127.0.0.1:8000",
                     "--serving-backend",

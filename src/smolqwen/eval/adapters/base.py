@@ -39,8 +39,29 @@ class StepResult:
 
 @dataclass(frozen=True)
 class AdapterResult:
+    """One task's verdict, plus what a reader needs to attribute a failure.
+
+    `completed` and `diagnostics` carry defaults deliberately: this is a frozen
+    positional dataclass constructed at nine sites across four files, and an
+    undefaulted field would break every one of them.
+
+    `diagnostics` is per-task and sparse. A benchmark reports only the conditions it
+    can actually resolve for *this* task -- BFCL's state comparison is undefined for
+    a task that never completed (`bfcl.py:194` returns before the expected snapshots
+    exist), and filling `0.0` there would make "never finished" and "finished
+    wrong" identical again, which is the conflation `completion_rate` exists to
+    remove. An absent key means "not applicable", not "zero".
+    """
+
     score: float
     exact_success: bool
+    completed: bool = True
+    diagnostics: Mapping[str, float] = field(default_factory=dict)
+    # Which scoring condition failed, in the benchmark's own words. The trajectory
+    # record carries this so a 0.0 is attributable without re-running generation.
+    failure_reason: str | None = None
+    # Per-check detail the verifier computes and the aggregate discards.
+    failed_check_names: tuple[str, ...] = ()
 
 
 class BenchmarkAdapter(Protocol):

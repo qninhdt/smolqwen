@@ -11,6 +11,7 @@ from smolqwen.data.cli_actions import _write_shards
 from smolqwen.data.convert_sft import (
     SFT_SCHEMA_VERSION,
     SFT_SEMANTICS,
+    SFT_SEMANTICS_NON_REASONING,
     SKIP_TOO_LONG,
     ConversionEvent,
     ConversionReport,
@@ -21,7 +22,6 @@ from smolqwen.data.convert_sft import (
 )
 from smolqwen.data.loader import LoadStats, Message, iter_trajectories
 from smolqwen.data.render import RenderedSample, render_training_sample
-from smolqwen.data.splits import split_trajectory_ids
 from tests.helpers import OfflineTokenizer
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
@@ -96,19 +96,15 @@ def test_report_accounts_for_every_input_row_and_sample_equals_row() -> None:
 
 
 def test_write_shards_calls_progress_for_each_parsed_row(tmp_path: Path) -> None:
-    ids = [trajectory.task_id for trajectory in iter_trajectories(FIXTURES / "trajectories.json")]
-    split = split_trajectory_ids(ids, seed=5, val_fraction=0.5)
     report = ConversionReport()
     updates: list[None] = []
 
     stats = _write_shards(
         FIXTURES / "trajectories.json",
-        split,
         10_000_000,
         OfflineTokenizer(),
         "tool_role",
         tmp_path / "sft" / "train.jsonl",
-        tmp_path / "sft" / "val.jsonl",
         report,
         progress=lambda: updates.append(None),
     )
@@ -117,36 +113,58 @@ def test_write_shards_calls_progress_for_each_parsed_row(tmp_path: Path) -> None
     assert len(updates) == stats.parsed
 
 
-def test_parallel_write_shards_matches_single_worker_byte_for_byte(tmp_path: Path) -> None:
-    ids = [trajectory.task_id for trajectory in iter_trajectories(FIXTURES / "trajectories.json")]
-    split = split_trajectory_ids(ids, seed=5, val_fraction=0.5)
+def _read_records(tmp_path: Path, name: str) -> list[dict[str, Any]]:
+    path = tmp_path / name / "train.jsonl"
+    return [json.loads(line) for line in path.read_text().splitlines() if line]
 
-    def write(worker_count: int, name: str) -> tuple[bytes, bytes, dict[str, Any]]:
+
+def _write_with_mode(tmp_path: Path, name: str, reasoning: bool) -> list[dict[str, Any]]:
+    _write_shards(
+        FIXTURES / "trajectories.json",
+        10_000_000,
+        OfflineTokenizer(),
+        "tool_role",
+        tmp_path / name / "train.jsonl",
+        ConversionReport(),
+        reasoning=reasoning,
+    )
+    return _read_records(tmp_path, name)
+
+
+def test_write_shards_tags_records_with_the_conversion_mode(tmp_path: Path) -> None:
+    reasoning_records = _write_with_mode(tmp_path, "reasoning", reasoning=True)
+    non_reasoning_records = _write_with_mode(tmp_path, "non_reasoning", reasoning=False)
+    assert {record["semantics"] for record in reasoning_records} == {SFT_SEMANTICS}
+    assert {record["semantics"] for record in non_reasoning_records} == {
+        SFT_SEMANTICS_NON_REASONING
+    }
+    # Stripped reasoning means strictly shorter supervised spans over the same rows.
+    for reasoning_record in reasoning_records:
+        stripped = next(
+            record
+            for record in non_reasoning_records
+            if record["trajectory_uid"] == reasoning_record["trajectory_uid"]
+        )
+        assert stripped["supervised_tokens"] < reasoning_record["supervised_tokens"]
+        assert stripped["seq_length"] < reasoning_record["seq_length"]
+
+
+def test_parallel_write_shards_matches_single_worker_byte_for_byte(tmp_path: Path) -> None:
+    def write(worker_count: int, name: str) -> tuple[bytes, dict[str, Any]]:
         report = ConversionReport()
         directory = tmp_path / name
         stats = _write_shards(
             FIXTURES / "trajectories.json",
-            split,
             10_000_000,
             OfflineTokenizer(),
             "tool_role",
             directory / "train.jsonl",
-            directory / "val.jsonl",
             report,
             workers=worker_count,
         )
         return (
             (directory / "train.jsonl").read_bytes(),
-            (directory / "val.jsonl").read_bytes(),
             report.to_dict(input_shas={}, load_stats=stats),
         )
 
     assert write(4, "parallel") == write(1, "serial")
-
-
-def test_paired_variants_route_by_task_id_not_unique_uid() -> None:
-    task_ids = ["task-a", "task-b"]
-    split = split_trajectory_ids(task_ids, seed=5, val_fraction=0.5)
-    for task_id in task_ids:
-        variants = [f"{task_id}:conversation", f"{task_id}:non_conversation"]
-        assert len({split.partition(task_id) for _ in variants}) == 1

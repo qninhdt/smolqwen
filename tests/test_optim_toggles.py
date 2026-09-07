@@ -89,17 +89,30 @@ def test_liger_available_reports_what_it_avoids() -> None:
 
 
 def test_flash_attention_downgrades_with_a_recorded_reason() -> None:
+    # `capability` is passed explicitly throughout: without it the resolver probes
+    # the real device, so the same assertion would pass on an Ampere host and fail
+    # on a Turing one. Ampere is stated here because that is the branch under test.
     no_cuda = resolve_attn_implementation("flash_attention_2", has_flash_attn=True, has_cuda=False)
     assert no_cuda.name == "sdpa"
     assert "no CUDA device" in no_cuda.detail
 
-    no_wheel = resolve_attn_implementation("flash_attention_2", has_flash_attn=False, has_cuda=True)
+    no_wheel = resolve_attn_implementation(
+        "flash_attention_2", has_flash_attn=False, has_cuda=True, capability=(8, 9)
+    )
     assert no_wheel.name == "sdpa"
     assert "flash_attn wheel" in no_wheel.detail
 
+    pre_ampere = resolve_attn_implementation(
+        "flash_attention_2", has_flash_attn=True, has_cuda=True, capability=(7, 5)
+    )
+    assert pre_ampere.name == "sdpa"
+    assert "compute capability 8.0" in pre_ampere.detail
+
 
 def test_flash_attention_selected_when_both_present() -> None:
-    toggle = resolve_attn_implementation("flash_attention_2", has_flash_attn=True, has_cuda=True)
+    toggle = resolve_attn_implementation(
+        "flash_attention_2", has_flash_attn=True, has_cuda=True, capability=(8, 9)
+    )
     assert toggle.name == "flash_attention_2"
     assert toggle.enabled
 

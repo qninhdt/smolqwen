@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from smolqwen.config_models import ProfileConfig
-from smolqwen.rollout.episode import Episode
+from smolqwen.inference.episode import Episode
 from smolqwen.rollout.metrics import (
     LOGP_DIFFERENCE_METRIC,
     LogpDifferenceStopCallback,
@@ -66,3 +66,10 @@ def test_logp_difference_callback_stops_above_the_configured_threshold() -> None
         logs={LOGP_DIFFERENCE_METRIC: 2.1},
     )
     assert control.should_training_stop is True
+
+
+def test_logp_difference_callback_supports_unowned_trainer_events() -> None:
+    callback = LogpDifferenceStopCallback(threshold=2.0)
+    control = SimpleNamespace(should_training_stop=False)
+
+    assert callback.on_train_begin(None, None, control) is control

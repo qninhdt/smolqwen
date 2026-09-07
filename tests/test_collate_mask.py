@@ -6,7 +6,12 @@ from typing import Any
 
 import pytest
 
-from smolqwen.data.convert_sft import SFT_SCHEMA_VERSION, SFT_SEMANTICS, sample_to_record
+from smolqwen.data.convert_sft import (
+    SFT_SCHEMA_VERSION,
+    SFT_SEMANTICS,
+    SFT_SEMANTICS_NON_REASONING,
+    sample_to_record,
+)
 from smolqwen.data.loader import Message
 from smolqwen.data.render import render_training_sample
 from smolqwen.training.collate import IGNORE_INDEX, Batch, CollateError, collate, record_to_sequence
@@ -48,6 +53,13 @@ def test_old_segmented_schema_is_rejected_with_regeneration_command() -> None:
     old = {"prompt_ids": [1], "completion_ids": [2], "loss_mask": [1]}
     with pytest.raises(CollateError, match="prepare-sft"):
         record_to_sequence(old)
+
+
+def test_both_semantics_tags_are_accepted_and_unknown_tags_are_not() -> None:
+    for semantics in (SFT_SEMANTICS, SFT_SEMANTICS_NON_REASONING):
+        assert record_to_sequence(_record(semantics=semantics))[0] == [11, 12, 13, 14]
+    with pytest.raises(CollateError, match="prepare-sft"):
+        record_to_sequence(_record(semantics="full_trajectory_per_turn_v9"))
 
 
 @pytest.mark.parametrize(

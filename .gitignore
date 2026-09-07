@@ -17,9 +17,7 @@ artifacts/
 !artifacts/
 !artifacts/data/
 artifacts/data/*
-!artifacts/data/profile.json
 !artifacts/data/budgets.json
-!artifacts/data/env_split.json
 !artifacts/data/conversion_report.json
 
 # Generated before exposing the serving proxy. Never commit bearer credentials.

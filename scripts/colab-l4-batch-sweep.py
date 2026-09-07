@@ -297,8 +297,7 @@ def _boundary_records(*, vocab_size: int) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     for index, length in enumerate((127, 193)):
         input_ids = [
-            ((1000 + index * 1000 + offset) % (vocab_size - 1)) + 1
-            for offset in range(length)
+            ((1000 + index * 1000 + offset) % (vocab_size - 1)) + 1 for offset in range(length)
         ]
         prompt_length = length // 2
         records.append(
@@ -403,9 +402,9 @@ def _run_padding_free_equivalence(torch: Any) -> dict[str, Any]:
     mutated = [dict(row) for row in records]
     mutated[0] = dict(mutated[0])
     mutated[0]["input_ids"] = list(mutated[0]["input_ids"])
-    mutated[0]["input_ids"][0] = (
-        (mutated[0]["input_ids"][0] + 17) % (int(model.config.vocab_size) - 1) + 1
-    )
+    mutated[0]["input_ids"][0] = (mutated[0]["input_ids"][0] + 17) % (
+        int(model.config.vocab_size) - 1
+    ) + 1
     mutated[0]["labels"] = list(mutated[0]["labels"])
     prompt_index = mutated[0]["seq_length"] // 2
     mutated[0]["labels"][prompt_index] = mutated[0]["input_ids"][prompt_index]
@@ -434,9 +433,7 @@ def _run_padding_free_equivalence(torch: Any) -> dict[str, Any]:
         "document_b": document_b_error,
     }
     failed = {
-        name: error
-        for name, error in errors.items()
-        if error > PADDING_FREE_BOUNDARY_TOLERANCE
+        name: error for name, error in errors.items() if error > PADDING_FREE_BOUNDARY_TOLERANCE
     }
     if loss_error > loss_tolerance:
         failed["loss"] = loss_error

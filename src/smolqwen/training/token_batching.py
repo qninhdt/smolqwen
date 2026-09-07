@@ -14,7 +14,10 @@ class TokenBudgetBatchSampler:
     """Greedily pack whole rows under a fixed token budget.
 
     Rows are shuffled reproducibly per epoch, then locally sorted by length to
-    reduce shape churn. No row is split, duplicated, or omitted.
+    reduce shape churn. No row is split, duplicated, or omitted. The default
+    budget is the sum of row lengths for a flattened batch; padded mode instead
+    bounds `batch_size * max_row_length`, which is the tensor allocation and
+    attention work the dense collator will actually execute.
     """
 
     def __init__(
@@ -25,6 +28,7 @@ class TokenBudgetBatchSampler:
         seed: int,
         shuffle: bool = True,
         bucket_size: int = 128,
+        padding_free: bool = True,
     ) -> None:
         if max_tokens <= 0:
             raise TokenBatchingError("max_tokens must be positive")
@@ -33,6 +37,7 @@ class TokenBudgetBatchSampler:
         self.seed = int(seed)
         self.shuffle = shuffle
         self.bucket_size = max(1, int(bucket_size))
+        self.padding_free = bool(padding_free)
         self.epoch = 0
         self.cursor = 0
         over = [length for length in self.lengths if length <= 0 or length > self.max_tokens]
@@ -54,15 +59,23 @@ class TokenBudgetBatchSampler:
     def batches(self) -> list[list[int]]:
         batches: list[list[int]] = []
         batch: list[int] = []
-        tokens = 0
+        total_tokens = 0
+        max_length = 0
         for index in self._order():
             length = self.lengths[index]
-            if batch and tokens + length > self.max_tokens:
+            candidate_total = total_tokens + length
+            candidate_max_length = max(max_length, length)
+            candidate_cost = (
+                candidate_total if self.padding_free else (len(batch) + 1) * candidate_max_length
+            )
+            if batch and candidate_cost > self.max_tokens:
                 batches.append(batch)
                 batch = []
-                tokens = 0
+                total_tokens = 0
+                max_length = 0
             batch.append(index)
-            tokens += length
+            total_tokens += length
+            max_length = max(max_length, length)
         if batch:
             batches.append(batch)
         return batches

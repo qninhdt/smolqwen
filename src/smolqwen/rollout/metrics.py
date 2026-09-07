@@ -21,7 +21,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from smolqwen.rollout.episode import DriftTally, Episode
+from smolqwen.inference.episode import DriftTally, Episode
 from smolqwen.rollout.profiler import TimelineProfile
 
 LOGP_DIFFERENCE_METRIC = "sampling/sampling_logp_difference/max"
@@ -172,6 +172,22 @@ class LogpDifferenceStopCallback:
 
     def __init__(self, threshold: float) -> None:
         self.threshold = threshold
+
+    def __getattr__(self, name: str) -> Any:
+        """Supply no-op lifecycle hooks expected by Transformers' handler.
+
+        Keeping this callback independent from ``transformers`` preserves the
+        import boundary for rollout-only code. The handler invokes every
+        ``on_*`` event on every callback, so unowned events must still return the
+        current control object.
+        """
+        if not name.startswith("on_"):
+            raise AttributeError(name)
+
+        def no_op(*args: Any, **kwargs: Any) -> Any:
+            return kwargs.get("control", args[2] if len(args) > 2 else None)
+
+        return no_op
 
     def on_log(
         self,

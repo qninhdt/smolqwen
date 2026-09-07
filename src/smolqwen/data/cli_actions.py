@@ -1,10 +1,8 @@
-"""Thin CLI dispatchers for the data pipeline.
+"""Thin CLI dispatcher for the SFT data pipeline.
 
-`cli.py` imports these to dispatch `profile-data` and `prepare-sft`. They own the
+`cli.py` imports this module to dispatch `prepare-sft`. It owns the
 "where do the release files live" question so the data modules stay agnostic, and
-resolve the config's pinned datasets (revision + sha256) into local paths the
-streamers can read -- a vendored copy when configured, otherwise a download from
-the pinned Hub revision (served from cache when present).
+resolves the pinned release (served from cache when present).
 """
 
 from __future__ import annotations
@@ -14,23 +12,15 @@ import os
 from collections import deque
 from collections.abc import Callable, Iterator
 from concurrent.futures import Future, ThreadPoolExecutor
-from contextlib import contextmanager
 from pathlib import Path
 from threading import get_ident, local
-from time import monotonic
 from typing import Any
 
-from rich.progress import (
-    BarColumn,
-    Progress,
-    TaskProgressColumn,
-    TextColumn,
-    TimeElapsedColumn,
-    TimeRemainingColumn,
-)
-
 from smolqwen.config_models import DataConfig, DatasetPin
+from smolqwen.console import logger, progress_task, status_table
 from smolqwen.data.convert_sft import (
+    SFT_SEMANTICS,
+    SFT_SEMANTICS_NON_REASONING,
     ConversionEvent,
     ConversionReport,
     Skipped,
@@ -39,60 +29,10 @@ from smolqwen.data.convert_sft import (
     sample_to_record,
 )
 from smolqwen.data.loader import LoadStats, Trajectory, iter_trajectories, verify_sha256
-from smolqwen.data.profiler import format_profile_table, profile_dataset, write_profile
 from smolqwen.data.render import render_training_sample, training_chat_template
-from smolqwen.data.splits import Split, build_env_split_manifest, split_trajectory_ids
 from smolqwen.tokenizer import load_tokenizer
 
-
-@contextmanager
-def _progress_task(description: str, *, total: int | None = None) -> Iterator[Callable[[], None]]:
-    """Render a progress task and emit periodic logs for non-TTY notebooks."""
-    progress = Progress(
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        TaskProgressColumn(),
-        TimeElapsedColumn(),
-        TimeRemainingColumn(),
-        transient=False,
-    )
-    task_id = progress.add_task(description, total=total)
-    started = monotonic()
-    completed_rows = 0
-    completed = False
-
-    def advance() -> None:
-        nonlocal completed_rows
-        completed_rows += 1
-        progress.advance(task_id)
-        if completed_rows == 1 or completed_rows % 250 == 0:
-            elapsed = monotonic() - started
-            rate = completed_rows / elapsed if elapsed else 0.0
-            count = (
-                f"{completed_rows}/{total} trajectories"
-                if total is not None
-                else f"{completed_rows} trajectories"
-            )
-            print(
-                f"{description}: {count} ({rate:.1f}/s, {elapsed:.0f}s elapsed)",
-                flush=True,
-            )
-
-    with progress:
-        try:
-            yield advance
-            completed = True
-        finally:
-            elapsed = monotonic() - started
-            progress.update(
-                task_id,
-                description=f"{description} {'complete' if completed else 'failed'}",
-            )
-            status = "complete" if completed else "failed"
-            print(
-                f"{description} {status}: {completed_rows} trajectories in {elapsed:.1f}s",
-                flush=True,
-            )
+LOG = logger(__name__)
 
 
 def _tokenizer(config: DataConfig) -> Any:
@@ -107,11 +47,9 @@ def _tokenizer(config: DataConfig) -> Any:
 def _resolve_dataset(pin: DatasetPin) -> Path:
     """Resolve a pinned dataset to a local file, preferring the vendored copy.
 
-    The env metadata and RL scenario files are vendored in `third_party/EnvScaler`
-    and are pinned by sha256 in config; the 701 MB SFT trajectory file is not
-    vendored and comes from the Hub at its pinned revision. The download uses the
-    standard `HF_HOME` cache rather than a project-local one, so an already-cached
-    revision is reused instead of pulling another copy per checkout.
+    The 701 MB SFT trajectory file is not vendored and comes from the Hub at its
+    pinned revision. The download uses the standard `HF_HOME` cache rather than a
+    project-local one, so an already-cached revision is reused.
     """
     if pin.local_path and Path(pin.local_path).is_file():
         verify_sha256(pin.local_path, pin.sha256)
@@ -124,106 +62,37 @@ def _resolve_dataset(pin: DatasetPin) -> Path:
             repo_id=pin.repo_id,
             filename=pin.filename,
             revision=pin.revision,
-            repo_type=pin.repo_type,
+            repo_type="dataset",
         )
     )
     verify_sha256(path, pin.sha256)
     return path
 
 
-def run_profile_data(config: DataConfig) -> int:
-    """`smolqwen profile-data`: profile trajectories, write budgets and env split."""
-    output_dir = Path(config.output_dir)
-
-    print("profile-data: resolving pinned datasets", flush=True)
-    sft_path = _resolve_dataset(config.sft_trajectories)
-    tokenizer = _tokenizer(config)
-    print("profile-data: rendering/tokenizing trajectories", flush=True)
-    with _progress_task("profile-data") as advance:
-        result = profile_dataset(
-            tokenizer,
-            sft_path,
-            revision=config.sft_trajectories.revision,
-            progress=advance,
-        )
-    profile_path, budgets_path = write_profile(result, output_dir)
-
-    # The env-split manifest depends only on the static metadata, so it is written
-    # in the same pass. The RL scenario env-ids come from the RL scenario file.
-    print("profile-data: building environment split", flush=True)
-    env_path = _resolve_dataset(config.env_metadata)
-    rl_env_ids = _rl_scenario_env_ids(_resolve_dataset(config.rl_scenarios))
-    manifest = build_env_split_manifest(
-        env_path,
-        rl_scenario_env_ids=rl_env_ids,
-        input_sha256=config.env_metadata.sha256,
-        input_revision=config.env_metadata.revision,
-    )
-    (output_dir / "env_split.json").write_text(
-        json.dumps(manifest.to_dict(), indent=2, sort_keys=True) + "\n", encoding="utf-8"
-    )
-
-    print(format_profile_table(result))
-    print(f"wrote {profile_path}")
-    print(f"wrote {budgets_path}")
-    print(f"wrote {output_dir / 'env_split.json'}")
-    return 0
-
-
-def _rl_scenario_env_ids(rl_path: Path) -> list[str]:
-    from smolqwen.data.loader import iter_json_array
-
-    ids: list[str] = []
-    for row in iter_json_array(rl_path):
-        if isinstance(row, dict):
-            ids.append(str(row.get("env_id") or ""))
-    return ids
-
-
 def run_prepare_sft(config: DataConfig, *, workers: int | None = None) -> int:
-    """`smolqwen prepare-sft`: render trajectories into train/val SFT shards.
-
-    Converts in two passes: the first collects task ids for the seeded train/val
-    split, the second renders and routes each sample to its shard. Profiling is
-    optional analysis, not a prerequisite for conversion.
-    """
+    """`smolqwen prepare-sft`: render every accepted trajectory into one shard."""
     output_dir = Path(config.output_dir)
     cap = config.max_seq_length
 
-    print("prepare-sft: resolving pinned dataset", flush=True)
+    LOG.info("resolving pinned dataset")
     sft_path = _resolve_dataset(config.sft_trajectories)
     tokenizer = _tokenizer(config)
     shape = config.tool_result_shape
+    reasoning = config.enable_thinking
     worker_count = _prepare_worker_count(workers)
 
-    # Pass one: task groups for the seeded split. Paired row variants must stay together.
-    print("prepare-sft: pass 1/2 — collecting split ids", flush=True)
-    ids: list[str] = []
-    with _progress_task("prepare-sft split") as advance:
-        for trajectory in iter_trajectories(sft_path):
-            ids.append(trajectory.task_id)
-            advance()
-    split = split_trajectory_ids(ids, seed=config.split_seed, val_fraction=config.val_fraction)
-    print(f"prepare-sft: pass 1/2 complete — {len(ids)} trajectories", flush=True)
-
-    # Pass two: render and route.
     report = ConversionReport()
     train_path = output_dir / "sft" / "train.jsonl"
-    val_path = output_dir / "sft" / "val.jsonl"
-    print(
-        f"prepare-sft: pass 2/2 — rendering and writing shards with {worker_count} workers",
-        flush=True,
-    )
-    with _progress_task("prepare-sft render/write", total=len(ids)) as advance:
+    LOG.info("rendering and writing with %d workers", worker_count)
+    with progress_task("prepare-sft render/write") as advance:
         stats = _write_shards(
             sft_path,
-            split,
             cap,
             tokenizer,
             shape,
             train_path,
-            val_path,
             report,
+            reasoning=reasoning,
             progress=advance,
             workers=worker_count,
         )
@@ -232,7 +101,7 @@ def run_prepare_sft(config: DataConfig, *, workers: int | None = None) -> int:
     report_path.write_text(
         json.dumps(
             report.to_dict(
-                input_shas=_input_shas(config, sft_path),
+                input_shas=_input_shas(sft_path),
                 input_revisions=_input_revisions(config),
                 load_stats=stats,
             ),
@@ -241,71 +110,63 @@ def run_prepare_sft(config: DataConfig, *, workers: int | None = None) -> int:
         + "\n",
         encoding="utf-8",
     )
-    print(
-        f"wrote {train_path} / {val_path}: converted {report.converted}, "
-        f"skipped {report.skipped}, malformed {stats.malformed}, samples {report.samples}"
+    status_table(
+        "prepare-sft",
+        {
+            "train": train_path,
+            "report": report_path,
+            "converted": report.converted,
+            "skipped": report.skipped,
+            "malformed": stats.malformed,
+            "samples": report.samples,
+        },
     )
-    print(f"wrote {report_path}")
     return 0
 
 
 def _input_revisions(config: DataConfig) -> dict[str, str]:
-    return {
-        "sft_trajectories": config.sft_trajectories.revision,
-        "rl_scenarios": config.rl_scenarios.revision,
-        "env_metadata": config.env_metadata.revision,
-    }
+    return {"sft_trajectories": config.sft_trajectories.revision}
 
 
-def _input_shas(config: DataConfig, sft_path: Path) -> dict[str, str]:
+def _input_shas(sft_path: Path) -> dict[str, str]:
     """The sha256 of every input file, alongside its pinned revision.
 
-    A count check does not detect a modified `env_class_code` body, so the hash is
-    what lets Phases 4 and 7 assert they are executing the same dataset this
-    conversion was built against.
+    The hash ties the rendered shard to the exact downloaded release file.
     """
     from smolqwen.data.loader import sha256_of
 
-    shas: dict[str, str] = {"sft_trajectories": sha256_of(sft_path)}
-    for name, pin in (
-        ("rl_scenarios", config.rl_scenarios),
-        ("env_metadata", config.env_metadata),
-    ):
-        if pin.local_path and Path(pin.local_path).is_file():
-            shas[name] = sha256_of(pin.local_path)
-    return shas
+    return {"sft_trajectories": sha256_of(sft_path)}
 
 
 def _write_shards(
     sft_path: Path,
-    split: Split,
     cap: int,
     tokenizer: Any,
     shape: str,
     train_path: Path,
-    val_path: Path,
     report: ConversionReport,
     *,
+    reasoning: bool = True,
     progress: Callable[[], None] | None = None,
     workers: int = 1,
 ) -> LoadStats:
-    """Render every trajectory and route its samples to one shard.
+    """Render every trajectory into one train shard.
 
-    Routing is by trajectory id, so a Conv trajectory's segments never straddle
-    the train/val split. Returns the load stats so the report can account for
-    malformed input rows as well as converted and skipped ones.
+    Returns load stats so the report accounts for malformed input rows as well as
+    converted and skipped ones.
+
+    `reasoning=False` strips teacher reasoning at render time and tags the
+    written records with the non-reasoning semantics.
     """
     train_path.parent.mkdir(parents=True, exist_ok=True)
     stats = LoadStats()
     if workers < 1:
         raise ValueError("workers must be at least 1")
 
-    render = _build_renderer(tokenizer, workers=workers)
+    semantics = SFT_SEMANTICS if reasoning else SFT_SEMANTICS_NON_REASONING
+    render = _build_renderer(tokenizer, workers=workers, reasoning=reasoning)
 
-    with (
-        train_path.open("w", encoding="utf-8") as train_handle,
-        val_path.open("w", encoding="utf-8") as val_handle,
-    ):
+    with train_path.open("w", encoding="utf-8") as train_handle:
         trajectories = iter_trajectories(sft_path, stats=stats)
         events = (
             convert_trajectories(
@@ -323,21 +184,20 @@ def _write_shards(
                 workers=workers,
             )
         )
-        handles = {"train": train_handle, "val": val_handle}
         for event in events:
             if isinstance(event, Skipped):
                 report.note_skipped(event)
             else:
                 report.note_converted(event)
-                partition = split.partition(event.task_id)
-                handles[partition].write(json.dumps(sample_to_record(event.sample)) + "\n")
+                record = sample_to_record(event.sample, semantics=semantics)
+                train_handle.write(json.dumps(record) + "\n")
             if progress is not None:
                 progress()
 
     return stats
 
 
-def _build_renderer(tokenizer: Any, *, workers: int) -> Callable[..., Any]:
+def _build_renderer(tokenizer: Any, *, workers: int, reasoning: bool = True) -> Callable[..., Any]:
     """Build a renderer with one immutable compiled-template cache per worker."""
     canonical_template = training_chat_template(tokenizer)
     worker_state = local()
@@ -363,6 +223,7 @@ def _build_renderer(tokenizer: Any, *, workers: int) -> Callable[..., Any]:
             tokenizer,
             messages,
             training_template=selected_template,
+            reasoning=reasoning,
             **kwargs,
         )
 

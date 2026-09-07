@@ -17,7 +17,10 @@ Run the benchmark from the repository root:
 smolqwen rollout-bench --profile l4 --episodes 64
 ```
 
-Use `--profile a100` for the A100 sizing profile, `--budgets PATH` when the
+Use `--profile a100` for the A100 sizing profile, `--profile t4` for a free-tier
+Colab T4 (16 GB, sm75, FP16 padded SFT through `sdpa`; no number measured under
+it transfers to `l4`),
+`--budgets PATH` when the
 budget artifact is not at `artifacts/data/budgets.json`, and `--paths` to select
 the scripted diagnostic rows (the default is `serial_oracle,async`). The CLI options
 are owned by [`src/smolqwen/cli.py`](../src/smolqwen/cli.py); benchmark execution
@@ -37,6 +40,17 @@ The two rollout paths must also remain separate at training time:
 - `async` is the production path. Its trainer is constructed with
   `rollout_func`, `tools=None`, and `environment_factory=None` so TRL consumes the
   returned `env_mask` instead of silently rebuilding an all-ones tool mask.
+
+## Reasoning mode
+
+Rollout rendering and decoding switch together through `enable_thinking` in
+[`configs/base/grpo.yaml`](../configs/base/grpo.yaml). The default `false` renders
+generation prompts ending in an open `<think>` block and reads completions as
+reasoning-then-content. `false` renders Qwen's closed empty think block and reads
+completions as content — which is the mode the non-reasoning SFT shards
+(`data.enable_thinking: false`) train for. Both modes ride the same drift
+classifier and mask builder unchanged; see `src/smolqwen/inference/decoding.py`
+for why the decode seam is mode-aware.
 
 ## Reading the report
 

@@ -14,7 +14,10 @@
 # --- SFT target envelope. `micro_batch` is retained for non-SFT paths; padding-
 # free SFT uses the total-token budget below and may contain a variable number of
 # trajectories. The 32K L4 boundary and headroom are not measured yet.
-micro_batch: 2
+# GRPO at micro_batch=2 OOMs while materializing old-policy logits; micro_batch=1
+# is the measured first safe fallback and does not change padding-free SFT's token
+# envelope, which is owned by max_tokens_per_microbatch.
+micro_batch: 1
 grad_accum: 8
 max_tokens_per_microbatch: 32768
 
@@ -23,10 +26,10 @@ max_tokens_per_microbatch: 32768
 # It is not num_generations. Naming them separately is deliberate.
 generation_concurrency: 8
 active_pool_multiplier: 2
-# Lowered first on OOM during generation, before touching concurrency or the step
-# cap. The trainer holds its own allocation alongside vLLM on this card, and
-# weight sync is a full ~4 GB bf16 round trip every step.
-vllm_kv_fraction: 0.25
+# A colocated vLLM engine at 0.25 cannot reserve one 16K KV block after loading
+# Qwen3.5-2B; 0.40 is the lowest value observed to start on the L4. Revisit only
+# with a new live sweep, lowering this before changing the batch or context.
+vllm_kv_fraction: 0.40
 
 # --- Phase 7, set by the widening sweep (step 8), one axis at a time.
 num_generations: 4

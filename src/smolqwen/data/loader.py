@@ -112,23 +112,6 @@ def iter_json_array(path: Path | str) -> Iterator[Any]:
             position = 0
 
 
-def iter_json_object_values(path: Path | str) -> Iterator[tuple[str, Any]]:
-    """Yield ``(key, value)`` pairs of a top-level JSON object.
-
-    `191_env_metadata.json` is an object keyed by `env_id` (21 MB), small enough
-    to parse whole -- but the same streaming discipline keeps the memory story
-    uniform and leaves headroom if the release grows.
-    """
-    file_path = Path(path)
-    if not file_path.is_file():
-        raise DataError(f"file not found: {file_path}")
-    with file_path.open(encoding="utf-8") as handle:
-        payload = json.load(handle)
-    if not isinstance(payload, dict):
-        raise DataError(f"{file_path} is not a top-level JSON object")
-    yield from payload.items()
-
-
 @dataclass(frozen=True)
 class ToolCall:
     """One tool call in a trajectory or a rollout turn."""
@@ -215,24 +198,6 @@ class Trajectory:
         non-conversation variants, so it is not a unique trajectory identity.
         """
         return f"{self.task_id}:{self.traj_type}"
-
-    @property
-    def is_conversation(self) -> bool:
-        """Conv vs Non-Conv, by the release's own `traj_type` label.
-
-        Not re-derived from the message list: RL is Non-Conv only, and a
-        classification that disagreed with the label would silently change which
-        trajectories the RL split draws from.
-        """
-        return self.traj_type == "conversation"
-
-    @property
-    def real_user_turns(self) -> int:
-        return sum(1 for message in self.messages if message.is_real_user_turn)
-
-    @property
-    def tool_steps(self) -> int:
-        return sum(len(message.tool_calls) for message in self.messages)
 
 
 def _parse_tool_calls(raw: Any) -> tuple[ToolCall, ...]:

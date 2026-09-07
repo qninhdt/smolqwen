@@ -1,0 +1,64 @@
+# T4 sizing profile -- 16 GB, sm75 (Turing).
+#
+# **A separate padded-FP16 SFT profile.** It lets the full-trajectory trainer run
+# on a free Colab T4 before an L4 session is spent; no number measured under it
+# transfers to `l4.yaml`. Three hardware facts drive that:
+#
+# - **No bf16 tensor cores.** sm75 predates them, so both the trainer and vLLM
+#   resolve to float16 with the downgrade logged. fp16 has a narrower exponent
+#   range, so a T4 score and an L4 score are not one experiment.
+# - **No FlashAttention 2.** FA2's kernels are Ampere and newer, so SFT resolves
+#   to `sdpa` with right-padded batches and a real attention mask. That is a
+#   correct attention path, not an approximation -- but it is a different one, and
+#   padding costs are included in `max_tokens_per_microbatch` rather than hidden
+#   behind the padding-free sampler.
+# - **16 GB, not 24.** Every envelope number below is smaller for that reason
+#   alone and says nothing about the L4 envelope plan `260831-0808` owns.
+#
+# Sizing only, same closed schema as the other profiles: a semantic field here
+# fails at load because ProfileConfig is `extra="forbid"`.
+
+# 16,384 rather than the 32,768 default. MEASURED on a T4, not estimated: at 8,192
+# every EnvScaler held-out episode terminated at admission with zero generations,
+# because the rendered prompt exceeded the window -- the tool schemas alone run to
+# ~4,000 tokens and ~6,800 at the widest env, before the system prompt and the task.
+# The verifier still scored those untouched environments and the report read
+# `score: 0.25` beside `average_generated_tokens: 0.0`. At 16,384 the same four tasks
+# generated 500-840 tokens each and reached `turn_cap`.
+#
+# Absent from l4.yaml on purpose; the L4 cap is only ever lowered from a measurement,
+# never seeded from here.
+max_seq_length: 16384
+
+# --- SFT envelope for the padded FP16 sdpa path. The cap and actual fit still need
+# live measurement on the target T4; these values are intentionally separate from
+# the 32K padding-free L4/A100 envelope.
+micro_batch: 1
+grad_accum: 8
+max_tokens_per_microbatch: 16384
+
+# --- Generation. Halved against l4.yaml because the KV pool has a third less room
+# and shares it with whatever else is resident.
+generation_concurrency: 4
+active_pool_multiplier: 2
+# vLLM's fraction is measured against total VRAM, while colocated trainer weights
+# already occupy the card. 0.20 (2.91 GB) is below the 4.25 GB fp16 weight footprint;
+# 0.45 still left 0.0 GiB for the required 4K KV cache after the trainer was loaded.
+# 0.65 leaves a small rollout KV pool while keeping sleep-mode training viable; solo
+# `evaluate` still overrides this to 0.80 because it has the whole card.
+vllm_kv_fraction: 0.65
+
+# CUDA graph capture costs memory that a 16 GB card evaluating at 8K context does
+# not have to spare. Slower per step, and step latency is not what this profile
+# measures.
+enforce_eager: true
+
+# --- GRPO group size. 2 is the floor `num_generations` allows, and group-relative
+# advantage needs at least that.
+num_generations: 2
+
+# --- Worker pool. Halved: pool capacity bounds the eval admission window
+# (`min(generation_concurrency, pool_capacity)`), and 4x4=16 stays above the
+# concurrency above, so the window is still the generation width.
+env_worker_count: 2
+env_episodes_per_worker: 8

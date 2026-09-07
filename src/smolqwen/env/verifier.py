@@ -12,8 +12,7 @@ scenarios (3.8%) that reference it on some branch. (The plan's 1,208 / 779 /
 30.5% is a text match that counts comments and docstrings mentioning
 `initial_state` — the mitigation is required either way, but the magnitude is ~8x
 smaller than stated.) Without it the design swallows the `NameError` as `False`
-and reward is silently depressed on those scenarios; Phase 7's difficulty profiler
-would then classify some of them `always_zero` and the curriculum would drop them.
+and reward is silently depressed on those scenarios.
 Hence `name_error_count` on the result and a test that requires it to be zero.
 
 **Compile-once and per-episode binding are in tension.** Compiling at scenario

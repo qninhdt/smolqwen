@@ -7,9 +7,9 @@ from typing import Any
 from smolqwen.artifacts import CheckpointStore
 from smolqwen.tracking import Tracker
 from smolqwen.training.grpo import (
-    CurriculumCursor,
     CursorRepeatSampler,
     GrpoCheckpointCallback,
+    ScenarioCursor,
 )
 
 
@@ -23,7 +23,7 @@ def test_resume_rotates_to_the_next_unseen_curriculum_group() -> None:
     uninterrupted = CursorRepeatSampler(
         source, mini_repeat_count=2, batch_size=2, repeat_count=1, cursor=0
     )
-    cursor = CurriculumCursor(
+    cursor = ScenarioCursor(
         start=0,
         dataset_size=8,
         groups_per_generation=2,
@@ -42,7 +42,7 @@ def test_resume_rotates_to_the_next_unseen_curriculum_group() -> None:
 
 
 def test_cursor_accounts_for_gradient_accumulation_and_generation_reuse() -> None:
-    cursor = CurriculumCursor(
+    cursor = ScenarioCursor(
         start=3,
         dataset_size=20,
         groups_per_generation=4,
@@ -59,6 +59,9 @@ def test_checkpoint_persists_cursor_and_wandb_run_id(tmp_path: Path) -> None:
         def log(self, data: Any, *, step: int | None = None) -> None:
             return None
 
+        def log_artifact(self, artifact_or_path: Any, **_: Any) -> Any:
+            return artifact_or_path
+
         def finish(self) -> None:
             return None
 
@@ -68,7 +71,7 @@ def test_checkpoint_persists_cursor_and_wandb_run_id(tmp_path: Path) -> None:
     (checkpoint / "adapter_config.json").write_text("{}", encoding="utf-8")
     store = CheckpointStore(None, tmp_path / "adapter")
     tracker = Tracker(project="test", run=Run())
-    cursor = CurriculumCursor(0, 20, 4, 8, 4)
+    cursor = ScenarioCursor(0, 20, 4, 8, 4)
     callback = GrpoCheckpointCallback(store, tracker, cursor)
 
     callback.on_save(

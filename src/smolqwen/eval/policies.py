@@ -8,7 +8,9 @@ import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol
-from urllib.request import Request, urlopen
+from urllib.request import urlopen
+
+from smolqwen.inference.client import ChatClient
 
 _COMMIT_SHA = re.compile(r"[0-9a-fA-F]{40}")
 
@@ -54,11 +56,18 @@ class HttpPolicy:
         top_k: int = -1,
         seed: int | None = 1234,
         timeout_s: float = 60.0,
+        enable_thinking: bool = True,
         opener: Callable[..., Any] = urlopen,
     ) -> None:
         revision = _require_revision_sha(revision)
         if not model:
             raise ValueError("HTTP evaluation requires a served model name")
+        self._client = ChatClient(
+            endpoint,
+            api_key=api_key,
+            timeout_s=timeout_s,
+            opener=opener,
+        )
         self.endpoint = endpoint.rstrip("/")
         self.revision = revision
         self.adapter_revision: str | None = None
@@ -70,15 +79,12 @@ class HttpPolicy:
         self.top_k = top_k
         self.seed = seed
         self.timeout_s = timeout_s
-        self._opener = opener
+        self.enable_thinking = enable_thinking
 
     @property
     def completion_url(self) -> str:
-        """Return the chat-completions URL for either a root or ``/v1`` base."""
-
-        if self.endpoint.endswith("/v1"):
-            return f"{self.endpoint}/chat/completions"
-        return f"{self.endpoint}/v1/chat/completions"
+        """The chat-completions URL, for either a root or a ``/v1`` base."""
+        return self._client.completion_url
 
     def generate(
         self, messages: Sequence[Mapping[str, Any]], tools: Sequence[Mapping[str, Any]]
@@ -95,17 +101,11 @@ class HttpPolicy:
             payload["top_k"] = self.top_k
         if self.seed is not None:
             payload["seed"] = self.seed
-        headers = {"Content-Type": "application/json"}
-        if self.api_key:
-            headers["Authorization"] = f"Bearer {self.api_key}"
-        request = Request(
-            self.completion_url,
-            data=json.dumps(payload).encode(),
-            headers=headers,
-            method="POST",
-        )
-        with self._opener(request, timeout=self.timeout_s) as response:
-            body = json.loads(response.read().decode())
+        if not self.enable_thinking:
+            # Sent only when disabled: strict OpenAI-compatible endpoints reject
+            # unknown body fields, and the default (thinking) needs no override.
+            payload["chat_template_kwargs"] = {"enable_thinking": False}
+        body = self._client.chat(payload)
         choice = body["choices"][0]
         message = choice["message"]
         completion = str(message.get("content") or "")
@@ -198,100 +198,10 @@ class HttpPolicy:
         return normalized
 
 
-class TransformersPolicy:
-    """A local base, merged, or adapter-on-base checkpoint with a pinned revision."""
-
-    def __init__(
-        self,
-        checkpoint: str,
-        *,
-        revision: str,
-        adapter: str | None = None,
-        adapter_revision: str | None = None,
-        max_new_tokens: int = 2048,
-        temperature: float = 0.0,
-        top_p: float = 1.0,
-        top_k: int = -1,
-        seed: int | None = 1234,
-    ) -> None:
-        revision = _require_revision_sha(revision)
-        if adapter:
-            adapter_revision = _require_revision_sha(adapter_revision, label="adapter")
-        self.revision = revision
-        self.adapter_revision = adapter_revision
-        self.max_new_tokens = max_new_tokens
-        self.temperature = temperature
-        self.top_p = top_p
-        self.top_k = top_k
-        self.seed = seed
-        import torch
-        from transformers import AutoModelForCausalLM, AutoTokenizer
-
-        if not torch.cuda.is_available():
-            raise RuntimeError("local Transformers evaluation requires CUDA")
-        self._torch = torch
-        self._tokenizer = AutoTokenizer.from_pretrained(checkpoint, revision=revision)
-        model: Any = AutoModelForCausalLM.from_pretrained(
-            checkpoint,
-            revision=revision,
-            dtype=torch.bfloat16,
-            device_map={"": 0},
-        )
-        if adapter:
-            from peft import PeftModel
-
-            model = PeftModel.from_pretrained(model, adapter, revision=adapter_revision)
-        mode_name = "eval"
-        self._model = getattr(model, mode_name)()
-
-    def generate(
-        self, messages: Sequence[Mapping[str, Any]], tools: Sequence[Mapping[str, Any]]
-    ) -> GenerationResult:
-        rendered: Any = self._tokenizer.apply_chat_template(
-            [dict(message) for message in messages],
-            tools=[dict(tool) for tool in tools],
-            tokenize=True,
-            add_generation_prompt=True,
-            return_tensors="pt",
-        )
-        if not isinstance(rendered, Mapping):
-            raise TypeError("chat template output must be a mapping of model inputs")
-        model_inputs = {
-            str(name): value.to(self._model.device) if hasattr(value, "to") else value
-            for name, value in rendered.items()
-        }
-        input_ids = model_inputs.get("input_ids")
-        if input_ids is None:
-            raise ValueError("chat template output is missing input_ids")
-        kwargs: dict[str, Any] = {
-            "max_new_tokens": self.max_new_tokens,
-            "do_sample": self.temperature > 0.0,
-            "top_p": self.top_p,
-        }
-        if self.top_k >= 0:
-            kwargs["top_k"] = self.top_k
-        if self.temperature > 0.0:
-            kwargs["temperature"] = self.temperature
-        if self.seed is not None:
-            self._torch.manual_seed(self.seed)
-        with self._torch.inference_mode():
-            output = self._model.generate(**model_inputs, **kwargs)
-        generated = output[0, input_ids.shape[-1] :]
-        tokens = int(generated.shape[-1])
-        return GenerationResult(
-            completion=str(self._tokenizer.decode(generated, skip_special_tokens=True)),
-            generated_tokens=tokens,
-            finish_reason="length" if tokens == self.max_new_tokens else "stop",
-        )
-
-
-def load_policy(
+def load_http_policy(
     *,
-    checkpoint: str | None,
     revision: str | None,
     endpoint: str | None,
-    adapter: str | None,
-    adapter_revision: str | None = None,
     model: str = "smolqwen",
     max_new_tokens: int,
     temperature: float,
@@ -299,32 +209,22 @@ def load_policy(
     top_k: int,
     seed: int | None = 1234,
     http_timeout_s: float = 60.0,
+    enable_thinking: bool = True,
 ) -> Policy:
-    """Select the HTTP, base/merged, or adapter-on-base policy without implicit revisions."""
+    """Build the HTTP policy for an explicitly served vLLM endpoint."""
     revision = _require_revision_sha(revision)
-    if endpoint:
-        return HttpPolicy(
-            endpoint,
-            revision=revision,
-            model=model,
-            api_key=os.environ.get("VLLM_API_KEY"),
-            max_new_tokens=max_new_tokens,
-            temperature=temperature,
-            top_p=top_p,
-            top_k=top_k,
-            seed=seed,
-            timeout_s=http_timeout_s,
-        )
-    if not checkpoint:
-        raise ValueError("--checkpoint is required unless --endpoint is supplied")
-    return TransformersPolicy(
-        checkpoint,
+    if not endpoint:
+        raise ValueError("local evaluation requires the in-process vLLM engine")
+    return HttpPolicy(
+        endpoint,
         revision=revision,
-        adapter=adapter,
-        adapter_revision=adapter_revision,
+        model=model,
+        api_key=os.environ.get("VLLM_API_KEY"),
         max_new_tokens=max_new_tokens,
         temperature=temperature,
         top_p=top_p,
         top_k=top_k,
         seed=seed,
+        timeout_s=http_timeout_s,
+        enable_thinking=enable_thinking,
     )

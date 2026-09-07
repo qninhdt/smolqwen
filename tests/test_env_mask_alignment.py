@@ -11,9 +11,11 @@ boundary, which is the failure this file exists to catch.
 
 Also pinned here, because nothing downstream would raise on them:
 
-- `len(logprobs) == len(completion_ids) == len(env_mask)`, with NaN exactly on
-  unsampled positions — a shorter array is right-padded with 0.0 (probability
-  1) by TRL and shifts every later model token against the wrong position;
+- `len(logprobs) == len(completion_ids) == len(env_mask)`, and every masked
+  position carrying NaN — checked positionally, since a mask shifted uniformly by
+  one token satisfies any existence check. A shorter array is right-padded with
+  0.0 (probability 1) by TRL and shifts every later model token against the wrong
+  position;
 - supervised spans decode back to the policy's exact turn texts;
 - every transition classified `clean` — the rollout message shape keeps
   renders incremental, so a non-zero drift tally is a re-render instability
@@ -29,7 +31,7 @@ import pytest
 
 from smolqwen.data.render import render_prefix
 from smolqwen.rollout.generation import ScriptedPolicyBackend
-from smolqwen.rollout.rollout_func import encode_ids, make_scheduler
+from smolqwen.rollout.rollout_func import encode_ids, make_turn_engine
 from tests.helpers import OfflineTokenizer
 from tests.rollout_fixtures import (
     FakeDispatcher,
@@ -68,7 +70,7 @@ def _run_episode(
         ScriptedPolicyBackend(text_list_policy(texts), lambda text: encode_ids(tokenizer, text)),
         clock,
     )
-    scheduler = make_scheduler(
+    scheduler = make_turn_engine(
         backend=backend,
         dispatcher=dispatcher,
         tokenizer=tokenizer,
@@ -207,7 +209,7 @@ def test_transitions_are_clean_under_the_committed_message_shape() -> None:
 
 def test_a_truncated_drift_realigns_the_mask_not_just_the_tokens() -> None:
     """A REALIGN demotes the drifted tail to context and NaN logprobs."""
-    from smolqwen.rollout.mask import EpisodeMaskBuilder
+    from smolqwen.inference.mask import EpisodeMaskBuilder
 
     builder = EpisodeMaskBuilder([1, 2, 3, 4])
     builder.append_response([5, 6, 7, 8], [-1.0, -1.1, -1.2, -1.3])
@@ -228,7 +230,7 @@ def test_a_truncated_drift_realigns_the_mask_not_just_the_tokens() -> None:
 
 
 def test_a_fork_is_forced_to_realign_and_counted_as_fork() -> None:
-    from smolqwen.rollout.mask import EpisodeMaskBuilder
+    from smolqwen.inference.mask import EpisodeMaskBuilder
 
     builder = EpisodeMaskBuilder([1, 2, 3], fork_threshold_tokens=2)
     builder.append_response([4, 5], [-1.0, -1.0])
@@ -241,36 +243,79 @@ def test_a_fork_is_forced_to_realign_and_counted_as_fork() -> None:
 
 
 def test_assemble_output_rejects_a_mask_that_would_train_on_observations() -> None:
-    """The boundary asserts all-ones masks and missing NaNs before TRL sees them."""
-    from smolqwen.rollout.episode import Episode
+    """The boundary catches a misaligned mask positionally, not by counting.
+
+    The earlier form asked whether *any* NaN existed and whether the mask was
+    *all* ones, both gated on `episode.observations`. A mask shifted one token
+    across every observation satisfied both checks, and if the fork path ever
+    stopped appending to `observations`, both became no-ops on every episode. So
+    the cases below are stated as positional violations.
+    """
+    from smolqwen.inference.episode import Episode, MaskSpan
     from smolqwen.rollout.rollout_func import RolloutFuncError, assemble_output
 
     episode = Episode(episode_id="e", scenario_id="s", group_index=0)
     episode.completion_ids = [1, 2, 3]
     episode.observations = ["an observation"]
 
-    class _AllOnesBuilder:
+    class _Builder:
+        """The read surface `assemble_output` uses, with spans that agree."""
+
         prompt_ids = (0,)
         completion_ids = (1, 2, 3)
-        logprobs = (0.0, math.nan, 0.0)
-        env_mask = (1, 1, 1)  # all ones despite an observation
+        boundary = 1
+
+        def __init__(self, logprobs: Any, env_mask: Any, spans: Any) -> None:
+            self.logprobs = logprobs
+            self.env_mask = env_mask
+            self.spans = spans
 
     class _FakeScheduler:
-        builder: Any = _AllOnesBuilder()
+        builder: Any = None
 
         def episode_builder(self, episode_id: str) -> Any:
             return self.builder
 
     scheduler = _FakeScheduler()
-    with pytest.raises(RolloutFuncError, match="env_mask is all ones"):
+
+    # A masked position carrying a real logprob: TRL would apply an importance
+    # ratio to a token the sampler never produced.
+    scheduler.builder = _Builder(
+        logprobs=(0.0, 0.0, math.nan),
+        env_mask=(1, 0, 0),
+        spans=(MaskSpan(1, 2, True), MaskSpan(2, 4, False)),
+    )
+    with pytest.raises(RolloutFuncError, match="masked position"):
         assemble_output([episode], scheduler)  # type: ignore[arg-type]
 
-    class _MissingNanBuilder:
-        prompt_ids = (0,)
-        completion_ids = (1, 2, 3)
-        logprobs = (0.0, 0.0, 0.0)
-        env_mask = (1, 0, 1)
-
-    scheduler.builder = _MissingNanBuilder()
-    with pytest.raises(RolloutFuncError, match="no NaN logprob"):
+    # The shift the old existence checks could not see: every observation still
+    # NaN somewhere, mask not all ones, but off by one position.
+    scheduler.builder = _Builder(
+        logprobs=(math.nan, -1.0, -1.0),
+        env_mask=(0, 1, 0),
+        spans=(MaskSpan(1, 2, False), MaskSpan(2, 3, True), MaskSpan(3, 4, False)),
+    )
+    with pytest.raises(RolloutFuncError, match="masked position"):
         assemble_output([episode], scheduler)  # type: ignore[arg-type]
+
+    # A mask that is internally consistent but disagrees with the spans it was
+    # derived from.
+    scheduler.builder = _Builder(
+        logprobs=(-1.0, math.nan, math.nan),
+        env_mask=(1, 0, 0),
+        spans=(MaskSpan(1, 3, True), MaskSpan(3, 4, False)),
+    )
+    with pytest.raises(RolloutFuncError, match="span bookkeeping"):
+        assemble_output([episode], scheduler)  # type: ignore[arg-type]
+
+    # The negative control: a correct row passes, including a *supervised* token
+    # whose logprob is NaN because TRL supplied no candidate for its position
+    # (`generation.py:246`). Asserting the biconditional would reject this.
+    episode.reward = 1.0
+    scheduler.builder = _Builder(
+        logprobs=(-1.0, math.nan, math.nan),
+        env_mask=(1, 1, 0),
+        spans=(MaskSpan(1, 3, True), MaskSpan(3, 4, False)),
+    )
+    output = assemble_output([episode], scheduler)  # type: ignore[arg-type]
+    assert output["env_mask"] == [[1, 1, 0]]

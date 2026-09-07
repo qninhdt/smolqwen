@@ -21,10 +21,16 @@ from typing import Any
 import pytest
 
 from smolqwen.artifacts import CheckpointStore, ResumeState
-from smolqwen.config_models import ProfileConfig, SftConfig, TrackingConfig, TrainingConfig
+from smolqwen.config_models import (
+    LoraConfig,
+    ProfileConfig,
+    SftConfig,
+    TrackingConfig,
+    TrainingConfig,
+)
 from smolqwen.data.convert_sft import SFT_SCHEMA_VERSION, SFT_SEMANTICS
 from smolqwen.tracking import Tracker
-from smolqwen.training.sft import SftError, build_trainer
+from smolqwen.training.sft import SftError, _lora_config, build_trainer
 from tests.helpers import write_tiny_checkpoint
 
 pytestmark = pytest.mark.slow
@@ -53,9 +59,8 @@ def _record(index: int, *, length: int = 11) -> dict[str, Any]:
 def _shards(directory: Path, *, length: int = 11) -> Path:
     shard_dir = directory / "sft"
     shard_dir.mkdir(parents=True)
-    for name, offset in (("train", 0), ("val", 100)):
-        rows = [json.dumps(_record(offset + index, length=length)) for index in range(3)]
-        (shard_dir / f"{name}.jsonl").write_text("\n".join(rows) + "\n", encoding="utf-8")
+    rows = [json.dumps(_record(index, length=length)) for index in range(3)]
+    (shard_dir / "train.jsonl").write_text("\n".join(rows) + "\n", encoding="utf-8")
     return shard_dir
 
 
@@ -75,7 +80,7 @@ def _config(model_dir: Path, output_dir: Path, **overrides: Any) -> SftConfig:
             max_seq_length=512,
             max_tokens_per_microbatch=512,
         ),
-        "training": TrainingConfig(max_steps=1, save_steps=1, eval_steps=1, logging_steps=1),
+        "training": TrainingConfig(max_steps=1, save_steps=1, logging_steps=1),
         "tracking": TrackingConfig(hub_repo_id=None, local_artifact_dir=str(output_dir)),
     }
     payload.update(overrides)
@@ -201,6 +206,14 @@ def test_lora_is_attached_and_only_adapters_train(assembled: Any) -> None:
     assert all("lora_" in name for name in trainable), "a base weight is trainable"
 
 
+def test_qwen35_all_linear_targets_leave_the_unused_visual_tower_alone() -> None:
+    config = SftConfig()
+    lora = _lora_config(config)
+
+    assert lora.target_modules == "all-linear"
+    assert lora.exclude_modules == r".*\.visual(?:\..*)?$"
+
+
 def test_adapters_are_cast_to_bf16_not_left_in_fp32(assembled: Any) -> None:
     import torch
 
@@ -210,10 +223,28 @@ def test_adapters_are_cast_to_bf16_not_left_in_fp32(assembled: Any) -> None:
     assert dtypes == {torch.bfloat16}
 
 
-def test_both_shards_are_loaded_and_counted(assembled: Any) -> None:
+def test_explicit_fp32_adapter_dtype_is_honored_on_the_bf16_path(tmp_path: Path) -> None:
+    config = _config(
+        _tiny_checkpoint(tmp_path / "base"),
+        tmp_path / "out",
+        lora=LoraConfig(adapter_dtype="float32"),
+    )
+    assembled = build_trainer(
+        config,
+        dataset_dir=_shards(tmp_path),
+        tracker=Tracker(project="t", enabled=False),
+    )
+
+    import torch
+
+    dtypes = {p.dtype for p in assembled.trainer.model.parameters() if p.requires_grad}
+    assert dtypes == {torch.float32}
+
+
+def test_only_the_train_shard_is_loaded(assembled: Any) -> None:
     assert assembled.train_size == 3
-    assert assembled.eval_size == 3
-    assert assembled.trainer.eval_dataset is not None
+    # SFT is intentionally train-only: no eval dataset or eval loss exists.
+    assert assembled.trainer.eval_dataset is None
 
 
 def test_resume_without_anything_pushed_fails_loudly(tmp_path: Path) -> None:

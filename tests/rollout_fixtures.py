@@ -28,7 +28,8 @@ from smolqwen.data.tool_call_xml import serialize_tool_call
 from smolqwen.env.pool import Result
 from smolqwen.env.registry import load_env_specs
 from smolqwen.env.scenarios import Scenario, load_scenarios
-from smolqwen.rollout.scheduler import ScenarioBinding, SchedulerConfig
+from smolqwen.inference.turn_engine import TurnEngineConfig
+from smolqwen.rollout.scheduler import ScenarioBinding
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 ENV_METADATA = FIXTURES / "env_metadata.json"
@@ -256,7 +257,7 @@ def fixture_bindings(
     ]
 
 
-def fast_config(**overrides: Any) -> SchedulerConfig:
+def fast_config(**overrides: Any) -> TurnEngineConfig:
     """A scheduler config sized for tests; every field overridable.
 
     `max_model_len` is set far above any real render because the offline test
@@ -275,4 +276,4 @@ def fast_config(**overrides: Any) -> SchedulerConfig:
         top_p=1.0,
     )
     defaults.update(overrides)
-    return SchedulerConfig(**defaults)
+    return TurnEngineConfig(**defaults)

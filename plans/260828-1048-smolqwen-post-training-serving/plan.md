@@ -53,7 +53,7 @@ multi-turn path as a separate `AsyncGRPOTrainer` rather than folding it into
 | 3 | Reward from Python verifiers on final environment state, unmodified from the paper: `R = (checkpoints passed) / K` | P1 |
 | 4 | Async rollout throughput A/B measured in episodes/hour against the TRL turn-synchronous baseline | P1 |
 | 5 | `docker compose up` serves the final checkpoint on an OpenAI-compatible endpoint; Colab runs the same image | P1 |
-| 6 | Serving sweep reports TTFT/TPOT/throughput/VRAM per config, with a BFCL re-eval paired to every quantized row | P1 |
+| 6 | Serving benchmark reports TTFT/TPOT/throughput/VRAM per config, with a BFCL re-eval paired to every quantized row. Delivered by upstream `vllm bench serve` / `vllm bench sweep serve` documented in [`docs/serving.md`](../../docs/serving.md), not by a repo-local wrapper — see the note below | P1 |
 | 7 | L4-vs-A100 decided by recorded measurement, not assumption: SFT profile from Phase 3's throughput/VRAM sweep, RL profile from Phase 6's episodes/hour A/B | P2 |
 | 8 | Zero external LLM anywhere in an RL rollout — no user simulator, no judge, no teacher | P1 |
 
@@ -73,6 +73,27 @@ multi-turn path as a separate `AsyncGRPOTrainer` rather than folding it into
 Dependency chain is linear except Phase 4, which only needs Phase 1: it can be
 built while SFT trains. Phase 5 needs 3 (SFT checkpoint) and 4 (held-out
 environment reward). Phase 6 needs 4. Phase 7 needs 5 and 6. Phase 8 needs 7.
+
+### Superseding plans
+
+Two later plans revise decisions recorded here. The original reasoning stays in
+place; these notes mark what no longer holds.
+
+- [`260831-0808-sft-full-trajectory-padding-free`](../260831-0808-sft-full-trajectory-padding-free/plan.md)
+  supersedes Phase 2's per-user-turn segmentation decision and Phase 3's padded
+  fixed-row batching contract. One released trajectory is now one training
+  sample, with all historical reasoning preserved and variable-row padding-free
+  micro-batches under a fixed token envelope.
+- [`260901-1043-inference-layer-eval-throughput-cleanup`](../260901-1043-inference-layer-eval-throughput-cleanup/plan.md)
+  revises Phase 5, 6, and 8. Phase 5's evaluation harness moves from
+  serial HuggingFace `generate()` at batch size 1 to a batched in-process vLLM
+  engine sharing one turn engine with Phase 6's rollout scheduler. Both training
+  stages gain held-out benchmark scores through that same path, which Phase 5
+  and 7 did not provide. Phase 8's `serving/bench.py` and `serving/sweep.py`
+  wrappers are deleted in favour of the upstream `vllm bench` commands they
+  shelled out to; goal 6 above is unchanged in substance, only in instrument.
+  `configs/serving/{l4,a100}.yaml` keep `quantization: null` — no quantization
+  sweep is planned, and the reason stays recorded in those files.
 
 ## Architecture
 

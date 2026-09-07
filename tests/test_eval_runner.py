@@ -76,6 +76,12 @@ def test_runner_collects_secondary_metrics_from_a_structured_generation() -> Non
         "average_generated_tokens": 3.0,
         "truncation_rate": 0.0,
         "exact_success_rate": 1.0,
+        # How the episode ended, aggregated as a rate. A run where this reads
+        # `terminal_step_cap_rate: 1.0` generated nothing and its score describes the
+        # environment's initial state -- which is what a T4 run reported before this
+        # existed.
+        "terminal_final_answer_rate": 1.0,
+        "terminal_reason_denominator": 1.0,
     }
 
 
@@ -91,12 +97,9 @@ def test_named_adapter_logs_exact_progress_and_summary(
 
     assert metrics["fixture"]["score"] == 1.0
     assert invariants["fixture_revision"] == "1"
-    output = capsys.readouterr().out
-    assert "evaluation fixture: loaded 1 tasks" in output
-    assert "evaluation fixture: 1/1 tasks" in output
-    assert "score=1.0000 steps=1 tokens=3" in output
-    assert "evaluation fixture complete: 1/1 tasks" in output
-    assert "evaluation fixture: summarized 1 metric categories" in output
+    output = capsys.readouterr().err
+    assert "fixture: 1/1 tasks" in output
+    assert "fixture complete: 1 tasks" in output
 
 
 def test_run_evaluation_records_actual_serving_locator_and_backend(
@@ -105,11 +108,11 @@ def test_run_evaluation_records_actual_serving_locator_and_backend(
     config = EvalConfig(adapters=("fixture",), output_dir=str(tmp_path))
     policy = SimpleNamespace(revision="a" * 40, adapter_revision=None)
     captured: list[EvalManifest] = []
-    monkeypatch.setattr(runner, "load_policy", lambda **_: policy)
+    monkeypatch.setattr(runner, "load_http_policy", lambda **_: policy)
     monkeypatch.setattr(
         runner,
         "_evaluate_named_adapter",
-        lambda *_: ({"fixture": {"score": 1.0}}, {"dataset_hash": "hash"}),
+        lambda *_args, **_kwargs: ({"fixture": {"score": 1.0}}, {"dataset_hash": "hash"}),
     )
 
     def write_report(
@@ -136,6 +139,11 @@ def test_run_evaluation_records_actual_serving_locator_and_backend(
         adapter=None,
         tag="served",
         serving_backend="vllm",
+        require_serving_match=None,
+        # Attributes no CLI flag produces any more. Present here to prove the runner
+        # does not read them: the eight serving-detail flags were deleted in favour
+        # of recording what the engine resolved, and reading a caller-supplied value
+        # was the way to record something other than what ran.
         served_dtype="float8_e4m3fn",
         quantization="fp8",
         speculative_decoding="mtp-1",
@@ -151,18 +159,20 @@ def test_run_evaluation_records_actual_serving_locator_and_backend(
     assert recorded["endpoint"] == args.endpoint
     assert recorded["served_model"] == config.http_model
     assert recorded["checkpoint_revision"] == "a" * 40
-    assert recorded["quantization"] == "fp8"
+    # An endpoint's serving config belongs to a process this command cannot inspect,
+    # so it is recorded as unknown rather than as whatever the caller typed.
+    assert recorded["quantization"] is None
+    assert recorded["max_num_seqs"] is None
+    # What generation used, recorded rather than asserted on the command line.
+    assert recorded["generation_concurrency"] == config.profile.generation_concurrency
+    assert recorded["enforce_eager"] == config.profile.enforce_eager
+    assert recorded["trajectory_records"]["fixture"].endswith("served-fixture.jsonl")
 
 
 def test_run_evaluation_refuses_an_empty_adapter_selection(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     config = EvalConfig()
-    monkeypatch.setattr(
-        runner,
-        "load_policy",
-        lambda **_: SimpleNamespace(revision="a" * 40, adapter_revision=None),
-    )
     args = SimpleNamespace(
         checkpoint="model",
         revision="a" * 40,

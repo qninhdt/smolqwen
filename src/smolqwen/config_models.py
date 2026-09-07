@@ -18,8 +18,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 STAGES = ("data", "sft", "grpo", "eval", "serve")
-Stage = Literal["data", "sft", "grpo", "eval", "serve"]
-PROFILES = ("l4", "a100")
+PROFILES = ("t4", "l4", "a100")
 
 # budgets.json key -> the profile field it seeds. SFT max sequence length is not
 # here: old per-turn profile artifacts must never resize full-trajectory SFT.
@@ -69,6 +68,13 @@ class ProfileConfig(StrictModel):
     env_worker_count: int = Field(default=4, ge=1)
     env_episodes_per_worker: int = Field(default=8, ge=1)
 
+    # Offline evaluation engine. Both are sizing, not semantics: `enforce_eager`
+    # trades CUDA graph capture memory for per-step latency, and the LoRA slot
+    # count is how many adapters the engine may hold resident at once. Neither
+    # changes what a benchmark measures.
+    enforce_eager: bool = False
+    max_lora_slots: int = Field(default=1, ge=1)
+
     @property
     def generation_batch_size(self) -> int:
         """TRL prompt-pool size for one synchronous `rollout_func` call."""
@@ -82,47 +88,49 @@ class TrackingConfig(StrictModel):
     wandb_entity: str | None = None
     run_name: str | None = None
     hub_repo_id: str | None = None
+    # A *separate* repo for merged full weights, deliberately not defaulted to
+    # `hub_repo_id`. Both stores upload to their repo root, so sharing one would
+    # interleave adapter-only and merged-full revisions in a single history --
+    # after which a pinned revision no longer tells a reader which kind it is, and
+    # `resolve_eval_checkpoint` would load whichever happened to be pushed last.
+    merged_hub_repo_id: str | None = None
     local_artifact_dir: str = "artifacts"
 
 
 class DatasetPin(StrictModel):
     """A dataset identified by repo, file and revision sha.
 
-    The revision is not optional. The two metadata files whose contents get
-    ``exec()``ed are the only inputs where a silent content change is invisible:
-    191 classes still compile, the suffix split is unchanged, the ``K`` counts are
-    unchanged. `sha256` is verified at registry build in Phase 4.
+    The revision is not optional. `sha256` is verified before a pinned release
+    file is consumed.
     """
 
     repo_id: str
     filename: str
     revision: str
-    repo_type: Literal["dataset", "model"] = "dataset"
     sha256: str | None = None
     local_path: str | None = None
 
 
 class DataConfig(StrictModel):
-    """Phase 2: trajectory profiling and SFT conversion."""
+    """Phase 2: SFT trajectory conversion."""
 
     # The model whose chat template and tokenizer produce the rendered samples.
     # The pipeline is text-only (see `tokenizer.assert_text_only_processing_class`):
     # Qwen3.5-2B is multimodal and a processor would flip TRL onto VLM code paths.
     model_id: str = "Qwen/Qwen3.5-2B"
     sft_trajectories: DatasetPin
-    rl_scenarios: DatasetPin
-    env_metadata: DatasetPin
     output_dir: str = "artifacts/data"
     max_seq_length: int = Field(default=32768, ge=256)
-    split_seed: int = 1234
-    val_fraction: float = Field(default=0.02, gt=0.0, lt=0.5)
     # Which shape a tool result takes on the way into the chat template. Phase 2
     # step 1 fixes this against real excerpts, and Phase 6's rollout must append
     # the same shape -- the two render one newline apart on every observation.
     tool_result_shape: Literal["tool_role", "tool_response_user"] = "tool_role"
-    max_trajectories: int | None = None
-    profile: ProfileConfig = ProfileConfig()
-    tracking: TrackingConfig = TrackingConfig()
+    # `False` strips the teacher's reasoning from trajectories at conversion and
+    # supervises answers only, producing the non-reasoning SFT format: post-query
+    # assistant turns carry the template's empty think scaffold, which is exactly
+    # what an `enable_thinking=False` generation prompt pre-fills. The shard's
+    # `semantics` tag records which mode produced it.
+    enable_thinking: bool = True
 
 
 class LoraConfig(StrictModel):
@@ -130,9 +138,9 @@ class LoraConfig(StrictModel):
     lora_alpha: int = Field(default=64, ge=1)
     lora_dropout: float = Field(default=0.05, ge=0.0, lt=1.0)
     target_modules: str | Sequence[str] = "all-linear"
-    # bf16 adapters, not PEFT's fp32 default: with all-linear targets fp32 forces
-    # an upcast/downcast plus an fp32 GEMM at every linear. The fp32 default
-    # exists for low-bit QLoRA bases, which this is not.
+    # BF16 adapters, not PEFT's FP32 default, on the BF16 path: with all-linear
+    # targets FP32 forces an upcast/downcast plus an FP32 GEMM at every linear.
+    # The runtime makes a T4 FP16 exception because GradScaler rejects FP16 grads.
     adapter_dtype: Literal["bfloat16", "float32"] = "bfloat16"
 
 
@@ -144,11 +152,45 @@ class OptimizationFlags(StrictModel):
     # Load-bearing, not a nice-to-have: a dense logits tensor over the 248,320
     # vocab is the dominant activation and the first thing to OOM on 24 GB.
     liger_fused_linear_cross_entropy: bool = True
+    # Project the head on supervised positions only. Liger's fused head is chunked
+    # but not selective, so a full-trajectory shard pays the 248,320-wide GEMM on
+    # observation tokens too. Off by default: the win scales with how much of the
+    # shard is masked, which is a property of the shard, not of the card. Requires
+    # the fused head and a padding-free batch; `resolve_selective_logits` refuses
+    # otherwise rather than training the wrong positions.
+    selective_logit_loss: bool = False
     attn_implementation: Literal["eager", "sdpa", "flash_attention_2"] = "flash_attention_2"
     regional_torch_compile: bool = False
     # GDN layers run Triton kernels that upstream marks `torch.compiler.disable`.
     # Compiling through them raises inductor errors, so the mixer body stays eager.
     compile_exclude_patterns: Sequence[str] = ("linear_attn", "mixer", "conv1d")
+
+
+class BenchEvalConfig(StrictModel):
+    """In-training benchmark eval, run by GRPO.
+
+    Every field has a default, so adding this block does not invalidate an existing
+    YAML: `extra="forbid"` rejects unknown *keys*, not new model fields.
+
+    `adapter` names the benchmark directly and is not read from
+    `EvalConfig.adapters`. That list is the standalone `evaluate` command's set; a
+    boundary cadence and a benchmark choice are separate decisions.
+
+    `task_limit` x eval frequency is the boundary's cost. The measured per-boundary
+    cost is logged (`bench_wall_s`), so the setting is checkable rather than
+    asserted.
+    """
+
+    enabled: bool = False
+    adapter: str = "bfcl_multi_turn"
+    # Boundaries between evals, in optimizer steps. 0 means "only at save
+    # boundaries", which is the cheapest useful cadence.
+    every_steps: int = Field(default=0, ge=0)
+    # Score once before the first optimizer step, so the curve has an anchor. A
+    # learning curve whose first point is at step 100 cannot show early movement.
+    baseline_at_step_zero: bool = True
+    task_limit: int = Field(default=16, ge=1)
+    timeout_s: float = Field(default=900.0, gt=0.0)
 
 
 class TrainingConfig(StrictModel):
@@ -160,7 +202,6 @@ class TrainingConfig(StrictModel):
     lr_scheduler_type: str = "cosine"
     logging_steps: int = Field(default=10, ge=1)
     save_steps: int = Field(default=100, ge=1)
-    eval_steps: int = Field(default=100, ge=1)
     seed: int = 1234
 
 
@@ -182,9 +223,6 @@ class SftConfig(StrictModel):
 class EnvRuntimeConfig(StrictModel):
     """Phase 4: the executable environment layer."""
 
-    # Which artifact is authoritative for `191_env_metadata.json`: the vendored
-    # EnvScaler copy or the Hub download (a different file of a different size).
-    env_metadata_source: Literal["vendored", "hub"] = "vendored"
     vendored_env_metadata: str = (
         "third_party/EnvScaler/rl/roll/pipeline/agentic/env/envscaler_env/data/"
         "191_env_metadata.json"
@@ -207,25 +245,6 @@ class EnvRuntimeConfig(StrictModel):
     # handful of checks.
     verify_timeout_s: float = Field(default=60.0, gt=0.0)
     create_timeout_s: float = Field(default=30.0, gt=0.0)
-    env_split_manifest: str = "artifacts/data/env_split.json"
-
-
-class CurriculumConfig(StrictModel):
-    """Phase 7: prioritise scenarios where `0 < P(success) < 1`."""
-
-    enabled: bool = True
-    profile_rollouts: int = Field(default=4, ge=2)
-    profile_scenario_sample: int = Field(default=128, ge=1)
-    band_weight: float = Field(default=1.0, gt=0.0)
-    always_zero_weight: float = Field(default=0.1, ge=0.0)
-    always_one_weight: float = Field(default=0.1, ge=0.0)
-    difficulty_profile_path: str = "artifacts/rl/difficulty_profile.json"
-    heldout_env_count: int = Field(default=10, ge=1)
-    heldout_scenarios_per_env: int = Field(default=8, ge=1)
-    trajectory_samples_per_log: int = Field(default=8, ge=1)
-    zero_variance_stop_margin: float = Field(default=0.25, ge=0.0, le=1.0)
-    zero_variance_stop_multiplier: float = Field(default=1.5, ge=1.0)
-    zero_variance_stop_after_steps: int = Field(default=10, ge=1)
 
 
 class GrpoConfig(StrictModel):
@@ -239,11 +258,16 @@ class GrpoConfig(StrictModel):
     training: TrainingConfig = TrainingConfig()
     optimization: OptimizationFlags = OptimizationFlags()
     env: EnvRuntimeConfig = EnvRuntimeConfig()
-    curriculum: CurriculumConfig = CurriculumConfig()
+    trajectory_samples_per_log: int = Field(default=8, ge=1)
     beta: float = Field(default=0.0, ge=0.0)
     loss_type: str = "dapo"
     temperature: float = Field(default=1.0, gt=0.0)
     top_p: float = Field(default=1.0, gt=0.0, le=1.0)
+    # `False` renders generation prompts with Qwen's closed empty think block
+    # instead of an open one. Every consumer that reads this field renders or
+    # decodes: rollout prefixes, the decode seam, and the bench-eval boundary's
+    # copied eval config -- which must match the distribution it trains on.
+    enable_thinking: bool = True
     # The model advertises 262,144 positions. Inheriting that under colocated
     # vLLM is an instant OOM, so the KV budget is always explicit.
     vllm_max_model_len: int = Field(default=16384, ge=512)
@@ -262,6 +286,7 @@ class GrpoConfig(StrictModel):
     episode_timeout_s: float = Field(default=600.0, gt=0.0)
     fork_threshold_tokens: int = Field(default=1024, ge=1)
     rollout_path: Literal["async", "factory_oracle"] = "async"
+    bench_eval: BenchEvalConfig = BenchEvalConfig()
     profile: ProfileConfig = ProfileConfig()
     tracking: TrackingConfig = TrackingConfig()
 
@@ -280,6 +305,11 @@ class EvalConfig(StrictModel):
     """Phase 5: the benchmark adapter layer and the headline table."""
 
     adapters: Sequence[str] = ()
+    # `False` renders eval generation prompts with Qwen's closed empty think
+    # block and decodes completions as content rather than reasoning. Recorded
+    # in the eval manifest's invariant set: runs at different render modes are
+    # different experiments.
+    enable_thinking: bool = True
     # Adapter-owned settings stay opaque to the core config model. A new
     # benchmark validates its own entry in its adapter module, so adding one
     # does not require another field here or another branch in the runner.

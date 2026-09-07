@@ -24,12 +24,12 @@ reward) and exercises the single-turn path of the mask builder.
 from __future__ import annotations
 
 import json
-import sys
 import time
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, cast
 
+from smolqwen.console import logger
 from smolqwen.data.loader import ToolCall
 from smolqwen.data.tool_call_xml import serialize_tool_call
 from smolqwen.env.parse import parse_turn
@@ -37,9 +37,12 @@ from smolqwen.env.pool import WorkerPool
 from smolqwen.env.registry import EnvSpec, load_env_specs
 from smolqwen.env.scenarios import Scenario, load_scenarios
 from smolqwen.env.selftest import DEFAULT_SCENARIO_ID, DEFAULT_SCRIPT
-from smolqwen.rollout.episode import Episode
+from smolqwen.inference.episode import Episode
+from smolqwen.inference.profiles import turn_engine_config
 from smolqwen.rollout.factory_env import make_environment_factories
-from smolqwen.rollout.scheduler import PoolDispatcher, ScenarioBinding, SchedulerConfig
+from smolqwen.rollout.scheduler import PoolDispatcher, ScenarioBinding
+
+LOG = logger(__name__)
 
 
 class BenchError(RuntimeError):
@@ -189,20 +192,6 @@ def check_equivalence(
     return problems
 
 
-def scheduler_config_for(config: Any) -> SchedulerConfig:
-    """Map the resolved GrpoConfig onto the scheduler's semantic knobs."""
-    return SchedulerConfig(
-        generation_concurrency=config.profile.generation_concurrency,
-        max_env_steps=config.profile.max_env_steps,
-        episode_timeout_s=config.episode_timeout_s,
-        max_new_tokens_per_step=config.profile.max_new_tokens_per_step,
-        max_model_len=config.vllm_max_model_len,
-        temperature=config.temperature,
-        top_p=config.top_p,
-        fork_threshold_tokens=config.fork_threshold_tokens,
-    )
-
-
 def load_workload(config: Any) -> tuple[dict[str, EnvSpec], dict[str, Scenario]]:
     """Env specs (parent-side, never exec'd) and the RL scenario table."""
     env_specs = load_env_specs(
@@ -240,7 +229,7 @@ def write_ab_report(path: Path, sections: Sequence[str]) -> None:
 def run_equivalence(config: Any, *, episodes: int, verbose: bool = True) -> dict[str, Any]:
     """The CPU gate: both paths scripted, real pool, real scenarios."""
     from smolqwen.rollout.generation import ScriptedPolicyBackend
-    from smolqwen.rollout.rollout_func import make_scheduler
+    from smolqwen.rollout.rollout_func import make_turn_engine
     from smolqwen.tokenizer import load_tokenizer
 
     env_specs, scenarios = load_workload(config)
@@ -265,11 +254,11 @@ def run_equivalence(config: Any, *, episodes: int, verbose: bool = True) -> dict
 
         dispatcher = PoolDispatcher(pool)
         backend = ScriptedPolicyBackend(policy, _encode_for(tokenizer))
-        scheduler = make_scheduler(
+        scheduler = make_turn_engine(
             backend=backend,
             dispatcher=dispatcher,
             tokenizer=tokenizer,
-            config=scheduler_config_for(config),
+            config=turn_engine_config(config),
         )
         async_started = time.monotonic()
         async_episodes = scheduler.run(bindings)
@@ -312,7 +301,7 @@ def run_bench(config: Any, *, args: Any) -> int:
     if not equivalence["ok"]:
         sections.append("Problems:\n" + "\n".join(f"- {p}" for p in equivalence["problems"]))
         write_ab_report(REPORT_PATH, sections)
-        print(f"equivalence FAILED; wrote {REPORT_PATH}", file=sys.stderr)
+        LOG.error("equivalence FAILED; wrote %s", REPORT_PATH)
         return 1
 
     rows = _run_scripted_ab(config, args)
@@ -332,7 +321,9 @@ def run_bench(config: Any, *, args: Any) -> int:
         "The scripted rows above are not presented as GPU measurements."
     )
     write_ab_report(REPORT_PATH, sections)
-    print(f"equivalence and scripted A/B passed; GPU trainer A/B pending — wrote {REPORT_PATH}")
+    LOG.info(
+        "equivalence and scripted A/B passed; GPU trainer A/B pending -- wrote %s", REPORT_PATH
+    )
     return 0
 
 
@@ -346,7 +337,7 @@ def _run_scripted_ab(config: Any, args: Any) -> list[str]:
     from smolqwen.rollout.generation import ScriptedPolicyBackend
     from smolqwen.rollout.metrics import ABReportRow, summarize_episodes
     from smolqwen.rollout.profiler import format_timeline, profile_rollout
-    from smolqwen.rollout.rollout_func import make_scheduler
+    from smolqwen.rollout.rollout_func import make_turn_engine
     from smolqwen.rollout.scheduler import PoolDispatcher
     from smolqwen.tokenizer import load_tokenizer
 
@@ -387,11 +378,11 @@ def _run_scripted_ab(config: Any, args: Any) -> list[str]:
                 )
             elif path == "async":
                 dispatcher = PoolDispatcher(pool)
-                scheduler = make_scheduler(
+                scheduler = make_turn_engine(
                     backend=ScriptedPolicyBackend(policy, _encode_for(tokenizer)),
                     dispatcher=dispatcher,
                     tokenizer=tokenizer,
-                    config=scheduler_config_for(config),
+                    config=turn_engine_config(config),
                 )
                 started = time.monotonic()
                 episodes_run = scheduler.run(bindings)

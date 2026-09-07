@@ -3,8 +3,7 @@
 Upstream computes `round(sum(results) / len(checklist), 4)` where a failed check
 contributes `None`-filtered-to-nothing in the numerator but still counts in the
 denominator (`base_env.py:301-305`). The tempting "skip the broken ones" variant
-quietly *raises* the reward of a scenario whose checks are buggy, which would make
-those scenarios look easy to Phase 7's difficulty profiler.
+quietly *raises* the reward of a scenario whose checks are buggy.
 
 `K` ranges 2 to 445 across the release with median 14, so this is not a rounding
 curiosity: one raising check out of two is half the reward.

@@ -9,6 +9,17 @@ dependencies: [2]
 
 # Phase 3: Reasoning SFT
 
+> **Superseded in part by [`260831-0808-sft-full-trajectory-padding-free`](../260831-0808-sft-full-trajectory-padding-free/plan.md),
+> and extended by [`260901-1043-inference-layer-eval-throughput-cleanup`](../260901-1043-inference-layer-eval-throughput-cleanup/plan.md).**
+> The padded fixed-row batching contract recorded below is replaced by
+> document-isolated padding-free micro-batches whose row count varies under a
+> fixed total-token envelope; optimizer updates normalize by actual supervised
+> tokens. Separately, the eval this phase configures (`eval_strategy="steps"`) is
+> teacher-forced validation loss on `val.jsonl` and reports no benchmark score.
+> The later plan adds a held-out benchmark score during SFT training through the
+> same code path as `smolqwen evaluate`, with the vLLM engine asleep between eval
+> boundaries so the token envelope measured by the padding-free plan is preserved.
+
 ## Overview
 
 LoRA-finetune Qwen3.5-2B on the rendered trajectories so the model reasons before

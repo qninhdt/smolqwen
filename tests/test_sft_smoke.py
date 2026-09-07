@@ -53,12 +53,11 @@ def _record(index: int) -> dict[str, Any]:
     }
 
 
-def _write_shards(directory: Path, *, train: int = 4, val: int = 2) -> Path:
+def _write_shards(directory: Path, *, train: int = 4) -> Path:
     shard_dir = directory / "sft"
     shard_dir.mkdir(parents=True)
-    for name, count, offset in (("train", train, 0), ("val", val, 100)):
-        lines = [json.dumps(_record(offset + index)) for index in range(count)]
-        (shard_dir / f"{name}.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    lines = [json.dumps(_record(index)) for index in range(train)]
+    (shard_dir / "train.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
     return shard_dir
 
 
@@ -69,7 +68,6 @@ def _tiny_model() -> Any:
 def test_shard_loading_validates_and_counts_tokens(tmp_path: Path) -> None:
     shards = load_shards(_write_shards(tmp_path))
     assert shards.train_stats.samples == 4
-    assert shards.eval_stats is not None and shards.eval_stats.samples == 2
     assert shards.train_stats.total_tokens == 4 * 11
     # Supervised count comes from the mask, not from the record's own field.
     assert shards.train_stats.supervised_tokens == 4 * 3
@@ -100,7 +98,7 @@ def test_missing_shard_names_the_command_that_writes_it(tmp_path: Path) -> None:
 
 
 def test_profile_cap_is_checked_before_training(tmp_path: Path) -> None:
-    shard_dir = _write_shards(tmp_path, train=1, val=0)
+    shard_dir = _write_shards(tmp_path, train=1)
     with pytest.raises(SftError, match="profile.max_seq_length"):
         load_shards(shard_dir, max_sequence_length=10)
 

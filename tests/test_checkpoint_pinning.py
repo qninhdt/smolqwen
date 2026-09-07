@@ -118,9 +118,8 @@ def test_local_only_store_is_a_noop_on_push(tmp_path: Path, adapter_dir: Path) -
 
 def test_resume_state_carries_more_than_weights(tmp_path: Path) -> None:
     store = CheckpointStore(None, tmp_path / "cache")
-    # Restoring only the adapter makes a GRPO run replay the curriculum from the
-    # top, over-weighting whatever sorts first with nothing in the loss curve
-    # showing it.
+    # Restoring only the adapter makes a GRPO run replay scenarios it already saw,
+    # with nothing in the loss curve showing the shifted order.
     state = ResumeState(
         revision="abc123", wandb_run_id="run-7", global_step=42, sampler_cursor=1337
     )

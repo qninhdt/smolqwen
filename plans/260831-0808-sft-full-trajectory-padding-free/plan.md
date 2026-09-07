@@ -8,6 +8,16 @@ supersedes:
   - "Phase 3 padded fixed-row batching contract"
 ---
 
+> Phase 6 of
+> [`260901-1043-inference-layer-eval-throughput-cleanup`](../260901-1043-inference-layer-eval-throughput-cleanup/plan.md)
+> waits on this plan's phase 4, and carries the `blockedBy` edge that records it.
+> That plan adds an in-training benchmark-eval callback to `training/sft.py`; both
+> plans edit that file, and its memory guard accepts against the 32K L4 token
+> envelope phase 4 here measures. `scripts/colab-l4-batch-sweep.py` is the
+> instrument for that measurement, so its deletion in that plan's phase 8 is gated
+> on this plan recording the figure. The edge lives on that phase alone — a second
+> field here would make one relationship look like two.
+
 # Full-trajectory reasoning SFT with padding-free batches
 
 ## Outcome

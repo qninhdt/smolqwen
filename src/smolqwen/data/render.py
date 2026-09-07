@@ -16,7 +16,6 @@ from smolqwen.data.loader import Message
 
 ToolResultShape = Literal["tool_role", "tool_response_user"]
 
-MASKED = 0
 SUPERVISED = 1
 IGNORE_INDEX = -100
 
@@ -69,7 +68,10 @@ class RenderedSample:
 
 
 def to_template_messages(
-    messages: Sequence[Message], *, shape: ToolResultShape = "tool_role"
+    messages: Sequence[Message],
+    *,
+    shape: ToolResultShape = "tool_role",
+    reasoning: bool = True,
 ) -> list[dict[str, Any]]:
     """Convert parsed messages into template dicts under the committed shape.
 
@@ -77,6 +79,11 @@ def to_template_messages(
     two shapes stays testable, but it is not the pipeline's input contract: for
     consecutive observations the two render differently, and the release uses
     `role: "tool"`.
+
+    `reasoning=False` is the non-reasoning SFT mode: assistant template dicts lose
+    their `reasoning_content`, and a teacher that inlined think tags into
+    `content` keeps only the text after the last `</think>` -- the same reading
+    `eval/tool_calls.py` applies to completions.
     """
     rendered: list[dict[str, Any]] = []
     for message in messages:
@@ -86,7 +93,13 @@ def to_template_messages(
                 {"role": "user", "content": f"<tool_response>\n{content}\n</tool_response>"}
             )
             continue
-        rendered.append(message.to_template_dict())
+        payload = message.to_template_dict()
+        if not reasoning and message.role == "assistant":
+            payload.pop("reasoning_content", None)
+            body = payload.get("content")
+            if isinstance(body, str) and "</think>" in body:
+                payload["content"] = body.rsplit("</think>", 1)[-1].strip()
+        rendered.append(payload)
     return rendered
 
 
@@ -177,13 +190,21 @@ def render_training_sample(
     task_id: str = "",
     env_id: str = "",
     mode: str = "",
+    reasoning: bool = True,
     training_template: tuple[str, str] | None = None,
 ) -> RenderedSample:
-    """Render one raw row as one sample with loss on every assistant block."""
+    """Render one raw row as one sample with loss on every assistant block.
+
+    `reasoning=False` strips teacher reasoning before rendering, so the supervised
+    spans cover the template's empty think scaffold plus the answer -- the
+    non-reasoning SFT target that matches an `enable_thinking=False` generation
+    prompt. `enable_thinking` itself is not threaded here: with
+    `add_generation_prompt=False` the template never reads it.
+    """
     bounded, removed = trim_after_last_assistant(messages)
     template, fingerprint = training_template or training_chat_template(tokenizer)
     encoded = tokenizer.apply_chat_template(
-        to_template_messages(bounded, shape=shape),
+        to_template_messages(bounded, shape=shape, reasoning=reasoning),
         tools=list(tools) or None,
         chat_template=template,
         tokenize=True,
@@ -216,26 +237,3 @@ def render_training_sample(
         template_fingerprint=fingerprint,
         trailing_messages_removed=removed,
     )
-
-
-def render_training_length(
-    tokenizer: Tokenizer,
-    messages: Sequence[Message],
-    *,
-    tools: Sequence[dict[str, Any]] = (),
-    shape: ToolResultShape = "tool_role",
-) -> int:
-    """Tokenize the SFT trajectory once without constructing masks or labels."""
-    bounded, _ = trim_after_last_assistant(messages)
-    template, _ = training_chat_template(tokenizer)
-    input_ids = tokenizer.apply_chat_template(
-        to_template_messages(bounded, shape=shape),
-        tools=list(tools) or None,
-        chat_template=template,
-        tokenize=True,
-        add_generation_prompt=False,
-        enable_thinking=True,
-    )
-    if isinstance(input_ids, Mapping):
-        input_ids = input_ids.get("input_ids")
-    return len(_flat_ints(input_ids, field="input_ids"))

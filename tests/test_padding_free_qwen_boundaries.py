@@ -5,9 +5,13 @@ from __future__ import annotations
 from types import MethodType
 from typing import Any
 
+import pytest
+
 from smolqwen.data.convert_sft import SFT_SCHEMA_VERSION, SFT_SEMANTICS
 from smolqwen.training.collate import padding_free_collator
 from tests.helpers import tiny_qwen35_model
+
+pytestmark = pytest.mark.gpu
 
 
 def _record(uid: str, offset: int, length: int) -> dict[str, Any]:
@@ -34,8 +38,14 @@ def _capture_forward(module: Any, captures: list[dict[str, Any]]) -> None:
 
 
 def test_qwen_routes_document_boundaries_to_both_mixer_types() -> None:
+    import torch
+
     batch = padding_free_collator(32)([_record("a", 1, 5), _record("b", 20, 7)])
-    model = tiny_qwen35_model()
+    batch = {
+        key: value.to("cuda") if isinstance(value, torch.Tensor) else value
+        for key, value in batch.items()
+    }
+    model = tiny_qwen35_model().to("cuda")
     linear_captures: list[dict[str, Any]] = []
     attention_captures: list[dict[str, Any]] = []
     _capture_forward(model.model.layers[0].linear_attn, linear_captures)

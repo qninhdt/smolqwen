@@ -122,6 +122,31 @@ def test_override_coerces_int_and_bool() -> None:
     assert config.optimization.gradient_checkpointing is False
 
 
+def test_enable_thinking_defaults_false_and_overrides_true() -> None:
+    """Every shipped stage defaults to the selected non-reasoning experiment."""
+    from smolqwen.config_models import EvalConfig
+
+    for stage, model_type in (("data", DataConfig), ("grpo", GrpoConfig), ("eval", EvalConfig)):
+        config = resolve(stage, config_dir=CONFIG_DIR, budgets_path=Path("/nonexistent"))
+        overridden = resolve(
+            stage,
+            config_dir=CONFIG_DIR,
+            overrides=["enable_thinking=true"],
+            budgets_path=Path("/nonexistent"),
+        )
+        assert isinstance(config, model_type)
+        assert isinstance(overridden, model_type)
+        assert config.enable_thinking is False, stage
+        assert overridden.enable_thinking is True, stage
+
+
+def test_sft_enables_selective_liger_loss_for_padding_free_training() -> None:
+    config = resolve("sft", profile="l4", config_dir=CONFIG_DIR, budgets_path=Path("/nonexistent"))
+    assert isinstance(config, SftConfig)
+    assert config.optimization.liger_fused_linear_cross_entropy is True
+    assert config.optimization.selective_logit_loss is True
+
+
 def test_override_rejects_unparseable_bool() -> None:
     with pytest.raises(ConfigError, match="boolean"):
         parse_override(SftConfig, "optimization.bf16=maybe")
@@ -233,18 +258,12 @@ def test_generation_concurrency_and_num_generations_are_separate_fields() -> Non
 def test_data_config_pins_dataset_revisions() -> None:
     config = resolve("data", config_dir=CONFIG_DIR, budgets_path=Path("/nonexistent"))
     assert isinstance(config, DataConfig)
-    for pin in (config.sft_trajectories, config.rl_scenarios, config.env_metadata):
-        assert pin.revision, f"{pin.filename} must be pinned by revision"
-    # The two files whose contents get exec()ed additionally carry a sha256: a
-    # count check passes trivially for a modified env_class_code body.
-    assert config.env_metadata.sha256
-    assert config.rl_scenarios.sha256
+    assert config.sft_trajectories.revision
 
 
 def test_grpo_runtime_pins_the_vendored_executable_metadata() -> None:
     config = resolve("grpo", config_dir=CONFIG_DIR, budgets_path=Path("/nonexistent"))
     assert isinstance(config, GrpoConfig)
-    assert config.env.env_metadata_source == "vendored"
     assert config.env.vendored_env_metadata_sha256
     assert config.env.vendored_rl_scenarios_sha256
 

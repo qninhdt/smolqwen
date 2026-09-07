@@ -97,6 +97,26 @@ def test_miss_function_tools_are_revealed_at_the_holdout_turn(
     assert manifest["tool_schema_hash"] == hash_json([adapter._state(task).all_tools])
 
 
+def test_archived_sources_use_the_pinned_commit_without_git_metadata(tmp_path: Path) -> None:
+    data_dir = tmp_path / "bfcl_eval" / "data"
+    data_dir.mkdir(parents=True)
+    (data_dir.parent / ".git").write_text("gitdir: missing-parent-object-db\n", encoding="utf-8")
+    for category in ("multi_turn_base",):
+        (data_dir / f"BFCL_v4_{category}.json").write_text("", encoding="utf-8")
+        (data_dir / "possible_answer").mkdir(exist_ok=True)
+        (data_dir / "possible_answer" / f"BFCL_v4_{category}.json").write_text("", encoding="utf-8")
+    (data_dir / "multi_turn_func_doc").mkdir()
+
+    adapter = BfclMultiTurnAdapter(
+        data_dir,
+        ["multi_turn_base"],
+        benchmark_commit="a" * 40,
+    )
+
+    revision, _digest = adapter._lineage()
+    assert revision == "a" * 40
+
+
 @pytest.mark.parametrize("task_id", ["multi_turn_base_0", "multi_turn_base_52"])
 def test_ground_truth_positional_arguments_match_named_model_calls(task_id: str) -> None:
     root = Path("third_party/gorilla/berkeley-function-call-leaderboard/bfcl_eval/data")

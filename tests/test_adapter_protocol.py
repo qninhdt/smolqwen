@@ -16,7 +16,7 @@ def test_adapter_value_objects_preserve_benchmark_identity_and_state() -> None:
 
 
 def test_adapter_modules_are_discovered_without_a_runner_switch() -> None:
-    assert {"bfcl_multi_turn", "envscaler_heldout"} <= set(adapter_factories())
+    assert {"bfcl_multi_turn"} <= set(adapter_factories())
 
 
 def test_core_runner_and_config_do_not_name_specific_benchmarks() -> None:
@@ -29,8 +29,6 @@ def test_core_runner_and_config_do_not_name_specific_benchmarks() -> None:
         "bfcl_categories",
         "bfcl_data_dir",
         "bfcl_commit",
-        "heldout_env_count",
-        "heldout_scenarios_per_env",
         "env",
     } & set(EvalConfig.model_fields)
 

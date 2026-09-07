@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 
 class ManifestMismatchError(ValueError):
@@ -37,6 +38,53 @@ RECORDED_FREE_FIELDS: tuple[str, ...] = (
     "adapter_revision",
 )
 
+REDACTED_HOST = "redacted"
+
+
+def redact_endpoint(endpoint: object) -> object:
+    """Reduce an endpoint to scheme, host *shape*, port and path. Never routable.
+
+    The Colab serving path is a public `trycloudflare.com` hostname
+    (`scripts/run_colab_serve.sh:53`), so a report that records it verbatim
+    publishes a routable ingress to a GPU box the moment the report is uploaded.
+    Nothing strips userinfo either, so a credentialed URL would be stored whole.
+    The repo's posture elsewhere is the opposite -- `run_colab_serve.sh` prints the
+    key *file path*, never the key.
+
+    Loopback and private addresses survive intact: they are not reachable from
+    outside the host, and "this was measured against the local proxy on 8080" is
+    real provenance a reader needs. Everything else keeps its shape and loses its
+    name, which is what makes two rows comparable ("both went through a tunnel")
+    without either being usable.
+
+    Idempotent, so a manifest rehydrated from a report is unchanged.
+    """
+    if not isinstance(endpoint, str) or not endpoint:
+        return endpoint
+    parts = urlsplit(endpoint)
+    if not parts.scheme or not parts.netloc:
+        # Not a URL this function can reason about (no scheme, or a bare
+        # `host:port`), so nothing here can be asserted to be non-routable.
+        return REDACTED_HOST
+    host = parts.hostname or ""
+    if _is_local(host):
+        # `hostname` is already lowercased and userinfo-free; rebuilt rather than
+        # passed through so a `user:pw@` prefix cannot survive on this branch.
+        port = f":{parts.port}" if parts.port else ""
+        return f"{parts.scheme}://{host}{port}{parts.path}"
+    port = f":{parts.port}" if parts.port else ""
+    return f"{parts.scheme}://{REDACTED_HOST}{port}{parts.path}"
+
+
+def _is_local(host: str) -> bool:
+    if host in {"localhost", REDACTED_HOST}:
+        return host == "localhost"
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return bool(address.is_loopback or address.is_private or address.is_link_local)
+
 
 def _canonical(value: Mapping[str, Any]) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
@@ -50,16 +98,6 @@ def hash_json(value: object) -> str:
     ).hexdigest()
 
 
-def sha256_file(path: Path | str) -> str:
-    """Hash a potentially large benchmark input without loading it all at once."""
-
-    digest = hashlib.sha256()
-    with Path(path).open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
 @dataclass(frozen=True)
 class EvalManifest:
     invariant: Mapping[str, Any]
@@ -68,8 +106,13 @@ class EvalManifest:
     def __post_init__(self) -> None:
         # Normalize at construction so callers inspecting the object and callers
         # serializing it see the same complete recorded-free contract.
-        normalized = {field: None for field in RECORDED_FREE_FIELDS}
+        normalized: dict[str, Any] = {field: None for field in RECORDED_FREE_FIELDS}
         normalized.update(dict(self.recorded_free))
+        # Redaction happens here rather than at the call site because every path
+        # that produces a report -- the runner, a rehydrated report, a test -- goes
+        # through this constructor. A redaction one caller can forget is one an
+        # upload will eventually publish.
+        normalized["endpoint"] = redact_endpoint(normalized["endpoint"])
         object.__setattr__(self, "invariant", dict(self.invariant))
         object.__setattr__(self, "recorded_free", normalized)
 

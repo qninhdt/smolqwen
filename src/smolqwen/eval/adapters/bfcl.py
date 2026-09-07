@@ -24,9 +24,10 @@ from typing import Any
 from pydantic import Field
 
 from smolqwen.config_models import EvalConfig, StrictModel
+from smolqwen.data.loader import sha256_of
 from smolqwen.data.tool_call_xml import parse_tool_calls
 from smolqwen.eval.adapters.base import AdapterResult, BenchmarkAdapter, EvalTask, StepResult
-from smolqwen.eval.manifest import hash_json, sha256_file
+from smolqwen.eval.manifest import hash_json
 from smolqwen.eval.metrics import TaskMetrics, aggregate
 from smolqwen.eval.tool_calls import (
     is_completion_signal,
@@ -190,9 +191,43 @@ class BfclMultiTurnAdapter:
         return StepResult("Error: Function call or completion signal not found.")
 
     def score(self, task: EvalTask) -> AdapterResult:
+        """1.0 only when four conditions all hold; each reported separately.
+
+        The conditions are (a) the episode reached a completion marker, (b) it
+        produced one state snapshot per ground-truth turn, (c) every snapshot equals
+        the expected one, and (d) cumulative results cover what each turn expected.
+        A bare `0.0` cannot be attributed to any of them, which is why each is a
+        diagnostic here rather than an implicit branch.
+
+        (c) and (d) are *undefined* for a task failing (a) or (b): the expected
+        snapshots are never built, and `zip(..., strict=True)` below would raise on
+        the length mismatch that guard protects. So they are absent from
+        `diagnostics` rather than filled with 0.0, and the aggregate carries their
+        restricted denominator.
+        """
         state = self._state(task)
-        if not state.completed or len(state.model_snapshots) != len(state.ground_truth):
-            return AdapterResult(0.0, False)
+        turns_expected = len(state.ground_truth)
+        snapshot_ratio = len(state.model_snapshots) / turns_expected if turns_expected else 0.0
+        base: dict[str, float] = {
+            "completion_rate": float(state.completed),
+            "snapshot_count_ratio": snapshot_ratio,
+        }
+        if not state.completed:
+            return AdapterResult(
+                0.0,
+                False,
+                completed=False,
+                diagnostics=base,
+                failure_reason="never_completed",
+            )
+        if len(state.model_snapshots) != turns_expected:
+            return AdapterResult(
+                0.0,
+                False,
+                completed=True,
+                diagnostics=base,
+                failure_reason="snapshot_count_mismatch",
+            )
 
         expected_instances = self._new_instances(state.entry)
         expected_snapshots: list[dict[str, dict[str, Any]]] = []
@@ -209,14 +244,28 @@ class BfclMultiTurnAdapter:
             zip(state.model_snapshots, expected_snapshots, strict=True)
         ):
             if actual != expected:
-                return AdapterResult(0.0, False)
+                return AdapterResult(
+                    0.0,
+                    False,
+                    diagnostics={**base, "state_match_rate": 0.0},
+                    failure_reason=f"state_mismatch_at_turn_{index}",
+                )
             # Upstream permits a result from an earlier step to satisfy a later
             # turn, so compare the expected results against cumulative output.
             actual_results = [item for turn in state.results[: index + 1] for item in turn]
             if not Counter(expected_results[index]) <= Counter(actual_results):
-                return AdapterResult(0.0, False)
+                return AdapterResult(
+                    0.0,
+                    False,
+                    diagnostics={**base, "state_match_rate": 1.0, "result_match_rate": 0.0},
+                    failure_reason=f"result_mismatch_at_turn_{index}",
+                )
 
-        return AdapterResult(1.0, True)
+        return AdapterResult(
+            1.0,
+            True,
+            diagnostics={**base, "state_match_rate": 1.0, "result_match_rate": 1.0},
+        )
 
     @property
     def invalid_calls(self) -> dict[str, int]:
@@ -254,16 +303,30 @@ class BfclMultiTurnAdapter:
             (path for path in (data_dir, *data_dir.parents) if (path / ".git").exists()),
             None,
         )
-        if git_root is None:
-            raise RuntimeError(f"BFCL data directory is not inside a git checkout: {data_dir}")
-        completed = subprocess.run(
-            ["git", "-C", str(git_root), "rev-parse", "HEAD"],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        checkout_revision = completed.stdout.strip()
+        checkout_revision: str | None = None
+        if git_root is not None:
+            try:
+                completed = subprocess.run(
+                    ["git", "-C", str(git_root), "rev-parse", "HEAD"],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+            except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+                # A tar archive may preserve a submodule's `.git` pointer without
+                # the parent object database. The configured commit is still pinned
+                # and the content hash below protects the actual input files.
+                pass
+            else:
+                checkout_revision = completed.stdout.strip()
+        if checkout_revision is None:
+            if not self.benchmark_commit:
+                raise RuntimeError(
+                    f"BFCL data directory is not inside a usable git checkout: {data_dir}; "
+                    "a pinned benchmark_commit is required for archived sources"
+                )
+            checkout_revision = self.benchmark_commit
         if self.benchmark_commit and checkout_revision != self.benchmark_commit:
             raise RuntimeError(
                 f"BFCL checkout revision {checkout_revision} does not match configured pin "
@@ -285,7 +348,7 @@ class BfclMultiTurnAdapter:
                 raise FileNotFoundError(f"BFCL manifest input missing: {path}")
             digest.update(str(path.relative_to(data_dir)).encode())
             digest.update(b"\0")
-            digest.update(bytes.fromhex(sha256_file(path)))
+            digest.update(bytes.fromhex(sha256_of(path)))
         return checkout_revision, digest.hexdigest()
 
     @staticmethod

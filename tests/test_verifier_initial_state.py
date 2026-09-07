@@ -2,9 +2,8 @@
 
 The dedicated gate for the failure that produces no error: a check reading
 `initial_state` as a global, called without it, raises `NameError`, the design
-swallows that as `False`, and reward is silently depressed. Phase 7's difficulty
-profiler then classifies the affected scenarios `always_zero` and the curriculum
-drops them, shrinking and skewing the RL training set.
+swallows that as `False`, and reward is silently depressed across the RL training
+set.
 
 Marked `dataset` so CI (which has no release files) deselects it: the assertion
 that matters most here is over the *whole* vendored scenario file, not a fixture,

@@ -48,69 +48,104 @@ no default and remains in the environment rather than process arguments. Never
 publish port `8000`, put the key in Compose command arguments, or create a tunnel
 to the raw vLLM process.
 
-## Benchmark and sweep entry points
+## Benchmark and sweep
 
-For a live Compose endpoint, keep the same key in the client environment and
-point the benchmark wrapper at the proxy:
+Benchmarking is upstream's. `vllm bench serve` and `vllm bench sweep serve` own
+execution, resume, and the Pareto front; the repo-local wrappers that shelled out
+to them only renamed vLLM's result fields into a dataclass, so they are gone.
+
+Point the benchmark at the **proxy**, not the raw vLLM port. The proxy is the only
+service that checks the bearer key, so a measurement past it describes an endpoint
+nobody can reach. `vllm bench serve` reads the key from `OPENAI_API_KEY`.
 
 ```sh
-export SMOLQWEN_BASE_URL=http://127.0.0.1:8080
-smolqwen bench --profile l4 --dataset random --concurrency 1,4,16
+export OPENAI_API_KEY="$(cat artifacts/serving/vllm-api-key)"
+vllm bench serve \
+  --base-url http://127.0.0.1:8080 \
+  --model smolqwen \
+  --dataset-name random \
+  --num-prompts 100 --random-input-len 1024 --random-output-len 256 \
+  --max-concurrency 4 \
+  --percentile-metrics ttft,tpot,itl,e2el --metric-percentiles 50,95,99 \
+  --save-result --result-dir artifacts/serving
 ```
 
-The Compose-owned default benchmark can instead be launched with:
+Repeat per concurrency value; `--max-concurrency` takes one number.
+
+### Agent-shaped traffic
+
+`--dataset-name random` measures token throughput on synthetic prompts, which says
+nothing about an agentic request's prefill shape or its tool-schema overhead. Build
+the real traffic first:
+
+```sh
+smolqwen build-workload --profile l4 --output artifacts/serving/bfcl-agentic.jsonl
+vllm bench serve \
+  --base-url http://127.0.0.1:8080 --model smolqwen \
+  --dataset-name custom --dataset-path artifacts/serving/bfcl-agentic.jsonl \
+  --skip-chat-template --max-concurrency 4 \
+  --save-result --result-dir artifacts/serving
+```
+
+The workload is the first agent request of each pinned BFCL multi-turn task,
+rendered with that task's tool schema — vLLM's built-in BFCL loader does not replay
+those categories. It measures agent-shaped *serving traffic*; it is **not a BFCL
+score or a multi-turn quality claim**, and the generated composition file records
+exactly what was sampled. `--skip-chat-template` is required because the prompts are
+already rendered.
+
+The template comes from the pinned base model in `configs/base/sft.yaml`, at its
+recorded revision — not from `EvalConfig.http_model`, which is the name the server
+answers to (`--served-model-name smolqwen`) and never a repo id. A merged checkpoint
+carries the base tokenizer verbatim, so rendering against the base renders what the
+server will see. The workload's render mode follows `enable_thinking` in
+`configs/base/eval.yaml` — set it to `false` to benchmark a non-reasoning
+endpoint's prompt shape.
+
+### Non-reasoning serving
+
+The server needs no change: `--reasoning-parser qwen3` tolerates the empty think
+block, and the render mode is a per-request property. A non-reasoning client
+sends `"chat_template_kwargs": {"enable_thinking": false}` in its chat
+completion request (the eval HTTP path does exactly this when its eval config
+says so); a thinking client sends `{"enable_thinking": true}`. The mode a score
+was measured under lives in the eval manifest's invariant set, not in the server
+configuration.
+
+The Compose service runs this same command:
 
 ```sh
 docker compose --profile bench run --rm bench
 ```
 
-[`src/smolqwen/serving/bench.py`](../src/smolqwen/serving/bench.py) is the owner
-for accepted datasets, required dataset paths, normalized measurements, and
-report generation. In particular, `sharegpt` and `custom` require
-`--dataset-path`. Pass the paired HTTP evaluation JSON with `--quality-report`
-and at least one Base/SFT report with `--quality-reference`; the wrapper refuses
-invariant-manifest drift before joining speed and quality. It also requires the
-evaluation row to match the benchmark's explicit dtype, quantization,
-speculative-decoding setting, KV budget, batching limits, chunked-prefill
-setting, and prefix-cache setting exactly. The evaluation workflow and serving
-metadata fields are documented in
+### Sweep
+
+```sh
+vllm bench sweep serve --serve-params <serve.json> --bench-params <bench.json> \
+  --resume --strict-params -o artifacts/serving/sweep
+```
+
+### Pairing a quality score to a speed row
+
+A throughput number and a quality score belong on one row only if both were measured
+under the same serving config. `assert_comparable` cannot establish that: it compares
+the manifest's **invariant** set, and two runs at different `max_num_seqs` have
+identical invariants while being different experiments.
+
+[`src/smolqwen/eval/serving_pairing.py`](../src/smolqwen/eval/serving_pairing.py)
+compares `recorded_free` instead — dtype, quantization, speculative decoding, KV
+budget, batching limits, chunked prefill, prefix caching — and refuses the pairing on
+any difference. `smolqwen evaluate --require-serving-match <report.json>` applies it.
+
+Those eight fields are read off the in-process engine's resolved `VllmConfig`, which
+is the only party that knows what it ran at: vLLM resolves `max_num_batched_tokens`
+and the chunked-prefill default itself. An `--endpoint` evaluation records them as
+unknown, and the guard compares only what the throughput measurement recorded, so an
+unknown makes no claim rather than a false one — but it also means a quality score
+worth pairing has to come from a local engine run, not from re-scoring through the
+endpoint.
+The evaluation workflow and the recorded fields are documented in
 [`evaluation.md`](evaluation.md).
-
-Raw and normalized result filenames include a fingerprint of the resolved
-serving configuration, so another dataset or configuration does not overwrite a
-prior row. Each benchmark invocation rebuilds the configured `report.md` from
-all normalized rows already present, producing one aggregate view across
-datasets and serving configurations. The fingerprint and aggregation behavior
-are owned by the benchmark wrapper; do not infer configuration identity from a
-filename by hand.
-
-The agent-shaped traffic entry point is:
-
-```sh
-smolqwen bench --profile l4 --dataset bfcl-agentic --concurrency 1,4,16
-```
-
-This is a custom workload built from the first agent request of the repository's
-pinned BFCL multi-turn tasks, rendered with each task's tool schema. vLLM's
-built-in BFCL loader does not replay those multi-turn categories. The workload
-therefore measures agent-shaped serving traffic; it is **not a BFCL score or a
-multi-turn quality claim**. Its generated composition file records exactly what
-was sampled. [`src/smolqwen/serving/workload.py`](../src/smolqwen/serving/workload.py)
-owns that definition. The Compose benchmark service mounts the configured
-checkpoint and the read-only benchmark checkout for this path.
-
-Run the upstream-owned serving sweep from the target-GPU environment, with no
-other process consuming that GPU:
-
-```sh
-smolqwen sweep --profile l4 --experiment-name l4 --resume
-```
-
-[`src/smolqwen/serving/sweep.py`](../src/smolqwen/serving/sweep.py) owns the
-candidate parameters and delegates repetitions, resume behavior, and Pareto
-plotting to `vllm bench sweep`. Results live under the configured `output_dir`;
-[`src/smolqwen/serving/report.py`](../src/smolqwen/serving/report.py) owns the
-joined serving/quality report format.
 
 ## Colab
 

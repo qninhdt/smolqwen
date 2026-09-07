@@ -21,7 +21,7 @@ from smolqwen.rollout.rollout_func import (
     encode_ids,
     initial_messages_for,
     make_rollout_func,
-    make_scheduler,
+    make_turn_engine,
 )
 from tests.helpers import OfflineTokenizer
 from tests.rollout_fixtures import (
@@ -48,7 +48,7 @@ def test_returned_rows_and_groups_match_input_positions() -> None:
         ),
         clock,
     )
-    scheduler = make_scheduler(
+    scheduler = make_turn_engine(
         backend=backend,
         dispatcher=dispatcher,
         tokenizer=tokenizer,
@@ -130,6 +130,56 @@ def test_actual_rollout_func_closure_returns_rows_and_logs_profile() -> None:
     assert all(len(rows) == len(prompts) for rows in output.values())
     assert logs and logs[0]["rollout/episodes_per_hour"] >= 0.0
     assert "rollout/timeline_scheduling_s" in logs[0]
+
+
+def test_rollout_render_honors_the_non_thinking_mode() -> None:
+    """`enable_thinking=False` must reach the prefix renderer: the generation
+    prompt closes the empty think block, and the scripted continuation is read as
+    content -- an episode runs clean end to end with no re-render drift."""
+
+    class ImmediateDispatcher:
+        @staticmethod
+        def _done(value: Any) -> Future[Any]:
+            future: Future[Any] = Future()
+            future.set_result(value)
+            return future
+
+        def submit_create(self, episode_id: str, binding: Any) -> Future[Any]:
+            return self._done(ok_result(episode_id, {"tools": []}))
+
+        def submit_step(self, episode_id: str, name: str, arguments: Any) -> Future[Any]:
+            raise AssertionError("final-answer policy must not call a tool")
+
+        def submit_score(self, episode_id: str) -> Future[Any]:
+            return self._done(ok_result(episode_id, default_score_payload(0.5)))
+
+        def submit_destroy(self, episode_id: str) -> Future[Any]:
+            return self._done(ok_result(episode_id, True))
+
+    bindings = fixture_bindings(episodes=2)
+    prompts = [
+        [
+            {"role": "system", "content": f"system-{index}"},
+            {"role": "user", "content": binding.scenario.task},
+        ]
+        for index, binding in enumerate(bindings)
+    ]
+    tokenizer = OfflineTokenizer(token_size=1)
+    policy_texts = script_policy_texts()
+    rollout = make_rollout_func(
+        resolve_bindings=lambda received: bindings,
+        config=fast_config(generation_concurrency=2, enable_thinking=False),
+        dispatcher=ImmediateDispatcher(),
+        tokenizer=tokenizer,
+        backend_factory=lambda _: ScriptedPolicyBackend(
+            text_list_policy([policy_texts[-1]]),
+            lambda text: encode_ids(tokenizer, text),
+        ),
+    )
+    output = rollout(prompts, SimpleNamespace(tools=[], environment_factories=None))
+    # Every returned row carries supervised (env-mask 1) tokens and no NaN-vs-mask
+    # misalignment: assemble_output asserted that internally by running.
+    assert all(any(flag == 1 for flag in row) for row in output["env_mask"])
 
 
 def test_sampling_logprobs_select_the_sampled_candidate_and_keep_missing_nan() -> None:
