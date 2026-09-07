@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any
@@ -12,7 +12,7 @@ from typing import Any
 from smolqwen.config_models import EvalConfig
 from smolqwen.console import logger, progress_task, status_table
 from smolqwen.eval.adapters import create_adapter
-from smolqwen.eval.adapters.base import BenchmarkAdapter
+from smolqwen.eval.adapters.base import BenchmarkAdapter, EvalTask
 from smolqwen.eval.batched import evaluate_batched, generation_for
 from smolqwen.eval.checkpoints import resolve as resolve_checkpoint
 from smolqwen.eval.manifest import EvalManifest
@@ -80,6 +80,7 @@ def evaluate_adapter(
     tasks: Sequence[Any] | None = None,
     records: list[TrajectoryRecord] | None = None,
     label: str = "evaluation",
+    progress: Callable[[EvalTask, TaskMetrics | None], None] | None = None,
 ) -> dict[str, dict[str, float]]:
     """Advance every task to terminal through the text-native baseline path.
 
@@ -99,6 +100,8 @@ def evaluate_adapter(
     task_metrics: list[TaskMetrics] = []
     with progress_task(label, total=len(task_list), unit="tasks", every=1) as advance:
         for task in task_list:
+            if progress is not None:
+                progress(task, None)
             history: list[dict[str, Any]] = adapter.build_prompt(task, [])
             tools = task.tools
             generated_tokens = 0
@@ -177,6 +180,8 @@ def evaluate_adapter(
                 )
             running = sum(metric.score for metric in task_metrics) / len(task_metrics)
             advance(f"{task.category} mean {running:.3f}")
+            if progress is not None:
+                progress(task, task_metrics[-1])
     return adapter.summarize(task_metrics)
 
 

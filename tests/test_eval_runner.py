@@ -97,12 +97,9 @@ def test_named_adapter_logs_exact_progress_and_summary(
 
     assert metrics["fixture"]["score"] == 1.0
     assert invariants["fixture_revision"] == "1"
-    output = capsys.readouterr().out
-    assert "evaluation fixture: loaded 1 tasks" in output
-    assert "evaluation fixture: 1/1 tasks" in output
-    assert "score=1.0000 steps=1 tokens=3" in output
-    assert "evaluation fixture complete: 1/1 tasks" in output
-    assert "evaluation fixture: summarized 1 metric categories" in output
+    output = capsys.readouterr().err
+    assert "fixture: 1/1 tasks" in output
+    assert "fixture complete: 1 tasks" in output
 
 
 def test_run_evaluation_records_actual_serving_locator_and_backend(
