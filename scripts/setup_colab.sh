@@ -4,6 +4,35 @@ set -euo pipefail
 project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$project_root"
 
+heartbeat_s="${SMOLQWEN_SETUP_HEARTBEAT_S:-30}"
+log() {
+  printf '[setup %s] %s\n' "$(date '+%H:%M:%S')" "$*" >&2
+}
+
+run_step() {
+  local label="$1"
+  shift
+  local started=$SECONDS
+  log "START: $label"
+  "$@" &
+  local pid=$!
+  while kill -0 "$pid" 2>/dev/null; do
+    sleep "$heartbeat_s"
+    if kill -0 "$pid" 2>/dev/null; then
+      log "WAITING: $label ($((SECONDS - started))s elapsed)"
+    fi
+  done
+  if wait "$pid"; then
+    log "DONE: $label ($((SECONDS - started))s)"
+  else
+    local code=$?
+    log "FAILED: $label (exit $code after $((SECONDS - started))s)"
+    return "$code"
+  fi
+}
+
+log "setup started in $project_root"
+
 command -v uv >/dev/null 2>&1 || {
   echo "uv is required; install it before running setup_colab.sh" >&2
   exit 1
@@ -16,8 +45,8 @@ command -v uv >/dev/null 2>&1 || {
 #
 # Install the locked base first. The kernel wheels are built against one exact
 # torch ABI, so validate the vLLM-owned anchor before installing them.
-uv sync --locked --no-dev
-uv run --no-sync python - <<'PY'
+run_step "install locked base dependencies" uv sync --locked --no-dev
+run_step "verify torch ABI" uv run --no-sync python - <<'PY'
 from importlib.metadata import version
 
 expected = "2.11.0"
@@ -27,11 +56,11 @@ if actual != expected:
 print(f"verified torch=={actual}")
 PY
 
-uv sync --locked --no-dev --extra colab
+run_step "install locked Colab GPU dependencies" uv sync --locked --no-dev --extra colab
 
 if git -C "$project_root" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-  git submodule update --init --recursive --checkout third_party/EnvScaler
-  git submodule status --recursive third_party/EnvScaler
+  run_step "restore EnvScaler submodule" git submodule update --init --recursive --checkout third_party/EnvScaler
+  git submodule status --recursive third_party/EnvScaler >&2
 elif [[ -f "$project_root/third_party/EnvScaler/rl/roll/pipeline/agentic/env/envscaler_env/data/191_env_metadata.json" ]]; then
   echo "using archived EnvScaler sources (no Git metadata)"
 else
@@ -54,7 +83,7 @@ fi
 # `sdpa` is a correct fallback, so on Turing the wheel is expected to be unusable
 # and only its absence-of-crash matters. FP16 is used below sm80 because bf16 has
 # no tensor cores there.
-uv run --no-sync python - <<'PY'
+run_step "run GPU and kernel self-tests" uv run --no-sync python - <<'PY'
 import torch
 
 if not torch.cuda.is_available():
@@ -120,3 +149,5 @@ LigerFusedLinearCrossEntropyLoss()(
 )
 print("verified liger_kernel")
 PY
+
+log "setup complete"

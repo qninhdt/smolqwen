@@ -8,6 +8,7 @@ import subprocess
 from collections.abc import Mapping
 
 from smolqwen.config_models import ServeConfig
+from smolqwen.console import phase
 from smolqwen.inference.engine import disable_telemetry
 from smolqwen.inference.profiles import ServeProfile
 
@@ -37,5 +38,6 @@ def run_server(config: ServeConfig, *, print_command: bool = False) -> int:
     if print_command:
         print(shlex.join(command))
         return 0
-    completed = subprocess.run(command, env=serving_environment(), check=False)
+    with phase("serve: launch vLLM server (logs follow from vLLM)"):
+        completed = subprocess.run(command, env=serving_environment(), check=False)
     return int(completed.returncode)

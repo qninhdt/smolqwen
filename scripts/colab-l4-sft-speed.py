@@ -15,12 +15,16 @@ import math
 import os
 import re
 import shutil
-import subprocess
 import tarfile
 import time
 import traceback
 from pathlib import Path
 from typing import Any
+
+try:
+    from colab_logging import run_streaming
+except ModuleNotFoundError:  # imported from the repository root in tests
+    from scripts.colab_logging import run_streaming
 
 ROOT = Path("/content/smolqwen")
 ARCHIVE = Path("/content/smolqwen-l4-sft-speed-src.tgz")
@@ -635,16 +639,13 @@ def _parse(output: str) -> dict[str, Any] | None:
 
 def _parent(wave_name: str) -> int:
     _prepare()
-    install = subprocess.run(
+    install = run_streaming(
         ["uv", "sync", "--locked", "--no-dev", "--extra", "colab"],
+        name="install colab dependencies",
         cwd=ROOT,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        check=False,
+        timeout=2400,
     )
     if install.returncode:
-        print((install.stdout or "")[-20000:], flush=True)
         return install.returncode
     results: list[dict[str, Any]] = []
     RESULT.write_text("[]\n", encoding="utf-8")
@@ -660,23 +661,20 @@ def _parent(wave_name: str) -> int:
         child_env["PYTORCH_CUDA_ALLOC_CONF"] = str(alloc_conf)
     for candidate in candidates:
         print(f"\n=== {candidate} ===", flush=True)
-        completed = subprocess.run(
+        completed = run_streaming(
             [str(PYTHON), str(SCRIPT), "--child", "--candidate", candidate],
+            name=candidate,
             cwd=ROOT,
             env=child_env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
             timeout=3600,
-            check=False,
         )
-        payload = _parse(completed.stdout or "")
+        payload = _parse(completed.output)
         if payload is None:
             payload = {
                 "candidate": candidate,
                 "status": "error",
                 "returncode": completed.returncode,
-                "output_tail": (completed.stdout or "")[-12000:],
+                "output_tail": completed.output_tail,
             }
         results.append(payload)
         RESULT.write_text(json.dumps(results, indent=2, sort_keys=True) + "\n", encoding="utf-8")

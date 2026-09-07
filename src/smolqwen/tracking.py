@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 
-from smolqwen.console import logger
+from smolqwen.console import logger, phase
 
 LOG = logger(__name__)
 
@@ -131,17 +131,18 @@ class Tracker:
             return
         import wandb
 
-        self._run = wandb.init(  # type: ignore[assignment]
-            project=self.project,
-            entity=self.entity,
-            name=self.run_name,
-            config=self.config,
-            id=self.resume_run_id,
-            # "must" rather than "allow": a resume that silently forks the run
-            # splits one training curve across two charts and the break is easy
-            # to miss.
-            resume="must" if self.resume_run_id else None,
-        )
+        with phase("tracking: initialize W&B run"):
+            self._run = wandb.init(  # type: ignore[assignment]
+                project=self.project,
+                entity=self.entity,
+                name=self.run_name,
+                config=self.config,
+                id=self.resume_run_id,
+                # "must" rather than "allow": a resume that silently forks the run
+                # splits one training curve across two charts and the break is easy
+                # to miss.
+                resume="must" if self.resume_run_id else None,
+            )
 
     @property
     def run_id(self) -> str | None:
@@ -187,10 +188,11 @@ class Tracker:
         try:
             import wandb
 
-            artifact = wandb.Artifact(name=name, type=artifact_type)
-            for candidate in files:
-                artifact.add_file(str(candidate))
-            self._run.log_artifact(artifact)
+            with phase(f"tracking: upload W&B artifact {name}"):
+                artifact = wandb.Artifact(name=name, type=artifact_type)
+                for candidate in files:
+                    artifact.add_file(str(candidate))
+                self._run.log_artifact(artifact)
         except Exception as exc:  # pragma: no cover - depends on a live W&B backend
             LOG.warning("artifact %s was not uploaded: %s: %s", name, type(exc).__name__, exc)
 

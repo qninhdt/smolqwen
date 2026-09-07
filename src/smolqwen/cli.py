@@ -26,7 +26,7 @@ from smolqwen.config_models import (
     SftConfig,
     StrictModel,
 )
-from smolqwen.console import configure_logging, report_error
+from smolqwen.console import configure_logging, phase, report_error
 
 # subcommand -> which stage config it resolves. `probe` is absent: it reads no
 # config, because it must run on a fresh VM before anything is set up.
@@ -344,11 +344,14 @@ def _cmd_build_workload(args: argparse.Namespace, config: StrictModel) -> int:
     from smolqwen.tokenizer import load_tokenizer
 
     evaluation = _as(config, EvalConfig)
-    training = _as(resolve("sft", profile=args.profile, budgets_path=args.budgets), SftConfig)
-    tokenizer = load_tokenizer(training.model_id, revision=training.model_revision)
-    workload, composition = build_bfcl_agentic_workload(
-        evaluation, tokenizer=tokenizer, output_path=args.output
-    )
+    with phase("build-workload: resolve training tokenizer config"):
+        training = _as(resolve("sft", profile=args.profile, budgets_path=args.budgets), SftConfig)
+    with phase("build-workload: load tokenizer"):
+        tokenizer = load_tokenizer(training.model_id, revision=training.model_revision)
+    with phase("build-workload: render BFCL requests"):
+        workload, composition = build_bfcl_agentic_workload(
+            evaluation, tokenizer=tokenizer, output_path=args.output
+        )
     print(json.dumps({"workload": str(workload), "composition": str(composition)}, sort_keys=True))
     return 0
 

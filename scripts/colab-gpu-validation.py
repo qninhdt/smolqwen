@@ -45,6 +45,11 @@ import time
 from pathlib import Path
 from typing import Any
 
+try:
+    from colab_logging import run_streaming
+except ModuleNotFoundError:  # imported from the repository root in tests
+    from scripts.colab_logging import run_streaming
+
 ROOT = Path("/content/smolqwen")
 PYTHON = ROOT / ".venv" / "bin" / "python"
 CLI = ROOT / ".venv" / "bin" / "smolqwen"
@@ -152,23 +157,18 @@ def _runtime_environment() -> dict[str, str]:
 
 
 def _run_command(command: list[str], *, timeout: int) -> str:
-    """Run one phase command with the synced venv visible to its subprocess."""
-    completed = subprocess.run(
+    """Run one phase command, streaming output and quiet heartbeats."""
+    result = run_streaming(
         command,
+        name=Path(command[0]).name,
         cwd=ROOT,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
         timeout=timeout,
-        check=False,
         env=_runtime_environment(),
     )
-    output = completed.stdout or ""
-    print(_tail(output), flush=True)
-    if completed.returncode != 0:
+    if result.returncode != 0:
         executable = command[1] if len(command) > 1 else command[0]
-        raise RuntimeError(f"{executable} exited {completed.returncode}")
-    return output
+        raise RuntimeError(f"{executable} exited {result.returncode}")
+    return result.output
 
 
 def _write_json(path: Path, payload: Any) -> None:
@@ -189,14 +189,11 @@ def _run_child(
     print(f"\n=== {name} ===", flush=True)
     started = time.monotonic()
     try:
-        completed = subprocess.run(
+        result = run_streaming(
             [_runtime_python(), str(SCRIPT), *args],
+            name=name,
             cwd=ROOT,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
             timeout=timeout,
-            check=False,
             env=_runtime_environment(),
         )
     except subprocess.TimeoutExpired as exc:
@@ -220,10 +217,10 @@ def _run_child(
         print(item["output_tail"], flush=True)
         return "timeout"
 
-    output = completed.stdout or ""
-    if completed.returncode == 0:
+    output = result.output
+    if result.returncode == 0:
         status = "passed"
-    elif _is_oom(completed.returncode, output):
+    elif _is_oom(result.returncode, output):
         status = "oom"
     else:
         status = "failed"
@@ -235,13 +232,12 @@ def _run_child(
         "profile": profile,
         "device": device,
         "status": status,
-        "returncode": completed.returncode,
-        "duration_s": round(time.monotonic() - started, 2),
+        "returncode": result.returncode,
+        "duration_s": round(result.duration_s, 2),
         "output_tail": _tail(output),
     }
     results.append(item)
     _write_results(results)
-    print(item["output_tail"], flush=True)
     return status
 
 
@@ -917,23 +913,18 @@ def _phase_grpo(requested_profile: str) -> int:
 
 def _phase_non_tty() -> int:
     """Exercise the plain-line fallback with stdout connected to a pipe."""
-    completed = subprocess.run(
+    result = run_streaming(
         [str(CLI), "probe", "--no-write"],
+        name="non-tty probe",
         cwd=ROOT,
-        stdin=subprocess.DEVNULL,
-        capture_output=True,
-        text=True,
         timeout=300,
-        check=False,
         env=_runtime_environment(),
     )
-    if completed.returncode != 0:
-        raise RuntimeError(
-            f"non-TTY probe exited {completed.returncode}: {completed.stderr[-500:]}"
-        )
-    if "\r" in completed.stdout:
+    if result.returncode != 0:
+        raise RuntimeError(f"non-TTY probe exited {result.returncode}: {result.output_tail}")
+    if "\r" in result.output:
         raise RuntimeError("non-TTY output contains redraw carriage returns")
-    payload = {"stdout_lines": len(completed.stdout.splitlines()), "redraw_returns": False}
+    payload = {"stdout_lines": len(result.output.splitlines()), "redraw_returns": False}
     _write_json(ARTIFACTS / "non-tty-validation.json", payload)
     print(json.dumps(payload, sort_keys=True), flush=True)
     return 0

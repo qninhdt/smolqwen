@@ -26,12 +26,13 @@ this guards against interrupts the upload instead.
 from __future__ import annotations
 
 import json
+from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from smolqwen.config_models import SftConfig
-from smolqwen.console import logger, status_table
+from smolqwen.console import logger, phase, status_table
 from smolqwen.tokenizer import load_tokenizer
 
 LOG = logger(__name__)
@@ -190,14 +191,16 @@ def run_merge_adapter(
     push: bool = False,
 ) -> int:
     """`smolqwen merge-adapter`: merge and report where the checkpoint landed."""
-    result = merge_adapter(
-        base_model_id=config.model_id,
-        adapter_dir=adapter_dir or config.output_dir,
-        output_dir=output_dir or config.merged_dir,
-        base_revision=config.model_revision,
-        dtype="bfloat16" if config.optimization.bf16 else "float32",
-    )
-    pushed = push_merged(config, result) if push else None
+    with phase("merge-adapter: load base and merge LoRA weights"):
+        result = merge_adapter(
+            base_model_id=config.model_id,
+            adapter_dir=adapter_dir or config.output_dir,
+            output_dir=output_dir or config.merged_dir,
+            base_revision=config.model_revision,
+            dtype="bfloat16" if config.optimization.bf16 else "float32",
+        )
+    with phase("merge-adapter: upload merged checkpoint") if push else nullcontext():
+        pushed = push_merged(config, result) if push else None
     status_table(
         "merge-adapter",
         {

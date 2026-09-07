@@ -25,6 +25,10 @@ Start training with:
 smolqwen train-grpo --profile l4
 ```
 
+The command logs scenario/catalog loading, tokenizer and worker-pool startup,
+trainer/vLLM construction, optimizer progress, and checkpoint saves. Long phases
+emit heartbeat lines on stderr while stdout remains machine-readable.
+
 Resume after interruption with:
 
 ```sh

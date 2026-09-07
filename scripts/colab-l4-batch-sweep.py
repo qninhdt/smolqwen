@@ -34,6 +34,11 @@ import traceback
 from pathlib import Path
 from typing import Any
 
+try:
+    from colab_logging import run_streaming
+except ModuleNotFoundError:  # imported from the repository root in tests
+    from scripts.colab_logging import run_streaming
+
 ROOT = Path("/content/smolqwen")
 ARCHIVE = Path("/content/smolqwen-l4-batch-src.tgz")
 RESULT = Path("/content/smolqwen-l4-batch-results.json")
@@ -665,15 +670,7 @@ def _run_candidate(phase: str, batch: int, *, timeout: int = 1800) -> dict[str, 
     print(f"\n=== {phase} batch={batch} ===", flush=True)
     started = time.monotonic()
     try:
-        completed = subprocess.run(
-            command,
-            cwd=ROOT,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            timeout=timeout,
-            check=False,
-        )
+        result = run_streaming(command, name=f"{phase} batch={batch}", cwd=ROOT, timeout=timeout)
     except subprocess.TimeoutExpired as exc:
         output = exc.output or ""
         if isinstance(output, bytes):
@@ -685,40 +682,39 @@ def _run_candidate(phase: str, batch: int, *, timeout: int = 1800) -> dict[str, 
             "duration_s": round(time.monotonic() - started, 2),
             "output_tail": output[-12_000:],
         }
-    payload = _parse_child_output(completed.stdout or "")
+    payload = _parse_child_output(result.output)
     if payload is None:
-        output = completed.stdout or ""
+        output = result.output
         lower = output.lower()
         status = (
             "oom_or_killed"
-            if completed.returncode in {-9, 137} or "out of memory" in lower
+            if result.returncode in {-9, 137} or "out of memory" in lower
             else "error"
         )
         payload = {
             "phase": phase,
             "batch": batch,
             "status": status,
-            "returncode": completed.returncode,
-            "duration_s": round(time.monotonic() - started, 2),
+            "returncode": result.returncode,
+            "duration_s": round(result.duration_s, 2),
             "output_tail": output[-12_000:],
         }
-    payload.setdefault("returncode", completed.returncode)
-    payload.setdefault("controller_duration_s", round(time.monotonic() - started, 2))
+    payload.setdefault("returncode", result.returncode)
+    payload.setdefault("controller_duration_s", round(result.duration_s, 2))
     return payload
 
 
 def _sweep() -> int:
     RESULT.write_text("[]\n", encoding="utf-8")
     results: list[dict[str, Any]] = []
-    device_probe = subprocess.run(
+    device_probe = run_streaming(
         [str(PYTHON), "-c", "import torch; print(torch.cuda.get_device_name(0))"],
+        name="device probe",
         cwd=ROOT,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        check=False,
+        timeout=120,
     )
-    print(device_probe.stdout or "", flush=True)
+    if device_probe.returncode != 0:
+        return device_probe.returncode
 
     # Exponential candidates make the first OOM visible while keeping the VM
     # cost bounded.  Once a candidate fails, larger points are not informative
@@ -772,7 +768,14 @@ def main() -> int:
             parser.error("--child requires --phase and --batch")
         return 0 if _child_base(args.phase, args.batch).get("status") in {"passed", "oom"} else 2
     _prepare()
-    subprocess.run(["uv", "sync", "--locked", "--no-dev", "--extra", "colab"], cwd=ROOT, check=True)
+    install = run_streaming(
+        ["uv", "sync", "--locked", "--no-dev", "--extra", "colab"],
+        name="install colab dependencies",
+        cwd=ROOT,
+        timeout=2400,
+    )
+    if install.returncode != 0:
+        return install.returncode
     return _sweep()
 
 

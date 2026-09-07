@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from smolqwen.config_models import EvalConfig
-from smolqwen.console import logger, progress_task, status_table
+from smolqwen.console import logger, phase, progress_task, status_table
 from smolqwen.eval.adapters import create_adapter
 from smolqwen.eval.adapters.base import BenchmarkAdapter, EvalTask
 from smolqwen.eval.batched import evaluate_batched, generation_for
@@ -194,10 +194,12 @@ def _evaluate_named_adapter(
     tokenizer: Any | None = None,
 ) -> tuple[dict[str, dict[str, float]], Mapping[str, Any]]:
     """Score one benchmark through local vLLM or the HTTP compatibility path."""
-    adapter = create_adapter(name, config)
-    tasks = adapter.load_tasks()
+    with phase(f"evaluate {name}: create adapter and load tasks"):
+        adapter = create_adapter(name, config)
+        tasks = adapter.load_tasks()
     try:
-        invariants = adapter.manifest_invariants(tasks)
+        with phase(f"evaluate {name}: compute benchmark manifest"):
+            invariants = adapter.manifest_invariants(tasks)
         if backend is not None:
             metrics = evaluate_batched(
                 config,
@@ -244,14 +246,15 @@ def run_evaluation(config: EvalConfig, args: Any) -> int:
     if not adapter_names:
         raise ValueError("evaluation requires at least one benchmark adapter")
 
-    resolved = resolve_checkpoint(
-        checkpoint=args.checkpoint,
-        revision=args.revision,
-        adapter=args.adapter_path,
-        adapter_revision=args.adapter_revision,
-        endpoint=args.endpoint,
-        store=_checkpoint_store(config, args),
-    )
+    with phase("evaluate: resolve pinned checkpoint"):
+        resolved = resolve_checkpoint(
+            checkpoint=args.checkpoint,
+            revision=args.revision,
+            adapter=args.adapter_path,
+            adapter_revision=args.adapter_revision,
+            endpoint=args.endpoint,
+            store=_checkpoint_store(config, args),
+        )
     generation = generation_for(config, resolved)
     policy = (
         load_http_policy(
@@ -270,7 +273,11 @@ def run_evaluation(config: EvalConfig, args: Any) -> int:
         else None
     )
     inference_backend = generation.backend
-    tokenizer = _tokenizer_for(resolved) if inference_backend is not None else None
+    if inference_backend is not None:
+        with phase("evaluate: load checkpoint tokenizer"):
+            tokenizer = _tokenizer_for(resolved)
+    else:
+        tokenizer = None
     adapter_invariants: dict[str, Mapping[str, Any]] = {}
     metrics: dict[str, dict[str, float]] = {}
     tag = args.tag or "evaluation"

@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Any
 
 from smolqwen.config_models import GrpoConfig
-from smolqwen.console import logger
+from smolqwen.console import logger, phase
 from smolqwen.env.pool import WorkerPool
 from smolqwen.env.scenarios import Scenario, load_scenarios
 
@@ -148,28 +148,33 @@ def run_selftest(
     target_id = scenario_id or DEFAULT_SCENARIO_ID
     sequence = tuple(script or DEFAULT_SCRIPT)
 
-    scenarios = {
-        s.task_id: s
-        for s in load_scenarios(scenario_path, sha256=config.env.vendored_rl_scenarios_sha256)
-    }
+    with phase("env-selftest: load pinned scenarios"):
+        scenarios = {
+            s.task_id: s
+            for s in load_scenarios(scenario_path, sha256=config.env.vendored_rl_scenarios_sha256)
+        }
     scenario = scenarios.get(target_id)
     if scenario is None:
         raise SelfTestError(f"scenario {target_id!r} not found in {scenario_path}")
 
-    with WorkerPool(
-        metadata_path=str(metadata_path),
-        metadata_sha256=config.env.vendored_env_metadata_sha256,
-        scenario_path=str(scenario_path),
-        scenario_sha256=config.env.vendored_rl_scenarios_sha256,
-        worker_count=config.profile.env_worker_count,
-        episodes_per_worker=config.profile.env_episodes_per_worker,
-        create_timeout_s=config.env.create_timeout_s,
-        step_timeout_s=config.env.step_timeout_s,
-        verify_timeout_s=config.env.verify_timeout_s,
-    ) as pool:
-        initial = run_episode(pool, scenario, (), episode_id="selftest-initial")
-        partial = run_episode(pool, scenario, sequence[:1], episode_id="selftest-partial")
-        full = run_episode(pool, scenario, sequence, episode_id="selftest-full")
+    with phase("env-selftest: start worker pool and run scripted episodes"):
+        with WorkerPool(
+            metadata_path=str(metadata_path),
+            metadata_sha256=config.env.vendored_env_metadata_sha256,
+            scenario_path=str(scenario_path),
+            scenario_sha256=config.env.vendored_rl_scenarios_sha256,
+            worker_count=config.profile.env_worker_count,
+            episodes_per_worker=config.profile.env_episodes_per_worker,
+            create_timeout_s=config.env.create_timeout_s,
+            step_timeout_s=config.env.step_timeout_s,
+            verify_timeout_s=config.env.verify_timeout_s,
+        ) as pool:
+            LOG.info("selftest episode initial: create/score")
+            initial = run_episode(pool, scenario, (), episode_id="selftest-initial")
+            LOG.info("selftest episode partial: %d tool step", len(sequence[:1]))
+            partial = run_episode(pool, scenario, sequence[:1], episode_id="selftest-partial")
+            LOG.info("selftest episode full: %d tool steps", len(sequence))
+            full = run_episode(pool, scenario, sequence, episode_id="selftest-full")
 
     # Exact fractions, not inequalities: a verifier stuck at 0.0 satisfies
     # "partial < full" while measuring nothing.

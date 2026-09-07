@@ -37,6 +37,10 @@ smolqwen evaluate \
   --profile l4
 ```
 
+Evaluation logs checkpoint resolution, tokenizer loading, and vLLM construction
+before scoring starts. Blocking phases emit a heartbeat every 30 seconds; per-task
+progress and final report paths go to stderr/stdout respectively.
+
 The shipped config scores `multi_turn_base` only (the other three v3 multi-turn
 categories remain adapter-owned but are not part of this experiment). User turns
 come from the pinned benchmark files; no user-simulator or judge API key is

@@ -21,10 +21,12 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from smolqwen.console import logger
 from smolqwen.inference.episode import DriftTally, Episode
 from smolqwen.rollout.profiler import TimelineProfile
 
 LOGP_DIFFERENCE_METRIC = "sampling/sampling_logp_difference/max"
+LOG = logger(__name__)
 
 
 class GpuUtilizationSampler:
@@ -197,6 +199,17 @@ class LogpDifferenceStopCallback:
         logs: Mapping[str, float] | None = None,
         **kwargs: Any,
     ) -> Any:
+        if logs:
+            visible = {
+                key: logs[key]
+                for key in ("loss", "reward", "grad_norm", "learning_rate", LOGP_DIFFERENCE_METRIC)
+                if key in logs
+            }
+            LOG.info(
+                "train-grpo step %s: %s",
+                getattr(state, "global_step", "unknown"),
+                visible or "metrics logged",
+            )
         if logs is not None and should_stop_on_logp_difference(logs, threshold=self.threshold):
             control.should_training_stop = True
         return control

@@ -15,7 +15,7 @@ from transformers import TrainerCallback
 
 from smolqwen.artifacts import CheckpointStore, ResumeState
 from smolqwen.config_models import EvalConfig, GrpoConfig
-from smolqwen.console import console, logger
+from smolqwen.console import console, logger, phase
 from smolqwen.env.pool import WorkerPool
 from smolqwen.env.registry import EnvSpec, load_env_specs
 from smolqwen.env.scenarios import Scenario, load_scenarios
@@ -132,6 +132,7 @@ class GrpoCheckpointCallback(TrainerCallback):
 
     def on_save(self, args: Any, state: Any, control: Any, **kwargs: Any) -> Any:
         step = int(state.global_step)
+        LOG.info("train-grpo checkpoint step %d: saving adapter and trainer state", step)
         checkpoint = Path(args.output_dir) / f"checkpoint-{step}"
         if checkpoint.is_dir():
             self.store.save_adapter(checkpoint)
@@ -559,7 +560,8 @@ def build_grpo_trainer(
     class ScenarioGRPOTrainer(ScenarioGRPOTrainerMixin, GRPOTrainer):
         pass
 
-    specs, all_scenarios = _load_catalog(config)
+    with phase("train-grpo: load environment catalog and scenarios"):
+        specs, all_scenarios = _load_catalog(config)
     order = [scenario.task_id for scenario in all_scenarios]
     random.Random(config.training.seed).shuffle(order)
     groups_per_generation = config.profile.generation_batch_size // config.profile.num_generations
@@ -578,9 +580,10 @@ def build_grpo_trainer(
         [_dataset_row(scenario, specs[scenario.env_id]) for scenario in train_scenarios]
     )
 
-    tokenizer = assert_text_only_processing_class(
-        load_tokenizer(config.model_id, revision=config.model_revision)
-    )
+    with phase("train-grpo: load tokenizer"):
+        tokenizer = assert_text_only_processing_class(
+            load_tokenizer(config.model_id, revision=config.model_revision)
+        )
     attn = resolve_attn_implementation(config.optimization.attn_implementation)
     precision = resolve_precision(config.optimization.bf16)
     liger = resolve_liger(config.optimization.liger_fused_linear_cross_entropy)
@@ -621,19 +624,20 @@ def build_grpo_trainer(
                 f"environment pool capacity {capacity} < generation batch "
                 f"{config.profile.generation_batch_size}"
             )
-        pool = WorkerPool(
-            metadata_path=config.env.vendored_env_metadata,
-            metadata_sha256=config.env.vendored_env_metadata_sha256,
-            scenario_path=config.env.vendored_rl_scenarios,
-            scenario_sha256=config.env.vendored_rl_scenarios_sha256,
-            worker_count=config.profile.env_worker_count,
-            episodes_per_worker=config.profile.env_episodes_per_worker,
-            call_timeout_s=config.env.step_timeout_s,
-            create_timeout_s=config.env.create_timeout_s,
-            step_timeout_s=config.env.step_timeout_s,
-            verify_timeout_s=config.env.verify_timeout_s,
-        )
-        pool.start()
+        with phase("train-grpo: start environment worker pool"):
+            pool = WorkerPool(
+                metadata_path=config.env.vendored_env_metadata,
+                metadata_sha256=config.env.vendored_env_metadata_sha256,
+                scenario_path=config.env.vendored_rl_scenarios,
+                scenario_sha256=config.env.vendored_rl_scenarios_sha256,
+                worker_count=config.profile.env_worker_count,
+                episodes_per_worker=config.profile.env_episodes_per_worker,
+                call_timeout_s=config.env.step_timeout_s,
+                create_timeout_s=config.env.create_timeout_s,
+                step_timeout_s=config.env.step_timeout_s,
+                verify_timeout_s=config.env.verify_timeout_s,
+            )
+            pool.start()
         dispatcher = PoolDispatcher(pool, max_workers=config.profile.env_worker_count)
         rollout_func = None
         environment_factories: Mapping[str, Any] = {}
@@ -662,15 +666,16 @@ def build_grpo_trainer(
             rollout_func=rollout_func,
             environment_factories=environment_factories,
         )
-        with _force_trl_prefix_caching() if use_vllm else nullcontext():
-            trainer = ScenarioGRPOTrainer(
-                model=config.model_id,
-                args=args,
-                train_dataset=train_dataset,
-                processing_class=tokenizer,
-                peft_config=_lora_config(config),
-                **rollout_kwargs,
-            )
+        with phase("train-grpo: build trainer and colocated vLLM"):
+            with _force_trl_prefix_caching() if use_vllm else nullcontext():
+                trainer = ScenarioGRPOTrainer(
+                    model=config.model_id,
+                    args=args,
+                    train_dataset=train_dataset,
+                    processing_class=tokenizer,
+                    peft_config=_lora_config(config),
+                    **rollout_kwargs,
+                )
         if liger.enabled:
             # ponytail: keep Liger's fused loss, skip only its torch.compile guard
             # path; torch 2.11/Liger 0.8.2 raises on dynamic sequence shapes.
@@ -716,15 +721,18 @@ def build_grpo_trainer(
 
 
 def run_train_grpo(config: GrpoConfig, *, resume: bool = False) -> int:
-    assembled = build_grpo_trainer(config, resume=resume)
+    with phase("train-grpo: assemble run"):
+        assembled = build_grpo_trainer(config, resume=resume)
     try:
         console().print(format_ledger(list(assembled.toggles)))
         LOG.info(
             "train %d scenarios",
             len(assembled.train_task_ids),
         )
-        assembled.trainer.train(resume_from_checkpoint=assembled.resume_from)
-        assembled.trainer.save_model(config.output_dir)
+        with phase("train-grpo: optimizer training"):
+            assembled.trainer.train(resume_from_checkpoint=assembled.resume_from)
+        with phase("train-grpo: save final checkpoint"):
+            assembled.trainer.save_model(config.output_dir)
         return 0
     finally:
         assembled.shutdown()

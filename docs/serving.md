@@ -18,6 +18,10 @@ export SMOLQWEN_PROFILE=l4
 docker compose up --build vllm-server proxy
 ```
 
+`setup_colab.sh` emits timestamped phase logs and 30-second heartbeats during
+dependency installation, submodule restore, and kernel checks. The serving CLI
+keeps a heartbeat while vLLM runs, and vLLM's own output remains visible.
+
 Use `a100` instead of `l4` only on that target. Readiness is an authenticated
 model query, not merely an open port:
 

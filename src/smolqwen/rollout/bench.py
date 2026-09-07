@@ -29,7 +29,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, cast
 
-from smolqwen.console import logger
+from smolqwen.console import logger, phase
 from smolqwen.data.loader import ToolCall
 from smolqwen.data.tool_call_xml import serialize_tool_call
 from smolqwen.env.parse import parse_turn
@@ -232,7 +232,8 @@ def run_equivalence(config: Any, *, episodes: int, verbose: bool = True) -> dict
     from smolqwen.rollout.rollout_func import make_turn_engine
     from smolqwen.tokenizer import load_tokenizer
 
-    env_specs, scenarios = load_workload(config)
+    with phase("rollout-bench: load environment workload"):
+        env_specs, scenarios = load_workload(config)
     workload = default_bench_scenarios(scenarios)
     if not workload:
         raise BenchError("no bench scenario with a known script found in the scenario table")
@@ -243,7 +244,8 @@ def run_equivalence(config: Any, *, episodes: int, verbose: bool = True) -> dict
         num_generations=config.profile.num_generations,
     )
     policy = scripted_policy({DEFAULT_SCENARIO_ID: DEFAULT_SCRIPT})
-    tokenizer = load_tokenizer(config.model_id)
+    with phase("rollout-bench: load tokenizer"):
+        tokenizer = load_tokenizer(config.model_id)
 
     with _pool_for(config) as pool:
         oracle_started = time.monotonic()
@@ -358,10 +360,12 @@ def _run_scripted_ab(config: Any, args: Any) -> list[str]:
     with _pool_for(config) as pool:
         for path in [part.strip() for part in args.paths.split(",")]:
             if path == "serial_oracle":
+                LOG.info("rollout-bench: run serial oracle (%d episodes)", len(bindings))
                 started = time.monotonic()
-                outcomes = run_serial_factory_oracle_scripted(
-                    pool=pool, bindings=bindings, env_specs=env_specs, policy=policy
-                )
+                with phase(f"rollout-bench: serial oracle ({len(bindings)} episodes)"):
+                    outcomes = run_serial_factory_oracle_scripted(
+                        pool=pool, bindings=bindings, env_specs=env_specs, policy=policy
+                    )
                 wall = time.monotonic() - started
                 rewards = [float(outcome["reward"]) for outcome in outcomes]
                 rows.append(
@@ -377,6 +381,7 @@ def _run_scripted_ab(config: Any, args: Any) -> list[str]:
                     ).as_markdown()
                 )
             elif path == "async":
+                LOG.info("rollout-bench: run async scheduler (%d episodes)", len(bindings))
                 dispatcher = PoolDispatcher(pool)
                 scheduler = make_turn_engine(
                     backend=ScriptedPolicyBackend(policy, _encode_for(tokenizer)),
@@ -385,7 +390,8 @@ def _run_scripted_ab(config: Any, args: Any) -> list[str]:
                     config=turn_engine_config(config),
                 )
                 started = time.monotonic()
-                episodes_run = scheduler.run(bindings)
+                with phase(f"rollout-bench: async scheduler ({len(bindings)} episodes)"):
+                    episodes_run = scheduler.run(bindings)
                 wall = time.monotonic() - started
                 dispatcher.shutdown()
                 summary = summarize_episodes(episodes=episodes_run, wall_s=wall)

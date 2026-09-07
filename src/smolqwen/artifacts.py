@@ -19,6 +19,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
+from smolqwen.console import phase
+
 RESUME_MARKER = "resume_state.json"
 
 
@@ -127,9 +129,10 @@ class CheckpointStore:
         if source.resolve() == target.resolve():
             return target
         target.parent.mkdir(parents=True, exist_ok=True)
-        if target.exists():
-            shutil.rmtree(target)
-        shutil.copytree(source, target)
+        with phase(f"checkpoint: copy adapter to {target}"):
+            if target.exists():
+                shutil.rmtree(target)
+            shutil.copytree(source, target)
         return target
 
     def push(self, *, commit_message: str, folder: Path | str | None = None) -> None:
@@ -146,12 +149,13 @@ class CheckpointStore:
                 self.repo_id, private=self.private, exist_ok=True, repo_type=self.repo_type
             )
             self._repo_created = True
-        hub.upload_folder(
-            repo_id=self.repo_id,
-            folder_path=str(folder_path),
-            commit_message=commit_message,
-            repo_type=self.repo_type,
-        )
+        with phase(f"checkpoint: upload {folder_path}"):
+            hub.upload_folder(
+                repo_id=self.repo_id,
+                folder_path=str(folder_path),
+                commit_message=commit_message,
+                repo_type=self.repo_type,
+            )
 
     def latest_revision(self) -> str | None:
         """The newest revision sha on the main branch.
@@ -181,12 +185,13 @@ class CheckpointStore:
         assert self.repo_id is not None
         target = Path(local_dir) if local_dir is not None else self.local_dir
         target.mkdir(parents=True, exist_ok=True)
-        path = self._hub().snapshot_download(
-            repo_id=self.repo_id,
-            revision=revision,
-            local_dir=str(target),
-            repo_type=self.repo_type,
-        )
+        with phase(f"checkpoint: download revision {revision[:8]}"):
+            path = self._hub().snapshot_download(
+                repo_id=self.repo_id,
+                revision=revision,
+                local_dir=str(target),
+                repo_type=self.repo_type,
+            )
         return Path(path)
 
     def write_resume_state(self, state: ResumeState) -> Path:

@@ -34,7 +34,7 @@ from transformers import TrainerCallback
 
 from smolqwen.artifacts import CheckpointStore, ResumeState
 from smolqwen.config_models import SftConfig
-from smolqwen.console import console, logger
+from smolqwen.console import console, logger, phase
 from smolqwen.tokenizer import assert_text_only_processing_class, load_tokenizer
 from smolqwen.tracking import Tracker
 from smolqwen.training.collate import (
@@ -678,6 +678,15 @@ class ThroughputCallback(TrainerCallback):
                 "sft/projected_positions": self.trainer._step_projected_positions,
             }
         self.tracker.log_step(tokens=tokens, step=int(state.global_step), **extra)
+        LOG.info(
+            "train-sft step %d: tokens=%s supervised=%s trajectories=%s microbatches=%s max_len=%s",
+            int(state.global_step),
+            tokens,
+            extra.get("sft/supervised_tokens", "n/a"),
+            extra.get("sft/trajectories", "n/a"),
+            extra.get("sft/microbatches", "n/a"),
+            extra.get("sft/max_trajectory_length", "n/a"),
+        )
 
     def on_log(self, args: Any, state: Any, control: Any, **kwargs: Any) -> None:
         logs = kwargs.get("logs")
@@ -698,7 +707,9 @@ class CheckpointPushCallback(TrainerCallback):
         self.tracker = tracker
 
     def on_save(self, args: Any, state: Any, control: Any, **kwargs: Any) -> None:
-        checkpoint = Path(args.output_dir) / f"checkpoint-{int(state.global_step)}"
+        step = int(state.global_step)
+        LOG.info("train-sft checkpoint step %d: saving adapter and trainer state", step)
+        checkpoint = Path(args.output_dir) / f"checkpoint-{step}"
         if not checkpoint.is_dir():
             return
         self.store.save_adapter(checkpoint)
@@ -706,10 +717,10 @@ class CheckpointPushCallback(TrainerCallback):
             ResumeState(
                 revision=None,
                 wandb_run_id=self.tracker.run_id,
-                global_step=int(state.global_step),
+                global_step=step,
             )
         )
-        self.store.push(commit_message=f"adapter at step {int(state.global_step)}")
+        self.store.push(commit_message=f"adapter at step {step}")
 
 
 def _resolve_resume(
@@ -848,9 +859,11 @@ def run_train_sft(config: SftConfig, *, resume: bool = False) -> int:
     set, loss curve on the training loss alone. Capability is measured by GRPO's
     benchmark boundary after SFT.
     """
-    runtime = resolve_sft_runtime(config, require_cuda=True, require_kernels=True)
-    assert_sft_runtime(runtime)
-    assembled = build_trainer(config, resume=resume, runtime=runtime)
+    with phase("train-sft: resolve GPU runtime and kernels"):
+        runtime = resolve_sft_runtime(config, require_cuda=True, require_kernels=True)
+        assert_sft_runtime(runtime)
+    with phase("train-sft: load model and assemble trainer"):
+        assembled = build_trainer(config, resume=resume, runtime=runtime)
     trainer = assembled.trainer
     console().print(format_ledger(list(assembled.toggles)))
     train = assembled.train_stats
@@ -861,6 +874,8 @@ def run_train_sft(config: SftConfig, *, resume: bool = False) -> int:
         train.supervised_tokens,
     )
 
-    trainer.train(resume_from_checkpoint=assembled.resume_from)
-    trainer.save_model(config.output_dir)
+    with phase("train-sft: optimizer training"):
+        trainer.train(resume_from_checkpoint=assembled.resume_from)
+    with phase("train-sft: save final checkpoint"):
+        trainer.save_model(config.output_dir)
     return 0

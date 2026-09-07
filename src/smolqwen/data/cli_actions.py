@@ -17,7 +17,7 @@ from threading import get_ident, local
 from typing import Any
 
 from smolqwen.config_models import DataConfig, DatasetPin
-from smolqwen.console import logger, progress_task, status_table
+from smolqwen.console import logger, phase, progress_task, status_table
 from smolqwen.data.convert_sft import (
     SFT_SEMANTICS,
     SFT_SEMANTICS_NON_REASONING,
@@ -74,9 +74,10 @@ def run_prepare_sft(config: DataConfig, *, workers: int | None = None) -> int:
     output_dir = Path(config.output_dir)
     cap = config.max_seq_length
 
-    LOG.info("resolving pinned dataset")
-    sft_path = _resolve_dataset(config.sft_trajectories)
-    tokenizer = _tokenizer(config)
+    with phase("prepare-sft: resolve pinned dataset"):
+        sft_path = _resolve_dataset(config.sft_trajectories)
+    with phase("prepare-sft: load tokenizer"):
+        tokenizer = _tokenizer(config)
     shape = config.tool_result_shape
     reasoning = config.enable_thinking
     worker_count = _prepare_worker_count(workers)
@@ -84,18 +85,19 @@ def run_prepare_sft(config: DataConfig, *, workers: int | None = None) -> int:
     report = ConversionReport()
     train_path = output_dir / "sft" / "train.jsonl"
     LOG.info("rendering and writing with %d workers", worker_count)
-    with progress_task("prepare-sft render/write") as advance:
-        stats = _write_shards(
-            sft_path,
-            cap,
-            tokenizer,
-            shape,
-            train_path,
-            report,
-            reasoning=reasoning,
-            progress=advance,
-            workers=worker_count,
-        )
+    with phase("prepare-sft: render and write train shard"):
+        with progress_task("prepare-sft render/write") as advance:
+            stats = _write_shards(
+                sft_path,
+                cap,
+                tokenizer,
+                shape,
+                train_path,
+                report,
+                reasoning=reasoning,
+                progress=advance,
+                workers=worker_count,
+            )
 
     report_path = output_dir / "conversion_report.json"
     report_path.write_text(

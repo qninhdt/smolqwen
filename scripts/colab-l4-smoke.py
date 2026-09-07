@@ -21,6 +21,11 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+try:
+    from colab_logging import run_streaming
+except ModuleNotFoundError:  # imported from the repository root in tests
+    from scripts.colab_logging import run_streaming
+
 ROOT = Path("/content/smolqwen")
 ARCHIVE = Path("/content/smolqwen-l4-src.tgz")
 RESULT = Path("/content/smolqwen-l4-smoke-results.json")
@@ -112,20 +117,15 @@ def record(name: str, status: str, **details: Any) -> None:
 
 
 def run(name: str, command: list[str], *, timeout: int = 1800) -> None:
-    print(f"\n=== {name} ===", flush=True)
-    started = time.monotonic()
     try:
-        completed = subprocess.run(
+        result = run_streaming(
             command,
+            name=name,
             cwd=ROOT,
             timeout=timeout,
-            check=False,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
         )
     except subprocess.TimeoutExpired as exc:
-        duration = round(time.monotonic() - started, 2)
+        duration = float(timeout)
         output = exc.output or ""
         if isinstance(output, bytes):
             output = output.decode(errors="replace")
@@ -141,20 +141,20 @@ def run(name: str, command: list[str], *, timeout: int = 1800) -> None:
             timeout_s=timeout,
         )
         raise StepFailure(f"{name} timed out after {timeout}s") from exc
-    duration = round(time.monotonic() - started, 2)
-    output = completed.stdout or ""
-    if completed.returncode != 0:
+    duration = result.duration_s
+    output = result.output
+    if result.returncode != 0:
         tail = output[-12000:]
         if tail:
             print(tail, file=sys.stderr, flush=True)
         record(
             name,
             "failed",
-            returncode=completed.returncode,
+            returncode=result.returncode,
             duration_s=duration,
             output_tail=tail,
         )
-        raise StepFailure(f"{name} failed with exit code {completed.returncode}")
+        raise StepFailure(f"{name} failed with exit code {result.returncode}")
     record(name, "passed", returncode=0, duration_s=duration)
 
 
@@ -172,6 +172,9 @@ def request_json(url: str, payload: dict[str, Any] | None = None) -> Any:
 def wait_for_server(process: subprocess.Popen[Any], log_path: Path, *, timeout: int = 900) -> None:
     deadline = time.monotonic() + timeout
     last_error = "not attempted"
+    started = time.monotonic()
+    last_report = started
+    log_offset = 0
     while time.monotonic() < deadline:
         if process.poll() is not None:
             tail = "\n".join(log_path.read_text(encoding="utf-8").splitlines()[-80:])
@@ -185,6 +188,18 @@ def wait_for_server(process: subprocess.Popen[Any], log_path: Path, *, timeout: 
                     return
         except (OSError, urllib.error.URLError) as exc:
             last_error = str(exc)
+        now = time.monotonic()
+        if now - last_report >= 30:
+            text = log_path.read_text(encoding="utf-8") if log_path.is_file() else ""
+            new_text = text[log_offset:]
+            log_offset = len(text)
+            print(
+                f"[vllm-serve-smoke] still waiting ({now - started:.0f}s); last_error={last_error}",
+                flush=True,
+            )
+            if new_text:
+                print(new_text[-4000:], flush=True)
+            last_report = now
         time.sleep(2)
     raise StepFailure(f"vLLM readiness timed out: {last_error}")
 
@@ -209,13 +224,20 @@ def prepare() -> None:
     for url, relative_path, revision in SUBMODULES:
         destination = ROOT / relative_path
         destination.mkdir(parents=True)
-        subprocess.run(["git", "-C", str(destination), "init"], check=True)
-        subprocess.run(["git", "-C", str(destination), "remote", "add", "origin", url], check=True)
-        subprocess.run(
-            ["git", "-C", str(destination), "fetch", "--depth", "1", "origin", revision],
-            check=True,
+        run_streaming(["git", "-C", str(destination), "init"], name=f"{relative_path}: git init")
+        run_streaming(
+            ["git", "-C", str(destination), "remote", "add", "origin", url],
+            name=f"{relative_path}: add remote",
         )
-        subprocess.run(["git", "-C", str(destination), "checkout", "FETCH_HEAD"], check=True)
+        run_streaming(
+            ["git", "-C", str(destination), "fetch", "--depth", "1", "origin", revision],
+            name=f"{relative_path}: fetch {revision[:8]}",
+            timeout=900,
+        )
+        run_streaming(
+            ["git", "-C", str(destination), "checkout", "FETCH_HEAD"],
+            name=f"{relative_path}: checkout",
+        )
     record("prepare-source", "passed")
 
 

@@ -27,7 +27,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from smolqwen.config_models import EvalConfig
-from smolqwen.console import logger, progress_task
+from smolqwen.console import logger, phase, progress_task
 from smolqwen.eval.adapters.base import AdapterResult, BenchmarkAdapter, EvalTask
 from smolqwen.eval.checkpoints import ResolvedCheckpoint
 from smolqwen.eval.driver import AdapterDriver, TaskBinding
@@ -66,12 +66,13 @@ def generation_for(config: EvalConfig, resolved: ResolvedCheckpoint) -> Generati
     from smolqwen.inference.engine import OfflineEngineBackend, offline_engine_for_eval
 
     adapters = {ADAPTER_SLOT: resolved.adapter_path} if resolved.adapter_path else None
-    engine = offline_engine_for_eval(
-        resolved.path,
-        EvalProfile.from_config(config),
-        revision=resolved.revision,
-        adapter=adapters,
-    )
+    with phase(f"evaluate: build vLLM engine ({resolved.path})"):
+        engine = offline_engine_for_eval(
+            resolved.path,
+            EvalProfile.from_config(config),
+            revision=resolved.revision,
+            adapter=adapters,
+        )
     path = "vllm+lora" if adapters else "vllm"
     LOG.info("generating through in-process vLLM (%s), dtype %s", path, engine.profile.dtype)
     return Generation(
