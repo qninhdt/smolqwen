@@ -1,8 +1,12 @@
-"""One console for every command: rich on **stderr**, machine output on stdout.
+"""One console for every command: rich on stderr locally, machine output on stdout.
 
 stdout is a contract here, not a convenience. Machine-readable command output stays
 on stdout, while every human-facing line goes to stderr so `smolqwen ... | jq` keeps
 working while a run is still legible.
+
+Colab is the exception: its shell output can hold and reorder stderr.  There, human
+output uses stdout so a directly-run CLI cell streams immediately.  Set
+`SMOLQWEN_LOG_STREAM=stderr` to retain a parseable stdout stream in a Colab shell.
 
 The concrete failure this fixes: `eval/runner.py` used to run for hours and emit one
 JSON line at the end, so a stalled run was indistinguishable from a slow one.
@@ -41,6 +45,7 @@ from rich.table import Table
 
 # Read at `configure_logging` time so a Colab cell can set it without a flag.
 LOG_LEVEL_ENV = "SMOLQWEN_LOG_LEVEL"
+LOG_STREAM_ENV = "SMOLQWEN_LOG_STREAM"
 
 # Libraries whose own loggers should reach the same handler. Left as strings rather
 # than imports: this module must stay free of torch and vllm, and `logging` resolves
@@ -52,19 +57,33 @@ LIBRARY_LOGGERS = ("transformers", "trl", "vllm", "peft", "accelerate", "dataset
 PLAIN_LINE_EVERY = 250
 
 _console: Console | None = None
+_console_uses_stdout: bool | None = None
+
+
+def _logs_to_stdout() -> bool:
+    """Use Colab's reliable stream, unless the caller explicitly selects stderr."""
+    selected = os.environ.get(LOG_STREAM_ENV, "").strip().lower()
+    if selected == "stdout":
+        return True
+    if selected == "stderr":
+        return False
+    return bool(os.environ.get("COLAB_GPU") or os.environ.get("COLAB_RELEASE_TAG"))
 
 
 def console() -> Console:
-    """The one console. On stderr, so stdout stays a machine-readable stream."""
-    global _console
-    if _console is None:
-        _console = Console(stderr=True)
+    """The one console, switching only for a directly-run Colab cell."""
+    global _console, _console_uses_stdout
+    uses_stdout = _logs_to_stdout()
+    if _console is None or _console_uses_stdout != uses_stdout:
+        _console = Console(stderr=not uses_stdout)
+        _console_uses_stdout = uses_stdout
     return _console
 
 
 def is_terminal() -> bool:
     """Whether a redrawing progress bar is appropriate for this output stream."""
-    return bool(getattr(sys.stderr, "isatty", lambda: False)())
+    stream = sys.stdout if _logs_to_stdout() else sys.stderr
+    return bool(getattr(stream, "isatty", lambda: False)())
 
 
 def resolve_level(*, verbose: bool = False, quiet: bool = False) -> int:
@@ -158,7 +177,7 @@ def progress_task(
     unit: str = "items",
     every: int = PLAIN_LINE_EVERY,
 ) -> Iterator[Callable[..., None]]:
-    """A progress bar plus periodic plain lines, both on stderr.
+    """A progress bar plus periodic plain lines on the active human-output stream.
 
     Yields an `advance(detail=...)` the caller invokes once per unit of work. The
     plain lines are not redundant with the bar: outside a terminal the bar cannot
@@ -211,7 +230,7 @@ def progress_task(
 
 
 def status_table(title: str, rows: dict[str, Any]) -> None:
-    """Print a two-column summary to stderr. Never a substitute for a JSON emitter."""
+    """Print a two-column summary to the human-output stream, never as JSON."""
     table = Table(title=title, show_header=False, title_justify="left")
     table.add_column("field", style="bold")
     table.add_column("value")

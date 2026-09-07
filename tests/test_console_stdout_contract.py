@@ -33,7 +33,7 @@ import pytest
 from smolqwen.cli import SUBCOMMAND_STAGES, main
 from smolqwen.config import resolve
 from smolqwen.config_models import SftConfig
-from smolqwen.console import configure_logging, logger, progress_task
+from smolqwen.console import LOG_STREAM_ENV, configure_logging, logger, progress_task
 
 SRC = Path(__file__).resolve().parents[1] / "src" / "smolqwen"
 
@@ -356,6 +356,33 @@ def test_progress_and_logs_never_reach_stdout(capsys: pytest.CaptureFixture[str]
     assert "unit: 2/2 things" in captured.err
     assert "unit complete: 2 things" in captured.err
     assert "a log line" in captured.err
+
+
+def test_colab_logs_and_progress_stream_on_stdout(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Colab's shell can delay stderr, so its human stream is stdout by design."""
+    monkeypatch.setenv("COLAB_GPU", "L4")
+    configure_logging(level=logging.INFO)
+    with progress_task("unit", total=1, unit="thing", every=1) as advance:
+        advance()
+    logger("test").info("a Colab log line")
+    captured = capsys.readouterr()
+    assert "unit: 1/1 thing" in captured.out
+    assert "a Colab log line" in captured.out
+    assert captured.err == ""
+
+
+def test_colab_can_force_logs_back_to_stderr_for_a_pipeline(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("COLAB_GPU", "L4")
+    monkeypatch.setenv(LOG_STREAM_ENV, "stderr")
+    configure_logging(level=logging.INFO)
+    logger("test").info("pipeline log")
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "pipeline log" in captured.err
 
 
 def test_a_failing_progress_task_says_so_and_still_closes(

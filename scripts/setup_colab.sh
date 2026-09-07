@@ -6,7 +6,7 @@ cd "$project_root"
 
 heartbeat_s="${SMOLQWEN_SETUP_HEARTBEAT_S:-30}"
 log() {
-  printf '[setup %s] %s\n' "$(date '+%H:%M:%S')" "$*" >&2
+  printf '[setup %s] %s\n' "$(date '+%H:%M:%S')" "$*"
 }
 
 run_step() {
@@ -16,10 +16,12 @@ run_step() {
   log "START: $label"
   "$@" &
   local pid=$!
+  local last_heartbeat=$started
   while kill -0 "$pid" 2>/dev/null; do
-    sleep "$heartbeat_s"
-    if kill -0 "$pid" 2>/dev/null; then
+    sleep 1
+    if kill -0 "$pid" 2>/dev/null && ((SECONDS - last_heartbeat >= heartbeat_s)); then
       log "WAITING: $label ($((SECONDS - started))s elapsed)"
+      last_heartbeat=$SECONDS
     fi
   done
   if wait "$pid"; then

@@ -58,7 +58,7 @@ def _add_logging(parser: argparse.ArgumentParser) -> None:
     `SMOLQWEN_LOG_LEVEL` covers the Colab case where there is no place to add a flag.
     """
     group = parser.add_mutually_exclusive_group()
-    group.add_argument("--verbose", action="store_true", help="debug-level logs on stderr")
+    group.add_argument("--verbose", action="store_true", help="debug-level human logs")
     group.add_argument(
         "--quiet", action="store_true", help="errors only; stdout output is unaffected"
     )
@@ -231,7 +231,8 @@ def _resolve_for(args: argparse.Namespace) -> StrictModel:
 def _cmd_probe(args: argparse.Namespace) -> int:
     from smolqwen.probe import format_probe, probe, write_probe
 
-    report = probe()
+    with phase("probe: collect GPU, package, and kernel capabilities"):
+        report = probe()
     # The formatted table is what a human reads and what `notebooks/00-probe-gpu`
     # shows, and no program parses it — but `test_cli_dry_run.py:73` captures it from
     # stdout, so it stays there rather than moving to the logger.

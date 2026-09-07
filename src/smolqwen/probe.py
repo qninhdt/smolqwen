@@ -14,6 +14,10 @@ import sys
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+from smolqwen.console import logger
+
+LOG = logger(__name__)
+
 # Kernel libraries whose availability changes which optimizations Phase 3 can
 # enable. Import success is reported, never assumed.
 KERNEL_LIBRARIES = ("flash_attn", "causal_conv1d", "fla", "liger_kernel")
@@ -68,13 +72,17 @@ def _kernel_importable(module: str) -> bool:
 
 def probe() -> ProbeReport:
     """Collect capability facts about the current host."""
+    LOG.info("probe: reading installed package versions")
     report = ProbeReport(
         python_version=sys.version.split()[0],
         platform=platform.platform(),
         package_versions={name: _package_version(name) for name in PACKAGES},
-        kernel_imports={module: _kernel_importable(module) for module in KERNEL_LIBRARIES},
+        kernel_imports={},
     )
+    LOG.info("probe: checking kernel imports")
+    report.kernel_imports = {module: _kernel_importable(module) for module in KERNEL_LIBRARIES}
 
+    LOG.info("probe: importing torch and checking CUDA")
     try:
         import torch
     except ImportError:
