@@ -17,7 +17,7 @@ def _write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
     path.write_text("".join(f"{json.dumps(row)}\n" for row in rows), encoding="utf-8")
 
 
-def test_bfcl_turn_advances_only_after_completion_signal(tmp_path: Path) -> None:
+def test_bfcl_turn_advances_after_a_response_without_function_calls(tmp_path: Path) -> None:
     category = "multi_turn_base"
     entry = {
         "id": "multi_turn_base_case",
@@ -42,18 +42,15 @@ def test_bfcl_turn_advances_only_after_completion_signal(tmp_path: Path) -> None
         "role": "system",
         "content": NON_CONVERSATIONAL,
     }
-    assert adapter.step(task, "plain prose").observation.startswith("Error:")
-    assert adapter._state(task).turn_index == 0
-    assert adapter.step(task, "unfinished response").observation.startswith("Error:")
-    assert adapter._state(task).turn_index == 0
-    assert adapter.step(task, "TASK_FINISHED").observation == "second"
+    assert adapter.step(task, "plain prose").observation == "second"
+    assert adapter._state(task).turn_index == 1
+    assert adapter.step(task, "unfinished response").complete
     history = [
         {"role": "user", "content": "first"},
-        {"role": "assistant", "content": "TASK_FINISHED"},
+        {"role": "assistant", "content": "plain prose"},
         {"role": "user", "content": "second"},
     ]
     assert adapter.build_prompt(task, history) == history
-    assert adapter.step(task, "TASK_FINISHED").complete
 
 
 def test_miss_function_tools_are_revealed_at_the_holdout_turn(

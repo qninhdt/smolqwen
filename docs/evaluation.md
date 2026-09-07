@@ -42,6 +42,8 @@ before scoring starts. Per-task progress streams in the active human-output chan
 and final report paths are JSON.
 Each scored task is appended and flushed to its trajectory JSONL immediately, so an
 interrupted run retains completed trajectories rather than writing them only at the end.
+For BFCL multi-turn, a response without a decoded function call closes the current
+static user turn, matching the upstream evaluator.
 On Colab GPU runtimes this is stdout so cell output is immediate; set
 `SMOLQWEN_LOG_STREAM=stderr` when a shell pipeline needs stdout to remain JSON-only.
 

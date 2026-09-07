@@ -30,8 +30,6 @@ from smolqwen.eval.adapters.base import AdapterResult, BenchmarkAdapter, EvalTas
 from smolqwen.eval.manifest import hash_json
 from smolqwen.eval.metrics import TaskMetrics, aggregate
 from smolqwen.eval.tool_calls import (
-    is_completion_signal,
-    is_error_signal,
     parse_normalized_json_calls,
 )
 from smolqwen.prompts import NON_CONVERSATIONAL
@@ -176,24 +174,17 @@ class BfclMultiTurnAdapter:
                 tools=state.active_tools,
             )
 
-        if is_error_signal(completion):
-            state.completed = True
-            return StepResult("Trajectory failed.", complete=True, tools=state.active_tools)
-        if is_completion_signal(completion):
-            return self._advance_turn(state)
-
-        # A response without a tool call or an explicit completion marker is an
-        # invalid model action.  In particular, ordinary prose must not consume
-        # the next static benchmark question by accident.
-        if "<tool_call>" in completion:
-            state.invalid_calls += 1
-            return StepResult("Error: malformed tool call.", tools=state.active_tools)
-        return StepResult("Error: Function call or completion signal not found.")
+        # BFCL's upstream multi-turn runner treats an empty decoded response as
+        # the end of the current static user turn. Natural-language prose and an
+        # explicit completion marker both decode to no function calls; retrying
+        # them as an environment error feeds the error back to the model until the
+        # generation cap, which is not BFCL's protocol.
+        return self._advance_turn(state)
 
     def score(self, task: EvalTask) -> AdapterResult:
         """1.0 only when four conditions all hold; each reported separately.
 
-        The conditions are (a) the episode reached a completion marker, (b) it
+        The conditions are (a) the episode reached its final static turn, (b) it
         produced one state snapshot per ground-truth turn, (c) every snapshot equals
         the expected one, and (d) cumulative results cover what each turn expected.
         A bare `0.0` cannot be attributed to any of them, which is why each is a
