@@ -101,6 +101,7 @@ class EvalProfile:
     temperature: float
     top_p: float
     top_k: int
+    presence_penalty: float
     seed: int | None
     dtype: VllmDtype = "bfloat16"
 
@@ -118,6 +119,7 @@ class EvalProfile:
             temperature=decoding.temperature,
             top_p=decoding.top_p,
             top_k=decoding.top_k,
+            presence_penalty=decoding.presence_penalty,
             seed=decoding.seed,
             dtype=resolve_dtype(),
         )

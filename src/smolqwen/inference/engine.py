@@ -292,6 +292,7 @@ class OfflineEngine:
         temperature: float | None = None,
         top_p: float | None = None,
         top_k: int | None = None,
+        presence_penalty: float | None = None,
     ) -> Any:
         """Greedy by default, from the resolved decoding config.
 
@@ -306,6 +307,9 @@ class OfflineEngine:
             temperature=profile.temperature if temperature is None else temperature,
             top_p=profile.top_p if top_p is None else top_p,
             top_k=profile.top_k if top_k is None else top_k,
+            presence_penalty=(
+                profile.presence_penalty if presence_penalty is None else presence_penalty
+            ),
             max_tokens=max_new_tokens or profile.max_new_tokens,
             seed=profile.seed,
             logprobs=0,
@@ -353,6 +357,7 @@ class OfflineEngine:
         temperature: float | None = None,
         top_p: float | None = None,
         top_k: int | None = None,
+        presence_penalty: float | None = None,
     ) -> list[TokenCompletion]:
         """Generate from pre-tokenized prompts, returning token ids and logprobs.
 
@@ -371,6 +376,7 @@ class OfflineEngine:
                 temperature=temperature,
                 top_p=top_p,
                 top_k=top_k,
+                presence_penalty=presence_penalty,
             ),
         }
         if adapter is not None:
