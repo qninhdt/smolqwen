@@ -24,7 +24,7 @@ max_tokens_per_microbatch: 32768
 # --- Phase 6, set by the pool sweep (step 12), against measured episodes/hour.
 # generation_concurrency is the vLLM batch width INSIDE one rollout_func call.
 # It is not num_generations. Naming them separately is deliberate.
-generation_concurrency: 8
+generation_concurrency: 16
 active_pool_multiplier: 2
 # A colocated vLLM engine at 0.25 cannot reserve one 16K KV block after loading
 # Qwen3.5-2B; 0.40 is the lowest value observed to start on the L4. Revisit only

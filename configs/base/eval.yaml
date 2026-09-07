@@ -18,7 +18,7 @@ adapter_options:
 http_model: smolqwen
 http_timeout_s: 60.0
 
-max_steps_per_task: 20
+max_steps_per_task: 64
 
 decoding:
   # Greedy: the comparison is the deliverable, and sampling noise across three

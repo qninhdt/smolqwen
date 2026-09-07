@@ -6,6 +6,7 @@
       "24": 0.9754,
       "32": 0.9998,
       "48": 1.0,
+      "64": 1.0,
       "8": 0.138
     }
   },
@@ -14,7 +15,7 @@
     "max_new_tokens_per_step": "Phase 6 per-step generation cap"
   },
   "recommended": {
-    "max_env_steps": 16,
+    "max_env_steps": 64,
     "max_new_tokens_per_step": 5694
   }
 }

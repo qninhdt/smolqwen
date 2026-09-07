@@ -63,7 +63,6 @@ def test_profile_overlays_only_sizing_fields(tmp_path: Path) -> None:
     # the L4 epoch-time sweep measured micro_batch 2 as the optimum there too, so
     # the two cards agree on that one field while still sizing differently.
     assert l4.profile != a100.profile
-    assert l4.profile.generation_concurrency != a100.profile.generation_concurrency
     # ...while every semantic field is identical, which is what makes the
     # L4-vs-A100 comparison the same experiment.
     assert l4.model_dump(exclude={"profile"}) == a100.model_dump(exclude={"profile"})
