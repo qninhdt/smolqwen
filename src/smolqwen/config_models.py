@@ -305,6 +305,9 @@ class EvalConfig(StrictModel):
     """Phase 5: the benchmark adapter layer and the headline table."""
 
     adapters: Sequence[str] = ()
+    # BFCL categories to evaluate (e.g. simple_python, parallel, multi_turn_base).
+    # Empty means the runner's default (multi_turn_base).
+    categories: Sequence[str] = ()
     # `False` renders eval generation prompts with Qwen's closed empty think
     # block and decodes completions as content rather than reasoning. Recorded
     # in the eval manifest's invariant set: runs at different render modes are

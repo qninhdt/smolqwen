@@ -1,4 +1,7 @@
-"""Direct BFCL multi-turn evaluation over a batched generation callback."""
+"""Direct BFCL evaluation over a batched generation callback.
+
+Supports both multi-turn (multi_turn_*) and single-turn (simple_*, parallel,
+etc.) categories. Scoring uses BFCL's own upstream checkers."""
 
 from __future__ import annotations
 
@@ -31,18 +34,25 @@ BFCL_ROOT = (
     / "gorilla"
     / "berkeley-function-call-leaderboard"
 )
-CATEGORY = "multi_turn_base"
-TRAJECTORY_NAME = "bfcl_multi_turn_base"
+MULTI_TURN_CATEGORIES = frozenset({
+    "multi_turn_base", "multi_turn_miss_func", "multi_turn_miss_param", "multi_turn_long_context",
+})
+DEFAULT_CATEGORIES: list[str] = ["multi_turn_base"]
 HOLDOUT_PROMPT = "I have updated some more functions you can choose from. What about now?"
 LENGTH_MARGIN = 8
 _JSON_TOOL_BLOCK = re.compile(r"<tool_call>\s*(?P<body>.*?)\s*</tool_call>", re.DOTALL)
 
 
+def is_multi_turn(category: str) -> bool:
+    return category in MULTI_TURN_CATEGORIES
+
+
 @dataclass(frozen=True)
 class BfclTask:
     task_id: str
+    category: str
     entry: Mapping[str, Any]
-    ground_truth: tuple[tuple[str, ...], ...]
+    ground_truth: Any
 
 
 @dataclass(frozen=True)
@@ -93,8 +103,11 @@ class BfclRun:
     invariants: Mapping[str, Any]
 
 
-def load_bfcl_tasks(expected_revision: str | None = None) -> tuple[list[BfclTask], str]:
-    """Load BFCL's own dataset and ground truth from the pinned checkout."""
+def load_bfcl_tasks(
+    categories: Sequence[str] = DEFAULT_CATEGORIES,
+    expected_revision: str | None = None,
+) -> tuple[list[BfclTask], str]:
+    """Load BFCL's dataset and ground truth for the requested categories."""
 
     revision = _bfcl_revision()
     if expected_revision and revision != expected_revision:
@@ -102,12 +115,18 @@ def load_bfcl_tasks(expected_revision: str | None = None) -> tuple[list[BfclTask
             f"BFCL checkout revision {revision} does not match configured pin {expected_revision}"
         )
     load_dataset_entry, load_ground_truth_entry, _, _ = _bfcl_api()
-    entries = load_dataset_entry(CATEGORY)
-    expected = {
-        str(row["id"]): tuple(tuple(call for call in turn) for turn in row["ground_truth"])
-        for row in load_ground_truth_entry(CATEGORY)
-    }
-    tasks = [BfclTask(str(entry["id"]), entry, expected[str(entry["id"])]) for entry in entries]
+    tasks: list[BfclTask] = []
+    for category in categories:
+        entries = load_dataset_entry(category)
+        expected = {
+            str(row["id"]): row["ground_truth"] for row in load_ground_truth_entry(category)
+        }
+        for entry in entries:
+            task_id = str(entry["id"])
+            ground_truth = expected[task_id]
+            if is_multi_turn(category):
+                ground_truth = tuple(tuple(call for call in turn) for turn in ground_truth)
+            tasks.append(BfclTask(task_id, category, entry, ground_truth))
     return tasks, revision
 
 
@@ -120,13 +139,64 @@ def evaluate_bfcl(
     benchmark_revision: str,
     record_sink: Callable[[TrajectoryRecord], None] | None = None,
 ) -> BfclRun:
-    """Run BFCL's static turns and grade each completed task with its checker."""
+    """Run BFCL's benchmark and grade each task with its upstream checker.
+
+    Multi-turn categories use the turn-advancement loop and ``multi_turn_checker``;
+    single-turn categories use single-shot generation and ``ast_checker``.
+    """
+
+    multi = [t for t in tasks if is_multi_turn(t.category)]
+    single = [t for t in tasks if not is_multi_turn(t.category)]
+
+    task_metrics: list[TaskMetrics] = []
+    records: list[TrajectoryRecord] = []
+
+    def _sink(record: TrajectoryRecord) -> None:
+        records.append(record)
+        if record_sink is not None:
+            record_sink(record)
+
+    if multi:
+        task_metrics.extend(
+            _evaluate_multi_turn(config, tokenizer, generate, multi, _sink)
+        )
+    if single:
+        task_metrics.extend(
+            _evaluate_single_turn(config, tokenizer, generate, single, _sink)
+        )
+
+    metrics = aggregate(task_metrics)
+    categories = sorted({t.category for t in tasks})
+    return BfclRun(
+        metrics=metrics,
+        invariants={
+            "benchmark": "BFCL",
+            "benchmark_commit": benchmark_revision,
+            "categories": categories,
+            "task_count": len(tasks),
+            "task_ids_hash": hash_json([task.task_id for task in tasks]),
+            "tool_schema_hash": hash_json([task.entry["function"] for task in tasks]),
+            "system_prompt": None,
+            "checker": "multi_turn_checker + ast_checker" if (multi and single)
+            else "ast_checker" if single else "multi_turn_checker",
+        },
+    )
+
+
+def _evaluate_multi_turn(
+    config: EvalConfig,
+    tokenizer: Any,
+    generate: GenerateBatch,
+    tasks: Sequence[BfclTask],
+    record_sink: Callable[[TrajectoryRecord], None],
+) -> list[TaskMetrics]:
+    """Multi-turn loop: turn advancement, upstream ``multi_turn_checker``."""
 
     run_key = f"smolqwen_{uuid.uuid4().hex}"
     episodes = [_episode(task) for task in tasks]
     task_metrics: list[TaskMetrics] = []
 
-    with progress_task(CATEGORY, total=len(episodes), unit="tasks", every=1) as advance:
+    with progress_task("multi-turn", total=len(episodes), unit="tasks", every=1) as advance:
         while any(not episode.recorded for episode in episodes):
             ready = [
                 episode
@@ -177,8 +247,7 @@ def evaluate_bfcl(
             for episode in finished:
                 metric, record = _score_episode(episode, run_key)
                 task_metrics.append(metric)
-                if record_sink is not None:
-                    record_sink(record)
+                record_sink(record)
                 episode.recorded = True
                 running = sum(item.score for item in task_metrics) / len(task_metrics)
                 advance(f"mean {running:.3f}")
@@ -186,36 +255,71 @@ def evaluate_bfcl(
             if not requests and not finished:
                 raise RuntimeError("BFCL evaluation made no progress")
 
-    metrics = aggregate(task_metrics)
-    metrics.update(
-        aggregate(
-            TaskMetrics(
-                category="multi_turn_overall",
-                score=item.score,
-                invalid_calls=item.invalid_calls,
-                steps=item.steps,
-                generated_tokens=item.generated_tokens,
-                truncated=item.truncated,
-                exact_success=item.exact_success,
-                diagnostics=item.diagnostics,
-                terminal_reason=item.terminal_reason,
-            )
-            for item in task_metrics
-        )
-    )
-    return BfclRun(
-        metrics=metrics,
-        invariants={
-            "benchmark": "BFCL",
-            "benchmark_commit": benchmark_revision,
-            "category": CATEGORY,
-            "task_count": len(tasks),
-            "task_ids_hash": hash_json([task.task_id for task in tasks]),
-            "tool_schema_hash": hash_json([task.entry["function"] for task in tasks]),
-            "system_prompt": None,
-            "checker": "bfcl_eval.eval_checker.multi_turn_eval.multi_turn_checker",
-        },
-    )
+    return task_metrics
+
+
+def _evaluate_single_turn(
+    config: EvalConfig,
+    tokenizer: Any,
+    generate: GenerateBatch,
+    tasks: Sequence[BfclTask],
+    record_sink: Callable[[TrajectoryRecord], None],
+) -> list[TaskMetrics]:
+    """Single-shot generation for one-turn categories, graded by ``ast_checker``."""
+
+    task_metrics: list[TaskMetrics] = []
+
+    with progress_task("single-turn", total=len(tasks), unit="tasks", every=1) as advance:
+        for offset in range(0, len(tasks), config.profile.generation_concurrency):
+            batch = tasks[offset : offset + config.profile.generation_concurrency]
+
+            requests: list[BfclRequest] = []
+            for task in batch:
+                messages = _question_messages(task.entry, 0)
+                prompt_ids = _render_prompt_ids(
+                    tokenizer, messages, [_tool_schema(doc) for doc in task.entry["function"]],
+                    config.enable_thinking,
+                )
+                remaining = config.profile.max_seq_length - len(prompt_ids) - LENGTH_MARGIN
+                requests.append(
+                    BfclRequest(
+                        task.task_id,
+                        tuple(prompt_ids),
+                        min(config.decoding.max_new_tokens, remaining),
+                    )
+                )
+
+            completions = list(generate(requests))
+            by_id = {completion.task_id: completion for completion in completions}
+
+            for task in batch:
+                completion = by_id[task.task_id]
+                calls = _parse_calls(completion.text)
+                model_output = [
+                    {call.name: dict(call.arguments)} for call in calls
+                ]
+                result = _ast_check(
+                    list(task.entry["function"]),
+                    model_output,
+                    list(task.ground_truth),
+                    _ast_language(task.category),
+                    task.category,
+                    "smolqwen",
+                )
+                valid = bool(result.get("valid"))
+                metric = TaskMetrics(
+                    category=task.category,
+                    score=float(valid),
+                    exact_success=valid,
+                    generated_tokens=completion.generated_tokens,
+                    truncated=completion.truncated,
+                    diagnostics={"completion_rate": 1.0},
+                )
+                task_metrics.append(metric)
+                running = sum(item.score for item in task_metrics) / len(task_metrics)
+                advance(f"mean {running:.3f}")
+
+    return task_metrics
 
 
 def _episode(task: BfclTask) -> _Episode:
@@ -298,12 +402,13 @@ def _score_episode(episode: _Episode, run_key: str) -> tuple[TaskMetrics, Trajec
             [list(turn) for turn in episode.task.ground_truth],
             dict(episode.task.entry),
             run_key,
+            episode.task.category,
         )
         valid = bool(result.get("valid"))
         failure_reason = None if valid else str(result.get("error_type") or "bfcl_check_failed")
     diagnostics = {"completion_rate": float(episode.completed)}
     metric = TaskMetrics(
-        category=CATEGORY,
+        category=episode.task.category,
         score=float(valid),
         invalid_calls=episode.invalid_calls,
         steps=episode.env_steps,
@@ -315,7 +420,7 @@ def _score_episode(episode: _Episode, run_key: str) -> tuple[TaskMetrics, Trajec
     )
     record = TrajectoryRecord(
         task_id=episode.task.task_id,
-        category=CATEGORY,
+        category=episode.task.category,
         messages=[message.to_template_dict() for message in episode.messages],
         observations=list(episode.observations),
         score=float(valid),
@@ -355,10 +460,19 @@ def _parse_calls(text: str) -> list[ToolCall]:
 
 
 def _render_ids(tokenizer: Any, episode: _Episode, enable_thinking: bool) -> list[int]:
+    return _render_prompt_ids(tokenizer, episode.messages, episode.tools, enable_thinking)
+
+
+def _render_prompt_ids(
+    tokenizer: Any,
+    messages: Sequence[Message],
+    tools: Sequence[dict[str, Any]],
+    enable_thinking: bool,
+) -> list[int]:
     text = render_prefix(
         tokenizer,
-        episode.messages,
-        tools=episode.tools,
+        messages,
+        tools=tools,
         add_generation_prompt=True,
         enable_thinking=enable_thinking,
     )
@@ -412,12 +526,55 @@ def _check(
     ground_truth: list[list[str]],
     entry: dict[str, Any],
     run_key: str,
+    category: str,
 ) -> Mapping[str, Any]:
     _, _, _, multi_turn_checker = _bfcl_api()
     return cast(
         Mapping[str, Any],
-        multi_turn_checker(responses, ground_truth, entry, CATEGORY, f"{run_key}_score"),
+        multi_turn_checker(responses, ground_truth, entry, category, f"{run_key}_score"),
     )
+
+
+def _ast_check(
+    func_description: list[dict[str, Any]],
+    model_output: list[dict[str, Any]],
+    possible_answer: list[dict[str, Any]],
+    language: Any,
+    test_category: str,
+    model_name: str,
+) -> Mapping[str, Any]:
+    ast_checker_mod = _bfcl_ast_api()
+    return cast(
+        Mapping[str, Any],
+        ast_checker_mod.ast_checker(
+            func_description, model_output, possible_answer, language, test_category, model_name
+        ),
+    )
+
+
+def _ast_language(category: str) -> Any:
+    from bfcl_eval.constants.enums import Language
+
+    if "java" in category:
+        return Language.JAVA
+    if "javascript" in category or "js" in category:
+        return Language.JAVASCRIPT
+    return Language.PYTHON
+
+
+def _bfcl_ast_api() -> Any:
+    root = str(BFCL_ROOT)
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    # ast_checker.py imports model_config → handler chain → tree_sitter.
+    # We only need the checker functions; stub the unused import to avoid
+    # pulling the full handler tree into the eval environment.
+    from types import ModuleType
+
+    mock = ModuleType("bfcl_eval.constants.model_config")
+    mock.MODEL_CONFIG_MAPPING = {}  # type: ignore[attr-defined]
+    sys.modules.setdefault("bfcl_eval.constants.model_config", mock)
+    return importlib.import_module("bfcl_eval.eval_checker.ast_eval.ast_checker")
 
 
 def _bfcl_api() -> tuple[Any, Any, Any, Any]:

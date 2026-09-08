@@ -5,6 +5,12 @@
 adapters:
   - bfcl_multi_turn
 
+# BFCL categories for the direct runner (`smolqwen evaluate`). Overridable with
+# `--categories simple_python,parallel,...`. The adapter path (in-training
+# bench_eval) reads its own categories from adapter_options below.
+categories:
+  - multi_turn_base
+
 adapter_options:
   bfcl_multi_turn:
     # Dev and test coincide in this lab's design: multi-turn base is both the

@@ -103,7 +103,7 @@ def test_command_runs_only_bfcl_through_vllm_and_writes_artifacts(
         "json": str(tmp_path / "base.json"),
         "markdown": str(tmp_path / "base.md"),
     }
-    assert tracker.artifacts[0][1][-1].name == "base-bfcl_multi_turn_base.jsonl"
+    assert tracker.artifacts[0][1][-1].name == "base-bfcl.jsonl"
 
 
 def test_engine_is_released_when_bfcl_fails(

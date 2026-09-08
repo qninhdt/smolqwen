@@ -11,9 +11,9 @@ from typing import Any
 from smolqwen.config_models import EvalConfig
 from smolqwen.console import logger, phase, status_table
 from smolqwen.eval.bfcl_runner import (
-    TRAJECTORY_NAME,
     BfclCompletion,
     BfclRequest,
+    DEFAULT_CATEGORIES,
     evaluate_bfcl,
     load_bfcl_tasks,
 )
@@ -71,10 +71,13 @@ def build_manifest(
 
 
 def run_evaluation(config: EvalConfig, args: Any) -> int:
-    """Evaluate one checkpoint on BFCL multi-turn base and write its artifacts."""
+    """Evaluate one checkpoint on BFCL categories and write its artifacts."""
 
     if getattr(args, "endpoint", None):
         raise ValueError("evaluate accepts checkpoints only; use in-process vLLM")
+
+    categories = _resolve_categories(config, args)
+
     with phase("evaluate: resolve pinned checkpoint"):
         resolved = resolve_checkpoint(
             checkpoint=args.checkpoint,
@@ -84,8 +87,8 @@ def run_evaluation(config: EvalConfig, args: Any) -> int:
             endpoint=None,
             store=_checkpoint_store(config, args),
         )
-    with phase("evaluate: load BFCL multi_turn_base"):
-        tasks, benchmark_revision = load_bfcl_tasks(_expected_bfcl_revision(config))
+    with phase(f"evaluate: load BFCL ({', '.join(categories)})"):
+        tasks, benchmark_revision = load_bfcl_tasks(categories, _expected_bfcl_revision(config))
     with phase(f"evaluate: build vLLM engine ({resolved.path})"):
         engine, adapter_name = _engine_for(config, resolved)
     with phase("evaluate: load checkpoint tokenizer"):
@@ -96,7 +99,7 @@ def run_evaluation(config: EvalConfig, args: Any) -> int:
     status_table(
         f"evaluation: {tag}",
         {
-            "benchmark": "BFCL multi_turn_base",
+            "benchmark": ", ".join(categories),
             "checkpoint": resolved.path,
             "revision": resolved.revision,
             "generation": generation_path,
@@ -108,7 +111,7 @@ def run_evaluation(config: EvalConfig, args: Any) -> int:
     tracker = tracker_for(config.tracking, config=config.model_dump(mode="json"))
     tracker.start()
     try:
-        with append_trajectories(config.output_dir, tag=tag, adapter=TRAJECTORY_NAME) as (
+        with append_trajectories(config.output_dir, tag=tag, adapter="bfcl") as (
             trajectory_path,
             append_record,
         ):
@@ -133,7 +136,7 @@ def run_evaluation(config: EvalConfig, args: Any) -> int:
                 "generation_concurrency": config.profile.generation_concurrency,
                 "enforce_eager": config.profile.enforce_eager,
                 "max_context_tokens_used": config.profile.max_seq_length,
-                "trajectory_records": {TRAJECTORY_NAME: str(trajectory_path)},
+                "trajectory_records": {"bfcl": str(trajectory_path)},
             },
         )
         json_path, markdown_path = write_report(
@@ -151,6 +154,17 @@ def run_evaluation(config: EvalConfig, args: Any) -> int:
         tracker.finish()
     print(json.dumps({"json": str(json_path), "markdown": str(markdown_path)}, sort_keys=True))
     return 0
+
+
+def _resolve_categories(config: EvalConfig, args: Any) -> list[str]:
+    """Resolve categories from CLI --categories, config, or default."""
+    raw = getattr(args, "categories", None)
+    if raw:
+        return [c.strip() for c in raw.split(",") if c.strip()]
+    cfg_cats = getattr(config, "categories", None)
+    if cfg_cats:
+        return list(cfg_cats)
+    return list(DEFAULT_CATEGORIES)
 
 
 def _engine_for(config: EvalConfig, resolved: Any) -> tuple[Any, str | None]:

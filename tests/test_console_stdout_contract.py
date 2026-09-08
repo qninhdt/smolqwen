@@ -285,6 +285,7 @@ def test_evaluation_report_paths_are_json_while_progress_goes_to_stderr(
     tasks = [
         BfclTask(
             f"case-{index}",
+            "multi_turn_base",
             {
                 "id": f"case-{index}",
                 "question": [[{"role": "user", "content": "prompt"}]],

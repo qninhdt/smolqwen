@@ -25,6 +25,7 @@ def _doc(name: str) -> dict[str, Any]:
 def _task(task_id: str = "case") -> BfclTask:
     return BfclTask(
         task_id,
+        "multi_turn_base",
         {
             "id": task_id,
             "question": [
@@ -132,6 +133,7 @@ def test_batches_ready_bfcl_tasks(monkeypatch: Any) -> None:
         one_turn.append(
             BfclTask(
                 task.task_id,
+                task.category,
                 {**task.entry, "question": [task.entry["question"][0]]},
                 (task.ground_truth[0],),
             )

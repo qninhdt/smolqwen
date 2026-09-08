@@ -161,7 +161,7 @@ def build_parser() -> argparse.ArgumentParser:
     grpo.add_argument("--resume", action="store_true")
 
     evaluate = subparsers.add_parser(
-        "evaluate", help="run BFCL multi_turn_base against a checkpoint with vLLM"
+        "evaluate", help="run BFCL categories against a checkpoint with vLLM"
     )
     _add_common(evaluate)
     evaluate.add_argument("--checkpoint", default=None, help="local path or Hub repo id")
@@ -171,6 +171,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="checkpoint revision sha; required for Hub reads, never resolved implicitly",
     )
     evaluate.add_argument("--tag", required=False, default=None, help="report label")
+    evaluate.add_argument(
+        "--categories",
+        default=None,
+        help="comma-separated BFCL categories (e.g. simple_python,parallel,multi_turn_base)",
+    )
     evaluate.add_argument(
         "--adapter-path", default=None, help="PEFT adapter directory or pinned Hub revision"
     )
