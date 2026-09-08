@@ -20,6 +20,11 @@ class GroupRewardStats:
     zero_variance_fraction: float
     group_count: int
 
+    @property
+    def useful_group_rate(self) -> float:
+        """Fraction of groups with non-zero reward variance."""
+        return 1.0 - self.zero_variance_fraction if self.group_count else 0.0
+
 
 def group_reward_stats(rewards: Sequence[float], group_indices: Sequence[int]) -> GroupRewardStats:
     """Population variance per positional GRPO group."""
@@ -67,5 +72,6 @@ def verifier_reward(
     if log_metric is not None:
         log_metric("group_reward_variance/mean", stats.mean_variance)
         log_metric("group_reward_variance/zero_fraction", stats.zero_variance_fraction)
+        log_metric("useful_group_rate", stats.useful_group_rate)
     log_trajectory_columns(log_extra, trajectory, sample_limit=trajectory_sample_limit)
     return rewards
