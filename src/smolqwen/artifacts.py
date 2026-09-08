@@ -100,7 +100,8 @@ class CheckpointStore:
         private: bool = True,
         repo_type: str = "model",
     ) -> None:
-        self.repo_id = repo_id
+        normalized_repo_id = repo_id.strip() if repo_id else None
+        self.repo_id = normalized_repo_id or None
         self.local_dir = Path(local_dir)
         self.private = private
         self.repo_type = repo_type

@@ -45,7 +45,7 @@ def _library_versions() -> dict[str, str | None]:
 def build_manifest(
     config: EvalConfig,
     *,
-    revision: str,
+    revision: str | None,
     backend: str,
     benchmark_invariants: Mapping[str, Any] | None = None,
     adapter_invariants: Mapping[str, Mapping[str, Any]] | None = None,

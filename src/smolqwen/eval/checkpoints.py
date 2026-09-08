@@ -1,4 +1,4 @@
-"""Which weights an evaluation actually reads, resolved once and pinned.
+"""Which weights an evaluation actually reads, resolved once and recorded.
 
 Two pinning holes existed. `resolve_eval_checkpoint` (`artifacts.py:208`) refuses an
 unpinned checkpoint read and was tested but never wired to the `evaluate` command,
@@ -33,7 +33,7 @@ class ResolvedCheckpoint:
     """
 
     path: str | None
-    revision: str
+    revision: str | None
     adapter_path: str | None = None
     adapter_revision: str | None = None
     source: str = "local"
@@ -65,18 +65,16 @@ def resolve(
     endpoint: str | None = None,
     store: CheckpointStore | None = None,
 ) -> ResolvedCheckpoint:
-    """Pin every weight source an evaluation will read, before it reads any.
+    """Resolve every weight source before it is read.
 
-    A local directory needs no download, but still needs its revision recorded --
-    that is what makes two reports comparable. A Hub repo id goes through
+    Local directories need no revision or download. A Hub repo id goes through
     `resolve_eval_checkpoint`, which refuses to resolve a branch tip. An endpoint
     has no local weights at all, and the served revision is the operator's claim.
     """
-    revision = require_sha(revision, label="checkpoint")
-    if adapter:
-        adapter_revision = require_sha(adapter_revision, label="adapter")
-
     if endpoint:
+        revision = require_sha(revision, label="checkpoint")
+        if adapter:
+            adapter_revision = require_sha(adapter_revision, label="adapter")
         return ResolvedCheckpoint(
             path=None,
             revision=revision,
@@ -87,7 +85,20 @@ def resolve(
     if not checkpoint:
         raise CheckpointResolutionError("--checkpoint is required unless --endpoint is supplied")
 
-    if Path(checkpoint).is_dir():
+    local_checkpoint = Path(checkpoint).is_dir()
+    if local_checkpoint:
+        revision = revision or None
+    else:
+        revision = require_sha(revision, label="checkpoint")
+
+    if adapter:
+        local_adapter = Path(adapter).is_dir()
+        if local_adapter:
+            adapter_revision = adapter_revision or None
+        else:
+            adapter_revision = require_sha(adapter_revision, label="adapter")
+
+    if local_checkpoint:
         return ResolvedCheckpoint(
             path=checkpoint,
             revision=revision,
@@ -103,6 +114,7 @@ def resolve(
             f"checkpoint {checkpoint!r} is not a local directory and no checkpoint "
             "store is configured to pull it from"
         )
+    assert revision is not None
     pulled = resolve_eval_checkpoint(store, revision)
     return ResolvedCheckpoint(
         path=str(pulled),

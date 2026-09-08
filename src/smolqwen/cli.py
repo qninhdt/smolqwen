@@ -168,7 +168,7 @@ def build_parser() -> argparse.ArgumentParser:
     evaluate.add_argument(
         "--revision",
         default=None,
-        help="checkpoint revision sha; required for Hub reads, never resolved implicitly",
+        help="checkpoint revision sha; required for Hub reads, optional for local directories",
     )
     evaluate.add_argument("--tag", required=False, default=None, help="report label")
     evaluate.add_argument(
@@ -177,10 +177,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="comma-separated BFCL categories (e.g. simple_python,parallel,multi_turn_base)",
     )
     evaluate.add_argument(
-        "--adapter-path", default=None, help="PEFT adapter directory or pinned Hub revision"
+        "--adapter-path", default=None, help="local PEFT adapter directory"
     )
     evaluate.add_argument(
-        "--adapter-revision", default=None, help="explicit revision sha for a PEFT adapter"
+        "--adapter-revision", default=None, help="explicit revision sha for a non-local PEFT adapter"
     )
 
     serve = subparsers.add_parser("serve", help="launch the vLLM endpoint")

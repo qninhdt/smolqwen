@@ -116,6 +116,16 @@ def test_local_only_store_is_a_noop_on_push(tmp_path: Path, adapter_dir: Path) -
     assert store.latest_revision() is None
 
 
+def test_blank_repo_id_is_local_only(tmp_path: Path) -> None:
+    hub = FakeHub()
+    store = CheckpointStore("", tmp_path / "cache", client=hub)
+
+    assert store.enabled is False
+    store.push(commit_message="ignored")
+    assert hub.created == []
+    assert hub.uploads == []
+
+
 def test_resume_state_carries_more_than_weights(tmp_path: Path) -> None:
     store = CheckpointStore(None, tmp_path / "cache")
     # Restoring only the adapter makes a GRPO run replay scenarios it already saw,

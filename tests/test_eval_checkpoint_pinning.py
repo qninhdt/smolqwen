@@ -33,15 +33,15 @@ class Store:
         return self.target
 
 
-def test_a_local_directory_needs_no_download_but_still_records_its_revision(
-    tmp_path: Path,
-) -> None:
-    """The revision is what makes two reports comparable, download or not."""
-    resolved = resolve(checkpoint=str(tmp_path), revision=SHA)
+def test_a_local_directory_needs_no_download_or_revision(tmp_path: Path) -> None:
+    resolved = resolve(checkpoint=str(tmp_path), revision=None)
     assert resolved.source == "local"
     assert resolved.path == str(tmp_path)
-    assert resolved.revision == SHA
-    assert resolved.to_recorded()["checkpoint_revision"] == SHA
+    assert resolved.revision is None
+    assert resolved.to_recorded()["checkpoint_revision"] is None
+
+    pinned = resolve(checkpoint=str(tmp_path), revision=SHA)
+    assert pinned.revision == SHA
 
 
 def test_a_hub_checkpoint_goes_through_the_pinned_pull(tmp_path: Path) -> None:
@@ -62,13 +62,21 @@ def test_an_unpinned_revision_is_refused_before_any_weights_load() -> None:
 
 def test_an_adapter_without_its_own_revision_is_refused(tmp_path: Path) -> None:
     """The vLLM adapter path must pin the adapter before loading it."""
+    local_adapter = tmp_path / "adapter"
+    local_adapter.mkdir()
+
+    resolved_local = resolve(
+        checkpoint=str(tmp_path), revision=None, adapter=str(local_adapter)
+    )
+    assert resolved_local.adapter_revision is None
+
     with pytest.raises(CheckpointResolutionError, match="adapter revision sha"):
-        resolve(checkpoint=str(tmp_path), revision=SHA, adapter="artifacts/models/adapter")
+        resolve(checkpoint=str(tmp_path), revision=None, adapter="org/smolqwen-adapter")
 
     resolved = resolve(
         checkpoint=str(tmp_path),
-        revision=SHA,
-        adapter="artifacts/models/adapter",
+        revision=None,
+        adapter="org/smolqwen-adapter",
         adapter_revision=OTHER_SHA,
     )
     assert resolved.adapter_revision == OTHER_SHA
