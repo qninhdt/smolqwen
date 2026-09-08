@@ -25,7 +25,7 @@ training:
   learning_rate: 1.0e-4
   # 1-2 epochs maximum. A 2B model on ~9k trajectories can memorize, and more
   # epochs is not the fix for a loss curve turning up.
-  num_train_epochs: 2.0
+  num_train_epochs: 1.0
   warmup_ratio: 0.03
   weight_decay: 0.0
   lr_scheduler_type: cosine
