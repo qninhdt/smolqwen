@@ -30,7 +30,8 @@ from smolqwen.config_models import (
 )
 from smolqwen.data.convert_sft import SFT_SCHEMA_VERSION, SFT_SEMANTICS
 from smolqwen.tracking import Tracker
-from smolqwen.training.sft import SftError, _lora_config, build_trainer
+from smolqwen.training.optim import Toggle
+from smolqwen.training.sft import SftError, _lora_config, _parameter_summary, build_trainer
 from tests.helpers import write_tiny_checkpoint
 
 pytestmark = pytest.mark.slow
@@ -206,6 +207,15 @@ def test_lora_is_attached_and_only_adapters_train(assembled: Any) -> None:
     assert all("lora_" in name for name in trainable), "a base weight is trainable"
 
 
+def test_parameter_summary_reports_trainable_frozen_and_total(assembled: Any) -> None:
+    summary = _parameter_summary(assembled.trainer.model)
+    trainable, total = assembled.trainer.model.get_nb_trainable_parameters()
+
+    assert f"trainable={trainable:,}" in summary
+    assert f"frozen={total - trainable:,}" in summary
+    assert f"total={total:,}" in summary
+
+
 def test_qwen35_all_linear_targets_leave_the_unused_visual_tower_alone() -> None:
     config = SftConfig()
     lora = _lora_config(config)
@@ -296,7 +306,7 @@ def test_run_train_sft_starts_and_finishes_the_tracker(tmp_path: Path, monkeypat
 
     calls: list[str] = []
     runtime = sft_module.SftRuntime(
-        attention=sft_module.Toggle("sdpa", True, "test"),
+        attention=Toggle("sdpa", True, "test"),
         dtype_name="bfloat16",
         bf16=True,
         fp16=False,
@@ -310,7 +320,14 @@ def test_run_train_sft_starts_and_finishes_the_tracker(tmp_path: Path, monkeypat
         def finish(self) -> None:
             calls.append("finish")
 
+    class SpyModel:
+        @staticmethod
+        def get_nb_trainable_parameters() -> tuple[int, int]:
+            return 1, 2
+
     class SpyTrainer:
+        model = SpyModel()
+
         def train(self, resume_from_checkpoint: str | None = None) -> None:
             calls.append(f"train:{resume_from_checkpoint}")
 

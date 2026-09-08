@@ -383,11 +383,7 @@ def ledger(toggles: Sequence[Toggle]) -> dict[str, str]:
 
 
 def format_ledger(toggles: Sequence[Toggle]) -> str:
-    """A markdown table for `docs/`. Throughput columns are filled by the sweep."""
-    lines = [
-        "| toggle | state | detail |",
-        "|---|---|---|",
-    ]
-    for toggle in toggles:
-        lines.append(f"| {toggle.name} | {'on' if toggle.enabled else 'off'} | {toggle.detail} |")
-    return "\n".join(lines)
+    """Compact terminal summary; detailed reasons remain in the run config."""
+    return "optimizations: " + ", ".join(
+        f"{toggle.name}={'on' if toggle.enabled else 'off'}" for toggle in toggles
+    )

@@ -774,6 +774,15 @@ def _resolve_resume(
     return str(local), store.read_resume_state()
 
 
+def _parameter_summary(model: Any) -> str:
+    trainable, total = model.get_nb_trainable_parameters()
+    frozen = total - trainable
+    return (
+        f"parameters: trainable={trainable:,} frozen={frozen:,} "
+        f"total={total:,} ({100 * trainable / total:.2f}% trainable)"
+    )
+
+
 def build_trainer(
     config: SftConfig,
     *,
@@ -898,6 +907,7 @@ def run_train_sft(config: SftConfig, *, resume: bool = False) -> int:
     try:
         run.start()
         trainer = assembled.trainer
+        LOG.info("%s", _parameter_summary(trainer.model))
         console().print(format_ledger(list(assembled.toggles)))
         train = assembled.train_stats
         LOG.info(

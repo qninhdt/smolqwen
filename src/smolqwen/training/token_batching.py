@@ -13,9 +13,9 @@ class TokenBatchingError(ValueError):
 class TokenBudgetBatchSampler:
     """Greedily pack whole rows under a fixed token budget.
 
-    Rows are shuffled reproducibly per epoch, then locally sorted by length to
-    reduce shape churn. No row is split, duplicated, or omitted. The default
-    budget is the sum of row lengths for a flattened batch; padded mode instead
+    Rows are shuffled reproducibly per epoch. No row is split, duplicated, or
+    omitted. The default budget is the sum of row lengths for a flattened batch;
+    padded mode instead
     bounds `batch_size * max_row_length`, which is the tensor allocation and
     attention work the dense collator will actually execute.
     """
@@ -27,7 +27,6 @@ class TokenBudgetBatchSampler:
         max_tokens: int,
         seed: int,
         shuffle: bool = True,
-        bucket_size: int = 128,
         padding_free: bool = True,
     ) -> None:
         if max_tokens <= 0:
@@ -36,7 +35,6 @@ class TokenBudgetBatchSampler:
         self.max_tokens = int(max_tokens)
         self.seed = int(seed)
         self.shuffle = shuffle
-        self.bucket_size = max(1, int(bucket_size))
         self.padding_free = bool(padding_free)
         self.epoch = 0
         self.cursor = 0
@@ -50,11 +48,9 @@ class TokenBudgetBatchSampler:
         order = list(range(len(self.lengths)))
         if self.shuffle:
             random.Random(self.seed + self.epoch).shuffle(order)
-        bucketed: list[int] = []
-        for start in range(0, len(order), self.bucket_size):
-            bucket = order[start : start + self.bucket_size]
-            bucketed.extend(sorted(bucket, key=self.lengths.__getitem__, reverse=True))
-        return bucketed
+        # Keep random order; length sorting clustered loss composition across
+        # gradient-accumulation windows.
+        return order
 
     def batches(self) -> list[list[int]]:
         batches: list[list[int]] = []

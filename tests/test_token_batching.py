@@ -37,6 +37,12 @@ def test_batches_visit_every_row_once_without_crossing_budget() -> None:
     assert len({len(batch) for batch in batches}) > 1
 
 
+def test_shuffle_does_not_sort_rows_by_length() -> None:
+    sampler = TokenBudgetBatchSampler([1, 4, 2, 3], max_tokens=16, seed=7, shuffle=False)
+
+    assert sampler.batches() == [[0, 1, 2, 3]]
+
+
 def test_padded_batches_bound_dense_tensor_cost() -> None:
     lengths = [6, 4, 4]
     sampler = TokenBudgetBatchSampler(

@@ -135,6 +135,8 @@ def test_the_ledger_carries_state_and_reason_for_every_toggle() -> None:
     # visible in the run config rather than only in the throughput number.
     assert all(value.startswith(("on: ", "off: ")) for value in entries.values())
 
-    table = format_ledger(toggles)
-    assert table.startswith("| toggle | state | detail |")
-    assert table.count("\n") == len(toggles) + 1
+    summary = format_ledger(toggles)
+    assert summary == (
+        "optimizations: liger_fused_linear_cross_entropy=off, sdpa=off, adapter_dtype=on"
+    )
+    assert "\n" not in summary
