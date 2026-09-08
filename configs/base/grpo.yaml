@@ -15,7 +15,7 @@ lora:
 
 training:
   learning_rate: 1.0e-5
-  max_steps: 50
+  max_steps: 100
   warmup_ratio: 0.05
   lr_scheduler_type: constant
   logging_steps: 1
