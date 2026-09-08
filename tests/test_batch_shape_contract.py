@@ -82,7 +82,9 @@ def test_binding_uses_the_exact_prompt_row_trl_passed() -> None:
     ]
 
 
-def test_actual_rollout_func_closure_returns_rows_and_logs_profile() -> None:
+def test_actual_rollout_func_closure_returns_rows_and_logs_profile(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     class ImmediateDispatcher:
         @staticmethod
         def _done(value: Any) -> Future[Any]:
@@ -130,6 +132,10 @@ def test_actual_rollout_func_closure_returns_rows_and_logs_profile() -> None:
     assert all(len(rows) == len(prompts) for rows in output.values())
     assert logs and logs[0]["rollout/episodes_per_hour"] >= 0.0
     assert "rollout/timeline_scheduling_s" in logs[0]
+    captured = capsys.readouterr()
+    progress = captured.out + captured.err
+    assert "train-grpo rollout: 1/2 episodes" in progress
+    assert "train-grpo rollout complete: 2 episodes" in progress
 
 
 def test_rollout_render_honors_the_non_thinking_mode() -> None:

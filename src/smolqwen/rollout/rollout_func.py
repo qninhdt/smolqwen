@@ -35,6 +35,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
 from typing import Any
 
+from smolqwen.console import logger, progress_task
 from smolqwen.data.loader import Message, parse_message
 from smolqwen.inference.episode import Episode
 from smolqwen.inference.mask import EpisodeMaskBuilder
@@ -54,6 +55,7 @@ from smolqwen.rollout.profiler import profile_rollout
 Prompts = Sequence[Sequence[Mapping[str, Any]]]
 BindingResolver = Callable[[Prompts], Sequence[Any]]
 BackendFactory = Callable[[Any], GenerationBackend]
+LOG = logger(__name__)
 
 
 class RolloutFuncError(RuntimeError):
@@ -116,6 +118,7 @@ def make_turn_engine(
     dispatcher: EnvDispatcher,
     tokenizer: Any,
     config: TurnEngineConfig,
+    on_episode_done: Callable[[Episode], None] | None = None,
     wait_for: Callable[..., Any] | None = None,
 ) -> TurnEngine:
     """Wire the shared turn engine's render/decode seams to one tokenizer.
@@ -154,6 +157,7 @@ def make_turn_engine(
         render_prefix_ids=render_prefix_ids,
         decode=decode,
         config=replace(config, max_in_flight=None),
+        on_episode_done=on_episode_done,
         wait_for=wait_for,
     )
     driver.attach(engine)
@@ -188,19 +192,38 @@ def make_rollout_func(
                     "alignment between prompts and scenarios is broken"
                 )
 
-        engine = make_turn_engine(
-            backend=backend_builder(trainer),
-            dispatcher=dispatcher,
-            tokenizer=tokenizer,
-            config=config,
+        LOG.info(
+            "train-grpo rollout: start %d episodes; concurrency=%d max_turns=%d "
+            "max_env_steps=%d max_tokens_per_turn=%d context=%d",
+            len(bindings),
+            config.generation_concurrency,
+            config.max_generation_turns,
+            config.max_env_steps,
+            config.max_new_tokens_per_step,
+            config.max_model_len,
         )
-        gpu_sampler = GpuUtilizationSampler()
-        gpu_sampler.start()
-        started = time.monotonic()
-        try:
-            episodes = engine.run(bindings)
-        finally:
-            gpu = gpu_sampler.stop()
+        with progress_task(
+            "train-grpo rollout", total=len(bindings), unit="episodes", every=1
+        ) as advance:
+
+            def on_episode_done(episode: Episode) -> None:
+                reward = "n/a" if episode.reward is None else f"{episode.reward:.3f}"
+                advance(f"{episode.terminal_reason}, reward {reward}")
+
+            engine = make_turn_engine(
+                backend=backend_builder(trainer),
+                dispatcher=dispatcher,
+                tokenizer=tokenizer,
+                config=config,
+                on_episode_done=on_episode_done,
+            )
+            gpu_sampler = GpuUtilizationSampler()
+            gpu_sampler.start()
+            started = time.monotonic()
+            try:
+                episodes = engine.run(bindings)
+            finally:
+                gpu = gpu_sampler.stop()
         wall_s = time.monotonic() - started
         timeline = profile_rollout(
             episodes=episodes,

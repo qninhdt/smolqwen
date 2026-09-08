@@ -176,11 +176,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="comma-separated BFCL categories (e.g. simple_python,parallel,multi_turn_base)",
     )
+    evaluate.add_argument("--adapter-path", default=None, help="local PEFT adapter directory")
     evaluate.add_argument(
-        "--adapter-path", default=None, help="local PEFT adapter directory"
-    )
-    evaluate.add_argument(
-        "--adapter-revision", default=None, help="explicit revision sha for a non-local PEFT adapter"
+        "--adapter-revision",
+        default=None,
+        help="explicit revision sha for a non-local PEFT adapter",
     )
 
     serve = subparsers.add_parser("serve", help="launch the vLLM endpoint")

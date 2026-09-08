@@ -14,10 +14,9 @@ lora:
   adapter_dtype: bfloat16
 
 training:
-  learning_rate: 1.0e-6
-  num_train_epochs: 1.0
-  max_steps: 200
-  warmup_ratio: 0.0
+  learning_rate: 1.0e-5
+  max_steps: 50
+  warmup_ratio: 0.05
   lr_scheduler_type: constant
   logging_steps: 1
   save_steps: 20
@@ -41,10 +40,10 @@ env:
   verify_timeout_s: 60.0
   create_timeout_s: 30.0
 
-beta: 0.0
+beta: 0.05
 loss_type: dapo
 temperature: 1.0
-top_p: 1.0
+top_p: 0.95
 
 # Reasoning mode for rollout. `false` renders every generation prompt with Qwen's
 # closed empty think block and decodes completions as content instead of
@@ -83,20 +82,10 @@ fork_threshold_tokens: 1024
 # Keep a small sample of completions in the W&B step log for diagnosis.
 trajectory_samples_per_log: 8
 
-# In-training dev eval on BFCL multi-turn base, mirroring upstream EnvScaler's
-# RL validation (`val_env_manager: [BFCLEval]`, temp 0, fixed sample). Upstream
-# validates every 5 steps on a 512-prompt rollout batch across 8 GPUs; this run's
-# optimizer step consumes 16 prompts, so the same data-relative cadence is beyond
-# the run's length -- `every_steps: 20` is the adopted cadence and deliberately
-# equals `save_steps`, so every dev score attaches to a checkpoint-N on disk.
-# 10 save boundaries plus the step-0 anchor = 11 boundaries x 128 tasks.
-# `grpo/bench_wall_s` records the measured per-boundary cost; widen or narrow
-# from measurement, not from a guess.
-#
-# Dev and test coincide in this lab's design: BFCL multi-turn base is both the
-# dev curve and the final test benchmark, so the final number selects nothing.
+# Keep the short RL pilot focused on rollout/training throughput. Enable this
+# explicitly for a boundary score when checkpoint selection is needed.
 bench_eval:
-  enabled: true
+  enabled: false
   adapter: bfcl_multi_turn
   every_steps: 20
   baseline_at_step_zero: true

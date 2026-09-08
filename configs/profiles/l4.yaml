@@ -18,21 +18,21 @@
 # is the measured first safe fallback and does not change padding-free SFT's token
 # envelope, which is owned by max_tokens_per_microbatch.
 micro_batch: 1
-grad_accum: 8
+grad_accum: 32
 max_tokens_per_microbatch: 32768
 
 # --- Phase 6, set by the pool sweep (step 12), against measured episodes/hour.
 # generation_concurrency is the vLLM batch width INSIDE one rollout_func call.
 # It is not num_generations. Naming them separately is deliberate.
 generation_concurrency: 32
-active_pool_multiplier: 2
+active_pool_multiplier: 1
 # A colocated vLLM engine at 0.25 cannot reserve one 16K KV block after loading
 # Qwen3.5-2B; 0.40 is the lowest value observed to start on the L4. Revisit only
 # with a new live sweep, lowering this before changing the batch or context.
 vllm_kv_fraction: 0.40
 
 # --- Phase 7, set by the widening sweep (step 8), one axis at a time.
-num_generations: 4
+num_generations: 8
 
 # --- Phase 4, set by the timeline profile. env_episodes_per_worker sets the crash
 # blast radius explicitly: a worker that dies takes every episode it held with it.

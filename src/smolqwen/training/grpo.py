@@ -726,6 +726,13 @@ def run_train_grpo(config: GrpoConfig, *, resume: bool = False) -> int:
     try:
         console().print(format_ledger(list(assembled.toggles)))
         LOG.info(
+            "vLLM: %.0f%% VRAM budget, context=%d, concurrency=%d, sleep=%s",
+            config.profile.vllm_kv_fraction * 100,
+            config.vllm_max_model_len,
+            config.profile.generation_concurrency,
+            config.vllm_enable_sleep_mode,
+        )
+        LOG.info(
             "train %d scenarios",
             len(assembled.train_task_ids),
         )
