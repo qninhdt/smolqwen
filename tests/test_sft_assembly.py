@@ -284,3 +284,59 @@ def test_the_ledger_is_recorded_in_the_run_config(tmp_path: Path) -> None:
     keys = [key for key in tracker.config if key.startswith("optimization/")]
     assert {"optimization/adapter_dtype"} <= set(keys)
     assert all(tracker.config[key].startswith(("on: ", "off: ")) for key in keys)
+
+
+def test_run_train_sft_starts_and_finishes_the_tracker(tmp_path: Path, monkeypatch: Any) -> None:
+    """W&B metrics are lost silently when the run is never started.
+
+    `run_train_sft` owns the tracker lifecycle (mirroring GRPO): without an
+    explicit `start()` every `log_step` no-ops and a resumed run forks the curve.
+    """
+    from smolqwen.training import sft as sft_module
+
+    calls: list[str] = []
+    runtime = sft_module.SftRuntime(
+        attention=sft_module.Toggle("sdpa", True, "test"),
+        dtype_name="bfloat16",
+        bf16=True,
+        fp16=False,
+        padding_free=True,
+    )
+
+    class SpyTracker(Tracker):
+        def start(self) -> None:
+            calls.append("start")
+
+        def finish(self) -> None:
+            calls.append("finish")
+
+    class SpyTrainer:
+        def train(self, resume_from_checkpoint: str | None = None) -> None:
+            calls.append(f"train:{resume_from_checkpoint}")
+
+        def save_model(self, output_dir: str) -> None:
+            calls.append("save")
+
+    def fake_build_trainer(config: Any, **kwargs: Any) -> Any:
+        return sft_module.Assembled(
+            trainer=SpyTrainer(),
+            toggles=(),
+            train_stats=build_trainer(
+                config,
+                dataset_dir=_shards(tmp_path),
+                tracker=SpyTracker(project="t", enabled=False),
+            ).train_stats,
+            resume_from=None,
+            tracker=SpyTracker(project="t", enabled=False),
+        )
+
+    monkeypatch.setattr(sft_module, "resolve_sft_runtime", lambda *a, **k: runtime)
+    monkeypatch.setattr(sft_module, "assert_sft_runtime", lambda runtime: None)
+    monkeypatch.setattr(sft_module, "build_trainer", fake_build_trainer)
+
+    exit_code = sft_module.run_train_sft(_config(_tiny_checkpoint(tmp_path / "b"), tmp_path / "o"))
+
+    assert exit_code == 0
+    assert calls[0] == "start"
+    assert calls[-1] == "finish"
+    assert any(call.startswith("train:") for call in calls)

@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterable, Iterator
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -360,6 +361,7 @@ class Assembled:
     toggles: tuple[Toggle, ...]
     train_stats: ShardStats
     resume_from: str | None
+    tracker: Tracker | None = None
 
     @property
     def train_size(self) -> int:
@@ -426,9 +428,10 @@ def _sft_config(
         save_steps=training.save_steps,
         # Train-only, matching upstream EnvScaler's SFT (LlamaFactory, no
         # validation set): overfitting is not gated on a val curve, and the
-        # capability curve is GRPO's bench_eval boundary.
+        # capability curve is GRPO's bench_eval boundary. Epoch boundaries are
+        # what an eval-between-epochs workflow pins to, so they always save.
         eval_strategy="no",
-        save_strategy="steps",
+        save_strategy="epoch",
         seed=training.seed,
         bf16=runtime.bf16,
         fp16=runtime.fp16,
@@ -849,6 +852,7 @@ def build_trainer(
         toggles=toggles,
         train_stats=shards.train_stats,
         resume_from=resume_from,
+        tracker=run,
     )
 
 
@@ -864,18 +868,26 @@ def run_train_sft(config: SftConfig, *, resume: bool = False) -> int:
         assert_sft_runtime(runtime)
     with phase("train-sft: load model and assemble trainer"):
         assembled = build_trainer(config, resume=resume, runtime=runtime)
-    trainer = assembled.trainer
-    console().print(format_ledger(list(assembled.toggles)))
-    train = assembled.train_stats
-    LOG.info(
-        "train %d samples / %d tokens (%d supervised)",
-        train.samples,
-        train.total_tokens,
-        train.supervised_tokens,
-    )
+    run = assembled.tracker
+    try:
+        run.start()
+        trainer = assembled.trainer
+        console().print(format_ledger(list(assembled.toggles)))
+        train = assembled.train_stats
+        LOG.info(
+            "train %d samples / %d tokens (%d supervised)",
+            train.samples,
+            train.total_tokens,
+            train.supervised_tokens,
+        )
 
-    with phase("train-sft: optimizer training"):
-        trainer.train(resume_from_checkpoint=assembled.resume_from)
-    with phase("train-sft: save final checkpoint"):
-        trainer.save_model(config.output_dir)
-    return 0
+        with phase("train-sft: optimizer training"):
+            trainer.train(resume_from_checkpoint=assembled.resume_from)
+        with phase("train-sft: save final checkpoint"):
+            trainer.save_model(config.output_dir)
+        return 0
+    finally:
+        # Best-effort, mirroring GRPO's teardown: a W&B hiccup at close must not
+        # mask a finished (or failed) training run.
+        with suppress(Exception):
+            run.finish()
