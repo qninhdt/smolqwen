@@ -56,6 +56,7 @@ def test_every_profile_assembles_trl_arguments(profile: str) -> None:
     assert args.per_device_eval_batch_size % config.profile.num_generations == 0
     # Train batch keeps following the profile's own sizing field.
     assert args.per_device_train_batch_size == config.profile.micro_batch
+    assert args.num_iterations == config.num_iterations
 
 
 def test_grpo_uses_the_shared_benchmark_callback_instead_of_native_trl_eval() -> None:

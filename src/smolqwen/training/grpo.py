@@ -252,6 +252,7 @@ def _grpo_args(
         gradient_accumulation_steps=profile.grad_accum,
         generation_batch_size=generation_batch_size,
         num_generations=profile.num_generations,
+        num_iterations=config.num_iterations,
         learning_rate=training.learning_rate,
         num_train_epochs=training.num_train_epochs,
         max_steps=training.max_steps,
@@ -616,7 +617,7 @@ def build_grpo_trainer(
             dataset_size=len(train_dataset),
             groups_per_generation=args.generation_batch_size // config.profile.num_generations,
             gradient_accumulation_steps=args.gradient_accumulation_steps,
-            steps_per_generation=args.steps_per_generation,
+            steps_per_generation=args.steps_per_generation * int(args.num_iterations),
         )
         capacity = config.profile.env_worker_count * config.profile.env_episodes_per_worker
         if capacity < config.profile.generation_batch_size:

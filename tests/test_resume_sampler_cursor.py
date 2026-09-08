@@ -52,6 +52,18 @@ def test_cursor_accounts_for_gradient_accumulation_and_generation_reuse() -> Non
     assert cursor.at_step(2) == 19
 
 
+def test_cursor_waits_for_all_iterations_before_advancing_generation() -> None:
+    cursor = ScenarioCursor(
+        start=0,
+        dataset_size=20,
+        groups_per_generation=4,
+        gradient_accumulation_steps=32,
+        steps_per_generation=64,
+    )
+    assert cursor.at_step(1) == 0
+    assert cursor.at_step(2) == 4
+
+
 def test_checkpoint_persists_cursor_and_wandb_run_id(tmp_path: Path) -> None:
     class Run:
         id = "same-run"

@@ -260,6 +260,7 @@ class GrpoConfig(StrictModel):
     env: EnvRuntimeConfig = EnvRuntimeConfig()
     trajectory_samples_per_log: int = Field(default=8, ge=1)
     beta: float = Field(default=0.0, ge=0.0)
+    num_iterations: int = Field(default=1, ge=1)
     loss_type: str = "dapo"
     temperature: float = Field(default=1.0, gt=0.0)
     top_p: float = Field(default=1.0, gt=0.0, le=1.0)
