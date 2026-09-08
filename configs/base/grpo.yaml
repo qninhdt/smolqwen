@@ -41,7 +41,7 @@ env:
   create_timeout_s: 30.0
 
 beta: 0.0
-num_iterations: 2
+num_iterations: 1
 loss_type: dapo
 temperature: 1.0
 top_p: 0.95
