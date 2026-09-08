@@ -26,11 +26,6 @@ decoding:
   temperature: 0.0
   top_p: 1.0
   top_k: -1
-  # Repetition control, not sampling noise: the penalty is a logits processor, so
-  # greedy stays deterministic. 1.5 is BFCL's own Qwen non-think handler value
-  # (bfcl_eval/model_handler/api_inference/qwen.py); without it a weak policy
-  # loops on a failing tool call until the step cap and burns the task.
-  presence_penalty: 1.5
   max_new_tokens: 2048
   seed: 1234
 

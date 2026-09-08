@@ -179,7 +179,6 @@ def _vllm_generator(
             temperature=config.decoding.temperature,
             top_p=config.decoding.top_p,
             top_k=config.decoding.top_k,
-            presence_penalty=config.decoding.presence_penalty,
         )
         completions: list[BfclCompletion] = []
         for request, result in zip(requests, generated, strict=True):

@@ -121,7 +121,7 @@ def test_the_bench_eval_engine_cannot_be_asked_for_more_context_than_it_has(
     # The adapter selection and decoding still come from the eval stage, which is
     # what makes one number mean one thing in training and in `evaluate`.
     assert resolved.adapters, "the eval stage config should still name its adapters"
-    assert resolved.decoding == resolve("eval").decoding
+    assert resolved.decoding == EvalConfig().decoding
 
 
 def test_the_bench_eval_config_leaves_the_run_s_own_profile_untouched() -> None:

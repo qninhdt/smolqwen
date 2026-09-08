@@ -16,19 +16,6 @@ selects nothing, because the same benchmark already drove the in-training curve.
 Upstream EnvScaler's SFT stage trains with no validation set at all — this
 pipeline's SFT stage is train-only for the same reason.
 
-Two protocol details follow upstream BFCL exactly, because the number is only
-comparable under the protocol that produced upstream numbers:
-
-- **System prompt.** Every task renders BFCL's own formulated multi-turn system
-  prompt (`bfcl_eval/constants/default_prompts.py`), composed byte-for-byte as
-  upstream's `formulate_system_prompt` assembles the default format. Its
-  multi-turn clause is what tells the model that emitting no function call ends
-  the turn; the prompt is hashed into the manifest invariant `system_prompt`.
-- **Repetition control.** `decoding.presence_penalty` defaults to 1.5 — BFCL's
-  own Qwen non-think handler value — while temperature stays 0. The penalty is a
-  logits processor, so greedy decoding remains deterministic; without it a weak
-  policy loops on a failing tool call until the step cap.
-
 GRPO scores the dev benchmark in-training through `bench_eval`
 (`configs/base/grpo.yaml`): a prefix of the adapter's deterministic task order at
 each boundary, logged to W&B as `grpo/bench_*` alongside the training reward. The

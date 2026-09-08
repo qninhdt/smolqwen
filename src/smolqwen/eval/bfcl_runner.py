@@ -9,7 +9,6 @@ import subprocess
 import sys
 import time
 import uuid
-from urllib.parse import parse_qs
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -110,39 +109,6 @@ def load_bfcl_tasks(expected_revision: str | None = None) -> tuple[list[BfclTask
     }
     tasks = [BfclTask(str(entry["id"]), entry, expected[str(entry["id"])]) for entry in entries]
     return tasks, revision
-
-
-def _bfcl_system_prompt(entry: Mapping[str, Any]) -> str:
-    """The system prompt upstream BFCL prepends to every multi-turn entry.
-
-    Composed from BFCL's own prompt constants exactly as its
-    `formulate_system_prompt` assembles the default format; the upstream function
-    lives in a module that drags in an optional tree-sitter parser, so the
-    assembly is mirrored over pure data instead of imported. The multi-turn
-    clause is what tells the model that emitting no function call ends the turn;
-    without it a chat model stops after prose and the checker grades the wrong
-    state.
-    """
-
-    root = str(BFCL_ROOT)
-    if root not in sys.path:
-        sys.path.insert(0, root)
-    constants = importlib.import_module("bfcl_eval.constants.default_prompts")
-    config = {key: values[0] for key, values in parse_qs(constants.DEFAULT_SYSTEM_PROMPT_FORMAT).items()}
-    style = constants.PROMPT_STYLE_TEMPLATES[config["style"]]
-    output_format = constants.OUTPUT_FORMAT_MAPPING[config["ret_fmt"]]
-    param_types = constants.PARAM_TYPE_MAPPING[config["ret_fmt"]]
-    shape = style["tool_call_with_tag"] if config["tool_call_tag"] == "True" else style["tool_call_no_tag"]
-    functions = json.dumps(list(entry["function"]), indent=4)
-    return constants.PROMPT_TEMPLATE_MAPPING[config["prompt_fmt"]].format(
-        persona=style["persona"],
-        task=style["task"],
-        tool_call_format=shape.format(output_format=output_format, param_types=param_types),
-        multiturn_behavior=style["multiturn_behavior"],
-        available_tools=style["available_tools"].format(
-            format=config["func_doc_fmt"], functions=functions
-        ),
-    )
 
 
 def evaluate_bfcl(
@@ -246,7 +212,7 @@ def evaluate_bfcl(
             "task_count": len(tasks),
             "task_ids_hash": hash_json([task.task_id for task in tasks]),
             "tool_schema_hash": hash_json([task.entry["function"] for task in tasks]),
-            "system_prompt": hash_json([_bfcl_system_prompt(task.entry) for task in tasks]),
+            "system_prompt": None,
             "checker": "bfcl_eval.eval_checker.multi_turn_eval.multi_turn_checker",
         },
     )
@@ -255,10 +221,7 @@ def evaluate_bfcl(
 def _episode(task: BfclTask) -> _Episode:
     entry = task.entry
     tools = [_tool_schema(doc) for doc in entry["function"]]
-    messages = [
-        Message(role="system", content=_bfcl_system_prompt(entry)),
-        *_question_messages(entry, 0),
-    ]
+    messages = _question_messages(entry, 0)
     return _Episode(
         task=task,
         messages=messages,

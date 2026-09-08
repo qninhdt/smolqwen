@@ -111,45 +111,11 @@ def test_uses_structured_history_json_results_and_a_per_turn_cap(
 
     assert run.metrics["multi_turn_base"]["score"] == 1.0
     assert checked == [[[["first_call()"]], [["second_call()"]]]]
-    # Exactly one system message: the upstream BFCL multi-turn prompt, prepended
-    # once at turn 0 and never re-injected by later turns.
-    assert [message["role"] for message in records[0].messages].count("system") == 1
+    assert [message["role"] for message in records[0].messages].count("system") == 0
     assistant_calls = [message for message in records[0].messages if message["role"] == "assistant"]
     assert assistant_calls[0]["content"] == ""
     assert assistant_calls[0]["tool_calls"][0]["function"]["name"] == "first_call"
     assert records[0].observations == ['{"success": true}', '{"success": true}']
-
-def test_renders_the_upstream_bfcl_system_prompt() -> None:
-    tokenizer = OfflineTokenizer(token_size=1)
-    seen_prefixes: list[str] = []
-
-    def generate(requests: Any) -> list[BfclCompletion]:
-        seen_prefixes.append(tokenizer.decode(requests[0].prompt_ids))
-        return [BfclCompletion(requests[0].task_id, "done", 1, "stop")]
-
-    config = EvalConfig(profile=ProfileConfig(generation_concurrency=1, max_seq_length=32768))
-    evaluate_bfcl(
-        config,
-        tokenizer=tokenizer,
-        generate=generate,
-        tasks=[_task()],
-        benchmark_revision="a" * 40,
-    )
-
-    # The first rendered prompt must carry the upstream multi-turn system prompt
-    # (persona + turn-end rule), while the dataset's own first user question stays.
-    assert "expert in composing functions" in seen_prefixes[0]
-    assert "no more functions to call" in seen_prefixes[0]
-    assert "first" in seen_prefixes[0]
-
-def test_system_prompt_comes_from_bfcl_itself() -> None:
-    tasks, _revision = load_bfcl_tasks()
-    expected_prompt = bfcl_runner._bfcl_system_prompt(tasks[0].entry)
-
-    assert "expert in composing functions" in expected_prompt
-    assert len(expected_prompt) > 200
-    # Every task of the category resolves without error.
-    assert all(bfcl_runner._bfcl_system_prompt(task.entry) for task in tasks[:10])
 
 
 def test_batches_ready_bfcl_tasks(monkeypatch: Any) -> None:

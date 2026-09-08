@@ -53,7 +53,6 @@ PROFILE = EvalProfile(
     temperature=0.0,
     top_p=1.0,
     top_k=-1,
-    presence_penalty=0.0,
     seed=1234,
 )
 
