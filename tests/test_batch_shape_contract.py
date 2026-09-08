@@ -11,6 +11,7 @@ from typing import Any
 import pytest
 
 from smolqwen.rollout.generation import (
+    GenerationRequest,
     ScriptedPolicyBackend,
     VllmColocateBackend,
     _sampling_logprobs,
@@ -221,9 +222,60 @@ def test_vllm_backend_uses_trls_generation_contract(monkeypatch: pytest.MonkeyPa
         accelerator=SimpleNamespace(is_main_process=True),
     )
     backend = VllmColocateBackend(trainer)
-    from smolqwen.rollout.generation import GenerationRequest
 
     result = backend.generate([GenerationRequest("e", (1, 2), 2)])[0]
     assert result.token_ids == (7, 8)
     assert result.logprobs == (-0.1, -0.2)
     assert generation.max_completion_length == 99
+
+
+def test_vllm_backend_sleeps_after_batch_and_wakes_before_next_generation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "trl.extras.profiling.profiling_context", lambda trainer, name: nullcontext()
+    )
+
+    class FakeLlm:
+        def __init__(self) -> None:
+            self.sleep_calls: list[int] = []
+            self.wake_calls: list[list[str]] = []
+
+        def sleep(self, *, level: int) -> None:
+            self.sleep_calls.append(level)
+
+        def wake_up(self, *, tags: list[str]) -> None:
+            self.wake_calls.append(tags)
+
+    class FakeGeneration:
+        max_completion_length = 99
+        enable_sleep_mode = False
+        _llm_weights_sleeping = False
+
+        def __init__(self) -> None:
+            self.llm = FakeLlm()
+            self.sync_calls = 0
+
+        def sync_weights(self) -> None:
+            assert self.enable_sleep_mode
+            self.sync_calls += 1
+            self._llm_weights_sleeping = False
+
+        def generate(self, **kwargs: Any) -> tuple[Any, Any, Any, Any]:
+            assert not self.enable_sleep_mode
+            return [[1]], [[7]], [[[-0.1]]], [[[7]]]
+
+    generation = FakeGeneration()
+    backend = VllmColocateBackend(SimpleNamespace(vllm_generation=generation))
+    backend.sleep_after_rollout()
+
+    assert generation.llm.sleep_calls == [2]
+    assert generation.enable_sleep_mode
+    assert generation._llm_weights_sleeping
+
+    result = backend.generate([GenerationRequest("e", (1,), 1)])[0]
+
+    assert result.token_ids == (7,)
+    assert generation.sync_calls == 1
+    assert generation.llm.wake_calls == [["kv_cache"]]
+    assert not generation.enable_sleep_mode

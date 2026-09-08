@@ -174,12 +174,40 @@ class VllmColocateBackend:
             )
         self._trainer = trainer
         self._generation = generation
+        self._batch_sleeping = False
+        self._sleep_mode_before_batch = bool(getattr(generation, "enable_sleep_mode", False))
+
+    def sleep_after_rollout(self) -> None:
+        """Release vLLM weights and KV cache after one complete rollout batch.
+
+        TRL's built-in sleep mode runs after every ``generate`` call. The async
+        rollout calls that once per turn, so sleeping there would repeatedly
+        reload weights. This boundary is outside the turn loop and is the one
+        useful sleep point for a colocated multi-turn rollout.
+        """
+        if self._batch_sleeping:
+            return
+        self._generation.enable_sleep_mode = True
+        self._generation.llm.sleep(level=2)
+        self._generation._llm_weights_sleeping = True
+        self._batch_sleeping = True
+
+    def _wake_after_rollout(self) -> None:
+        if not self._batch_sleeping:
+            return
+        self._generation.enable_sleep_mode = True
+        if getattr(self._generation, "_llm_weights_sleeping", True):
+            self._generation.sync_weights()
+        self._generation.llm.wake_up(tags=["kv_cache"])
+        self._generation.enable_sleep_mode = self._sleep_mode_before_batch
+        self._batch_sleeping = False
 
     def generate(self, requests: Sequence[GenerationRequest]) -> list[TurnTokens]:
         if not requests:
             return []
         import time
 
+        self._wake_after_rollout()
         started = time.monotonic()
         from trl.extras.profiling import profiling_context
 

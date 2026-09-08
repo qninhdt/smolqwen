@@ -179,8 +179,10 @@ def make_rollout_func(
     `ScriptedPolicyBackend` through a factory that ignores the trainer.
     """
     backend_builder = backend_factory or (lambda trainer: VllmColocateBackend(trainer))
+    backend_instance: GenerationBackend | None = None
 
     def rollout_func(prompts: Prompts, trainer: Any) -> dict[str, list[Any]]:
+        nonlocal backend_instance
         assert_trainer_exclusive(trainer)
         bindings = attach_prompt_messages(prompts, resolve_bindings(prompts))
         for prompt, binding in zip(prompts, bindings, strict=True):
@@ -210,8 +212,11 @@ def make_rollout_func(
                 reward = "n/a" if episode.reward is None else f"{episode.reward:.3f}"
                 advance(f"{episode.terminal_reason}, reward {reward}")
 
+            if backend_instance is None:
+                backend_instance = backend_builder(trainer)
+            backend = backend_instance
             engine = make_turn_engine(
-                backend=backend_builder(trainer),
+                backend=backend,
                 dispatcher=dispatcher,
                 tokenizer=tokenizer,
                 config=config,
@@ -225,6 +230,10 @@ def make_rollout_func(
             finally:
                 gpu = gpu_sampler.stop()
         wall_s = time.monotonic() - started
+        sleep_after_rollout = getattr(backend, "sleep_after_rollout", None)
+        if callable(sleep_after_rollout):
+            sleep_after_rollout()
+            LOG.info("train-grpo rollout: vLLM slept after complete batch")
         timeline = profile_rollout(
             episodes=episodes,
             wall_s=wall_s,
