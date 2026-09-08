@@ -58,6 +58,7 @@ def test_every_profile_assembles_trl_arguments(profile: str) -> None:
     assert args.per_device_train_batch_size == config.profile.micro_batch
     assert args.num_iterations == config.num_iterations
     assert args.vllm_importance_sampling_correction is config.vllm_importance_sampling_correction
+    assert args.log_completions is False
 
 
 def test_disabled_vllm_correction_reuses_sampler_logprobs_as_old_policy() -> None:

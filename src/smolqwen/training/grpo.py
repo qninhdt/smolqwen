@@ -350,7 +350,7 @@ def _grpo_args(
         vllm_max_model_length=config.vllm_max_model_len,
         vllm_enable_sleep_mode=config.vllm_enable_sleep_mode,
         vllm_importance_sampling_correction=config.vllm_importance_sampling_correction,
-        log_completions=True,
+        log_completions=False,
         num_completions_to_print=config.trajectory_samples_per_log,
         remove_unused_columns=False,
         ignore_data_skip=True,
