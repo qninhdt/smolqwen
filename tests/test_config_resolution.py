@@ -83,6 +83,25 @@ def test_serving_profile_overlay_is_loaded_without_claiming_unmeasured_quantizat
         assert config.speculative_num_tokens is None
 
 
+def test_l4_evaluation_has_its_own_runtime_defaults(tmp_path: Path) -> None:
+    from smolqwen.config_models import EvalConfig
+
+    evaluation = resolve(
+        "eval", profile="l4", config_dir=CONFIG_DIR, budgets_path=tmp_path / "none.json"
+    )
+    training = resolve(
+        "grpo", profile="l4", config_dir=CONFIG_DIR, budgets_path=tmp_path / "none.json"
+    )
+
+    assert isinstance(evaluation, EvalConfig)
+    assert evaluation.profile.generation_concurrency == 64
+    assert evaluation.profile.vllm_kv_fraction == pytest.approx(0.8)
+    assert evaluation.max_steps_per_task == 20
+    assert evaluation.enable_thinking is False
+    assert training.profile.generation_concurrency == 32
+    assert training.profile.vllm_kv_fraction == pytest.approx(0.4)
+
+
 def test_profile_cannot_carry_a_semantic_field(tmp_path: Path) -> None:
     profiles = tmp_path / "profiles"
     profiles.mkdir(parents=True)

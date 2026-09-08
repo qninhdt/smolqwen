@@ -1,0 +1,6 @@
+profile:
+  generation_concurrency: 64
+  vllm_kv_fraction: 0.8
+
+max_steps_per_task: 20
+enable_thinking: false
