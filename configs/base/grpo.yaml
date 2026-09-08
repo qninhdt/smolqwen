@@ -40,7 +40,7 @@ env:
   verify_timeout_s: 60.0
   create_timeout_s: 30.0
 
-beta: 0.05
+beta: 0.02
 loss_type: dapo
 temperature: 1.0
 top_p: 0.95
