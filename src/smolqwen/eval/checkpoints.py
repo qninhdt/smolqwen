@@ -64,6 +64,7 @@ def resolve(
     adapter_revision: str | None = None,
     endpoint: str | None = None,
     store: CheckpointStore | None = None,
+    adapter_store: CheckpointStore | None = None,
 ) -> ResolvedCheckpoint:
     """Resolve every weight source before it is read.
 
@@ -97,6 +98,12 @@ def resolve(
             adapter_revision = adapter_revision or None
         else:
             adapter_revision = require_sha(adapter_revision, label="adapter")
+            if adapter_store is None:
+                raise CheckpointResolutionError(
+                    f"adapter {adapter!r} is not a local directory and no adapter "
+                    "store is configured to pull it from"
+                )
+            adapter = str(resolve_eval_checkpoint(adapter_store, adapter_revision))
 
     if local_checkpoint:
         return ResolvedCheckpoint(

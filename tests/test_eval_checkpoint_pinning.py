@@ -65,20 +65,22 @@ def test_an_adapter_without_its_own_revision_is_refused(tmp_path: Path) -> None:
     local_adapter = tmp_path / "adapter"
     local_adapter.mkdir()
 
-    resolved_local = resolve(
-        checkpoint=str(tmp_path), revision=None, adapter=str(local_adapter)
-    )
+    resolved_local = resolve(checkpoint=str(tmp_path), revision=None, adapter=str(local_adapter))
     assert resolved_local.adapter_revision is None
 
     with pytest.raises(CheckpointResolutionError, match="adapter revision sha"):
         resolve(checkpoint=str(tmp_path), revision=None, adapter="org/smolqwen-adapter")
 
+    store = Store(tmp_path / "pulled-adapter")
     resolved = resolve(
         checkpoint=str(tmp_path),
         revision=None,
         adapter="org/smolqwen-adapter",
         adapter_revision=OTHER_SHA,
+        adapter_store=cast(Any, store),
     )
+    assert store.pulled == [OTHER_SHA]
+    assert resolved.adapter_path == str(tmp_path / "pulled-adapter")
     assert resolved.adapter_revision == OTHER_SHA
     assert resolved.to_recorded()["adapter_revision"] == OTHER_SHA
 

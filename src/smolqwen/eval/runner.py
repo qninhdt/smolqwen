@@ -86,6 +86,7 @@ def run_evaluation(config: EvalConfig, args: Any) -> int:
             adapter_revision=args.adapter_revision,
             endpoint=None,
             store=_checkpoint_store(config, args),
+            adapter_store=_adapter_store(config, args),
         )
     with phase(f"evaluate: load BFCL ({', '.join(categories)})"):
         tasks, benchmark_revision = load_bfcl_tasks(categories, _expected_bfcl_revision(config))
@@ -227,6 +228,15 @@ def _checkpoint_store(config: EvalConfig, args: Any) -> Any:
     from smolqwen.artifacts import CheckpointStore
 
     return CheckpointStore(repo_id, Path(config.tracking.local_artifact_dir) / "eval-checkpoints")
+
+
+def _adapter_store(config: EvalConfig, args: Any) -> Any:
+    adapter = getattr(args, "adapter_path", None)
+    if not adapter or Path(adapter).is_dir():
+        return None
+    from smolqwen.artifacts import CheckpointStore
+
+    return CheckpointStore(adapter, Path(config.tracking.local_artifact_dir) / "eval-adapters")
 
 
 def _tokenizer_for(resolved: Any) -> Any:
