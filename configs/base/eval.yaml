@@ -27,11 +27,12 @@ http_timeout_s: 60.0
 max_steps_per_task: 64
 
 decoding:
-  # Greedy: the comparison is the deliverable, and sampling noise across three
-  # checkpoints would need many more runs to see the same effect.
-  temperature: 0.0
-  top_p: 1.0
-  top_k: -1
+  # Match the pinned BFCL Qwen no-thinking handler. Greedy decoding makes
+  # Qwen3.5 repeat failed tool calls and is not comparable with upstream BFCL.
+  temperature: 0.7
+  top_p: 0.8
+  top_k: 20
+  presence_penalty: 1.5
   max_new_tokens: 2048
   seed: 1234
 

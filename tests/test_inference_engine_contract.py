@@ -48,6 +48,7 @@ PROFILE = EvalProfile(
     temperature=0.0,
     top_p=1.0,
     top_k=-1,
+    presence_penalty=0.0,
     seed=1234,
 )
 
@@ -161,6 +162,7 @@ def fake_vllm(monkeypatch: pytest.MonkeyPatch) -> list[FakeLLM]:
         temperature: float
         top_p: float
         top_k: int
+        presence_penalty: float
         max_tokens: int
         seed: int | None
         logprobs: int | None = None

@@ -67,6 +67,36 @@ def test_understands_qwen35_and_qwen3_tool_call_formats() -> None:
     ]
 
 
+def test_qwen35_arguments_follow_bfcl_schema_types() -> None:
+    text = """<tool_call>
+<function=route>
+<parameter=zipcode>
+94102
+</parameter>
+<parameter=avoid_tolls>
+False
+</parameter>
+</function>
+</tool_call>"""
+    tools = [
+        {
+            "name": "route",
+            "parameters": {
+                "type": "dict",
+                "properties": {
+                    "zipcode": {"type": "string"},
+                    "avoid_tolls": {"type": "boolean"},
+                },
+            },
+        }
+    ]
+
+    assert bfcl_runner._parse_calls(text, tools=tools)[0].arguments == {
+        "zipcode": "94102",
+        "avoid_tolls": False,
+    }
+
+
 def test_uses_structured_history_json_results_and_a_per_turn_cap(
     monkeypatch: Any,
 ) -> None:

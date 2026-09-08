@@ -116,6 +116,12 @@ A non-reasoning eval should score checkpoints trained in the same mode — SFT
 shards prepared with `data.enable_thinking: false` self-describe that in their
 `semantics` tag.
 
+The shipped Qwen3.5 decoding config matches the pinned BFCL Qwen no-thinking
+handler, including its sampling and presence penalty. These values are part of
+the recorded decoding invariant: greedy generation can make the base model
+repeat the same failed tool call until the per-turn cap, making the result
+measure a decoding loop instead of task completion.
+
 ## Reading a score: check how the episodes ended
 
 Every aggregate carries `terminal_<reason>_rate` with a denominator. Read it before

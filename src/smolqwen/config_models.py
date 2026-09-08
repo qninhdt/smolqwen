@@ -297,6 +297,7 @@ class DecodingConfig(StrictModel):
     temperature: float = Field(default=0.0, ge=0.0)
     top_p: float = Field(default=1.0, gt=0.0, le=1.0)
     top_k: int = -1
+    presence_penalty: float = Field(default=0.0, ge=-2.0, le=2.0)
     max_new_tokens: int = Field(default=2048, ge=1)
     seed: int = 1234
 

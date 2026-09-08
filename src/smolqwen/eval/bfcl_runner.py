@@ -294,7 +294,7 @@ def _evaluate_single_turn(
 
             for task in batch:
                 completion = by_id[task.task_id]
-                calls = _parse_calls(completion.text)
+                calls = _parse_calls(completion.text, tools=task.entry["function"])
                 model_output = [
                     {call.name: dict(call.arguments)} for call in calls
                 ]
@@ -341,7 +341,7 @@ def _advance_episode(
     episode.generated_tokens += completion.generated_tokens
     episode.truncated = episode.truncated or completion.truncated
     reasoning, content = split_generation_continuation(completion.text, thinking=False)
-    calls = _parse_calls(content)
+    calls = _parse_calls(content, tools=episode.tools)
     if not calls:
         episode.messages.append(
             Message(role="assistant", content=content, reasoning_content=reasoning)
@@ -440,8 +440,10 @@ def _score_episode(episode: _Episode, run_key: str) -> tuple[TaskMetrics, Trajec
     return metric, record
 
 
-def _parse_calls(text: str) -> list[ToolCall]:
-    calls = parse_tool_calls(text)
+def _parse_calls(
+    text: str, *, tools: Sequence[Mapping[str, Any]] = ()
+) -> list[ToolCall]:
+    calls = parse_tool_calls(text, tools=tools)
     if calls:
         return calls
     json_calls: list[ToolCall] = []

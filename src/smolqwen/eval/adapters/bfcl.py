@@ -155,7 +155,7 @@ class BfclMultiTurnAdapter:
         if state.completed:
             return StepResult("Task already completed.", complete=True)
 
-        parsed_calls = self._parse_model_calls(completion)
+        parsed_calls = self._parse_model_calls(completion, state.all_tools)
         if parsed_calls:
             for call in parsed_calls:
                 # Match the pinned checker: schemas control what the model sees,
@@ -386,8 +386,10 @@ class BfclMultiTurnAdapter:
         return tuple(turns)
 
     @staticmethod
-    def _parse_model_calls(completion: str) -> list[Call]:
-        xml_calls = parse_tool_calls(completion)
+    def _parse_model_calls(
+        completion: str, tools: Sequence[Mapping[str, Any]] = ()
+    ) -> list[Call]:
+        xml_calls = parse_tool_calls(completion, tools=tools)
         if xml_calls:
             return [(call.name, (), dict(call.arguments)) for call in xml_calls]
         return [

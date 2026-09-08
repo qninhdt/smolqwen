@@ -18,6 +18,29 @@ def test_round_trip_scalar_arguments() -> None:
     assert parse_tool_calls(serialize_tool_call(call)) == [call]
 
 
+def test_round_trip_boolean_argument() -> None:
+    call = ToolCall(name="lock", arguments={"unlock": False})
+    assert parse_tool_calls(serialize_tool_call(call)) == [call]
+
+
+def test_schema_preserves_numeric_strings() -> None:
+    call = ToolCall(name="route", arguments={"zipcode": "94102"})
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "route",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"zipcode": {"type": "string"}},
+                },
+            },
+        }
+    ]
+
+    assert parse_tool_calls(serialize_tool_call(call), tools=tools) == [call]
+
+
 def test_round_trip_string_and_multiline() -> None:
     call = ToolCall(name="send", arguments={"to": "alice", "body": "hello\nworld"})
     assert parse_tool_calls(serialize_tool_call(call)) == [call]

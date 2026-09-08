@@ -147,3 +147,4 @@ def test_vllm_generator_batches_ids_and_uses_resolved_sampling() -> None:
     assert seen[0]["temperature"] == config.decoding.temperature
     assert seen[0]["top_p"] == config.decoding.top_p
     assert seen[0]["top_k"] == config.decoding.top_k
+    assert seen[0]["presence_penalty"] == config.decoding.presence_penalty

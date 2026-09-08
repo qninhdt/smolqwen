@@ -20,6 +20,7 @@ own serialisation (verified by the round-trip test).
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from smolqwen.data.loader import ToolCall
@@ -49,13 +50,16 @@ def _render_argument(value: Any) -> str:
     return str(value)
 
 
-def parse_tool_calls(text: str) -> list[ToolCall]:
+def parse_tool_calls(
+    text: str, *, tools: Sequence[Mapping[str, Any]] = ()
+) -> list[ToolCall]:
     """Parse zero or more `<tool_call>...</tool_call>` blocks from `text`.
 
     The model may concatenate several tool calls in one turn; the tour loop emits
     a fresh `<tool_call><function=...>` per call (see the template's `loop.first`
     branch). Each `<function>` becomes one `ToolCall`.
     """
+    argument_types = _argument_types(tools)
     calls: list[ToolCall] = []
     for block in _TOOL_CALL_BLOCK.finditer(text):
         body = block.group("body")
@@ -63,19 +67,42 @@ def parse_tool_calls(text: str) -> list[ToolCall]:
             name = function.group("name")
             arguments: dict[str, Any] = {}
             for parameter in _PARAMETER.finditer(function.group("body")):
-                arguments[parameter.group("key")] = _parse_value(
-                    parameter.group("value").strip("\n")
+                key = parameter.group("key")
+                arguments[key] = _parse_value(
+                    parameter.group("value").strip("\n"),
+                    expected_type=argument_types.get(name, {}).get(key),
                 )
             calls.append(ToolCall(name=name, arguments=arguments))
     return calls
 
 
-def _parse_value(raw: str) -> Any:
+def _argument_types(
+    tools: Sequence[Mapping[str, Any]],
+) -> dict[str, dict[str, str]]:
+    result: dict[str, dict[str, str]] = {}
+    for tool in tools:
+        function = tool.get("function", tool)
+        if not isinstance(function, Mapping) or not isinstance(function.get("name"), str):
+            continue
+        parameters = function.get("parameters", {})
+        properties = parameters.get("properties", {}) if isinstance(parameters, Mapping) else {}
+        if isinstance(properties, Mapping):
+            result[str(function["name"])] = {
+                str(name): str(schema.get("type"))
+                for name, schema in properties.items()
+                if isinstance(schema, Mapping) and schema.get("type") is not None
+            }
+    return result
+
+
+def _parse_value(raw: str, *, expected_type: str | None = None) -> Any:
     """Best-effort coercion of a parameter value to a scalar, preserving strings.
 
     Multi-line values (a string containing a newline) are kept verbatim; a value
     that parses as JSON (int, bool, number, list of scalars) is decoded.
     """
+    if expected_type == "string":
+        return raw
     stripped = raw.strip()
     if stripped.startswith("{") or stripped.startswith("["):
         import json
@@ -84,8 +111,8 @@ def _parse_value(raw: str) -> Any:
             return json.loads(stripped)
         except json.JSONDecodeError:
             return raw
-    if stripped in ("true", "false"):
-        return stripped == "true"
+    if stripped.casefold() in ("true", "false"):
+        return stripped.casefold() == "true"
     try:
         if stripped == stripped.strip() and " " not in stripped and "\n" not in stripped:
             return int(stripped)

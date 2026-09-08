@@ -44,6 +44,7 @@ def test_eval_profile_reads_the_resolved_profile_rather_than_its_own_defaults() 
     assert profile.temperature == config.decoding.temperature
     assert profile.top_p == config.decoding.top_p
     assert profile.top_k == config.decoding.top_k
+    assert profile.presence_penalty == config.decoding.presence_penalty
     assert profile.seed == config.decoding.seed
 
 
