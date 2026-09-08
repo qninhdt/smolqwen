@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from smolqwen.config_models import SftConfig
+from smolqwen.config_models import SftConfig, TrainingConfig
 from smolqwen.data.convert_sft import SFT_SCHEMA_VERSION, SFT_SEMANTICS
 from smolqwen.training.collate import collator
 from smolqwen.training.optim import cast_adapters, resolve_attn_implementation, resolve_precision
@@ -81,6 +81,24 @@ def test_turing_runtime_reaches_transformers_fp16_arguments() -> None:
     assert args.fp16 is True
     assert args.bf16 is False
     assert args.model_init_kwargs == {"dtype": "float16", "attn_implementation": "sdpa"}
+
+
+def test_sft_saves_by_optimizer_step_without_evaluation() -> None:
+    config = SftConfig(training=TrainingConfig(save_steps=50))
+    runtime = resolve_sft_runtime(
+        config,
+        capability=(8, 0),
+        has_cuda=True,
+        has_flash_attn=True,
+        require_cuda=True,
+        require_kernels=True,
+    )
+
+    args = _sft_config(config, runtime=runtime, use_liger=False, report_to=[])
+
+    assert args.save_strategy == "steps"
+    assert args.save_steps == 50
+    assert args.eval_strategy == "no"
 
 
 def test_pre_turing_production_run_refuses_rather_than_degrading() -> None:

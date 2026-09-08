@@ -30,7 +30,8 @@ training:
   weight_decay: 0.0
   lr_scheduler_type: cosine
   logging_steps: 1
-  save_steps: 100
+  # Optimizer-step cadence; uploads happen only when tracking.hub_repo_id is set.
+  save_steps: 50
   seed: 1234
 
 optimization:

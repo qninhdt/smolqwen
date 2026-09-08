@@ -428,11 +428,9 @@ def _sft_config(
         logging_steps=training.logging_steps,
         save_steps=training.save_steps,
         # Train-only, matching upstream EnvScaler's SFT (LlamaFactory, no
-        # validation set): overfitting is not gated on a val curve, and the
-        # capability curve is GRPO's bench_eval boundary. Epoch boundaries are
-        # what an eval-between-epochs workflow pins to, so they always save.
+        # validation set): save checkpoints by optimizer step without running eval.
         eval_strategy="no",
-        save_strategy="epoch",
+        save_strategy="steps",
         seed=training.seed,
         bf16=runtime.bf16,
         fp16=runtime.fp16,
@@ -895,6 +893,8 @@ def run_train_sft(config: SftConfig, *, resume: bool = False) -> int:
     with phase("train-sft: load model and assemble trainer"):
         assembled = build_trainer(config, resume=resume, runtime=runtime)
     run = assembled.tracker
+    if run is None:
+        raise SftError("train-sft trainer was assembled without a tracker")
     try:
         run.start()
         trainer = assembled.trainer

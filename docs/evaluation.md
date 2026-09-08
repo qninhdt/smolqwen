@@ -182,6 +182,9 @@ there does not exist. What is uploaded, and to where:
 | LoRA adapter | HF `tracking.hub_repo_id` | every `save_steps` |
 | Merged full weights | HF `tracking.merged_hub_repo_id` | `merge-adapter --push` |
 
+The shipped SFT config saves every 50 optimizer steps and does not run evaluation;
+set `tracking.hub_repo_id` to enable the corresponding Hub uploads.
+
 Reports go to W&B; weights go to the Hub. Duplicating multi-gigabyte checkpoints
 into W&B would be the actual quota problem, and `CheckpointStore` already owns
 that path.
