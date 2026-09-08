@@ -58,11 +58,14 @@ enable_thinking: false
 vllm_max_model_len: 16384
 vllm_enable_prefix_caching: true
 vllm_enable_sleep_mode: false
+# Reuse vLLM's sampled-token logprobs as the PPO old-policy logprobs. This avoids
+# materializing another dense vocabulary-wide logits tensor on the L4.
+vllm_importance_sampling_correction: false
 
-# vllm_importance_sampling_correction defaults to True, so the logprobs returned
-# by rollout_func feed the IS ratio. Misalignment produces no error -- ratios go
-# to exp(+/-large), get clamped, and training continues. This metric is the only
-# visible symptom, so it carries a stop threshold rather than a warning.
+# When correction is enabled, rollout logprobs feed the vLLM IS ratio. Misalignment
+# produces no error -- ratios go to exp(+/-large), get clamped, and training
+# continues. This metric is the only visible symptom, so it carries a stop
+# threshold rather than a warning.
 logp_difference_stop_threshold: 2.0
 
 # "async" is the production path (rollout_func + env_mask, tools=None).

@@ -277,6 +277,9 @@ class GrpoConfig(StrictModel):
     # config and assert the live engine state after trainer construction.
     vllm_enable_prefix_caching: Literal[True] = True
     vllm_enable_sleep_mode: bool = False
+    # When false, the rollout sampler's logprobs are reused as the PPO old-policy
+    # logprobs. This avoids a dense trainer forward on long multi-turn rows.
+    vllm_importance_sampling_correction: bool = True
     # The only visible symptom of logprob misalignment under importance-sampling
     # correction. Above this, stop the run rather than train on garbage ratios.
     logp_difference_stop_threshold: float = Field(default=2.0, gt=0.0)

@@ -57,6 +57,40 @@ def test_every_profile_assembles_trl_arguments(profile: str) -> None:
     # Train batch keeps following the profile's own sizing field.
     assert args.per_device_train_batch_size == config.profile.micro_batch
     assert args.num_iterations == config.num_iterations
+    assert args.vllm_importance_sampling_correction is config.vllm_importance_sampling_correction
+
+
+def test_disabled_vllm_correction_reuses_sampler_logprobs_as_old_policy() -> None:
+    import torch
+
+    from smolqwen.training.grpo import ScenarioGRPOTrainerMixin
+
+    class Base:
+        def _generate(self, prompts: object) -> tuple[object, ...]:
+            return (None, None, None, None, [[-0.1, float("nan")], [-0.2]], None)
+
+        def _get_per_token_logps_and_entropies(self, *_args: object, **_kwargs: object) -> None:
+            raise AssertionError("the dense old-policy forward should be skipped")
+
+    class Trainer(ScenarioGRPOTrainerMixin, Base):
+        use_vllm = True
+        vllm_importance_sampling_correction = False
+
+    trainer = Trainer()
+    trainer._generate([])
+    old_logprobs, entropy, aux_loss = trainer._get_per_token_logps_and_entropies(
+        object(),
+        torch.zeros((2, 3), dtype=torch.long),
+        torch.ones((2, 3), dtype=torch.long),
+        2,
+        compute_entropy=False,
+    )
+
+    assert old_logprobs[0, 0].item() == pytest.approx(-0.1)
+    assert old_logprobs[0, 1].item() == pytest.approx(0.0)
+    assert old_logprobs[1, 1].item() == pytest.approx(0.0)
+    assert entropy is None
+    assert aux_loss is None
 
 
 def test_grpo_uses_the_shared_benchmark_callback_instead_of_native_trl_eval() -> None:

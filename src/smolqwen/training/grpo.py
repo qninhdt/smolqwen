@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import functools
+import math
 import random
 from collections.abc import Iterator, Mapping, Sized
 from contextlib import contextmanager, nullcontext, suppress
@@ -10,6 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
+import torch
 from torch.utils.data import Sampler
 from transformers import TrainerCallback
 
@@ -106,6 +108,66 @@ class ScenarioGRPOTrainerMixin:
     """Sampler override mixed into TRL's trainer."""
 
     scenario_cursor: ScenarioCursor
+    _pending_sampling_logprobs: Any = None
+
+    def _generate(self, prompts: Any) -> Any:
+        """Use vLLM's sampled logprobs as old-policy logprobs when requested."""
+        output = cast(Any, super())._generate(prompts)
+        if getattr(self, "use_vllm", False) and not getattr(
+            self, "vllm_importance_sampling_correction", True
+        ):
+            logprobs = output[4]
+            if logprobs is not None:
+                self._pending_sampling_logprobs = logprobs
+        return output
+
+    def _get_per_token_logps_and_entropies(
+        self,
+        model: Any,
+        input_ids: Any,
+        attention_mask: Any,
+        logits_to_keep: int,
+        batch_size: int | None = None,
+        compute_entropy: bool = False,
+        compute_aux_loss: bool = False,
+        **kwargs: Any,
+    ) -> tuple[Any, Any, Any]:
+        """Avoid a dense old-policy forward when sampler logprobs are available."""
+        pending = self._pending_sampling_logprobs
+        if pending is not None and not compute_entropy:
+            self._pending_sampling_logprobs = None
+            rows = [
+                torch.tensor(
+                    [
+                        0.0 if value is None or not math.isfinite(float(value)) else float(value)
+                        for value in row
+                    ],
+                    dtype=torch.float32,
+                    device=input_ids.device,
+                )
+                for row in pending
+            ]
+            old_logprobs = torch.nn.utils.rnn.pad_sequence(
+                rows, batch_first=True, padding_value=0.0
+            )
+            if old_logprobs.size(1) < logits_to_keep:
+                old_logprobs = torch.nn.functional.pad(
+                    old_logprobs, (0, logits_to_keep - old_logprobs.size(1))
+                )
+            return old_logprobs[:, :logits_to_keep], None, None
+        return cast(
+            tuple[Any, Any, Any],
+            cast(Any, super())._get_per_token_logps_and_entropies(
+                model,
+                input_ids,
+                attention_mask,
+                logits_to_keep,
+                batch_size=batch_size,
+                compute_entropy=compute_entropy,
+                compute_aux_loss=compute_aux_loss,
+                **kwargs,
+            ),
+        )
 
     def _get_train_sampler(self, dataset: Any | None = None) -> Sampler[int]:
         trainer = cast(Any, self)
@@ -287,7 +349,7 @@ def _grpo_args(
         vllm_gpu_memory_utilization=profile.vllm_kv_fraction,
         vllm_max_model_length=config.vllm_max_model_len,
         vllm_enable_sleep_mode=config.vllm_enable_sleep_mode,
-        vllm_importance_sampling_correction=True,
+        vllm_importance_sampling_correction=config.vllm_importance_sampling_correction,
         log_completions=True,
         num_completions_to_print=config.trajectory_samples_per_log,
         remove_unused_columns=False,
@@ -728,12 +790,13 @@ def run_train_grpo(config: GrpoConfig, *, resume: bool = False) -> int:
         console().print(format_ledger(list(assembled.toggles)))
         LOG.info(
             "vLLM: %.0f%% VRAM budget, context=%d, concurrency=%d, "
-            "per_turn_sleep=%s, post_rollout_sleep=%s",
+            "per_turn_sleep=%s, post_rollout_sleep=%s, is_correction=%s",
             config.profile.vllm_kv_fraction * 100,
             config.vllm_max_model_len,
             config.profile.generation_concurrency,
             config.vllm_enable_sleep_mode,
             config.rollout_path == "async",
+            config.vllm_importance_sampling_correction,
         )
         LOG.info(
             "train %d scenarios",
