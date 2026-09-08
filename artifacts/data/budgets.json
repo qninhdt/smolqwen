@@ -15,7 +15,7 @@
     "max_new_tokens_per_step": "Phase 6 per-step generation cap"
   },
   "recommended": {
-    "max_env_steps": 16,
-    "max_new_tokens_per_step": 1024
+    "max_env_steps": 64,
+    "max_new_tokens_per_step": 5694
   }
 }
