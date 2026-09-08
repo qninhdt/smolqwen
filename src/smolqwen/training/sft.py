@@ -26,6 +26,7 @@ from collections.abc import Iterable, Iterator
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
+from time import monotonic
 from typing import Any
 
 # Imported at module scope, unlike inside the CLI handlers: this module is itself
@@ -653,6 +654,9 @@ class ThroughputCallback(TrainerCallback):
         self.tracker = tracker
         self.tokens_per_step = tokens_per_step
         self.trainer: Any | None = None
+        # Step timestamps for the plain-line ETA; TrainerState.log_history carries
+        # no wall-clock field, so the callback owns its own samples.
+        self._step_times: list[tuple[int, float]] = []
 
     def bind_trainer(self, trainer: Any) -> None:
         self.trainer = trainer
@@ -681,15 +685,37 @@ class ThroughputCallback(TrainerCallback):
                 "sft/projected_positions": self.trainer._step_projected_positions,
             }
         self.tracker.log_step(tokens=tokens, step=int(state.global_step), **extra)
+        # A Trainer tqdm bar redraws in place and reads as frozen in a piped Colab
+        # cell, so the plain line carries the completion numbers itself: total,
+        # percent, and ETA from the callback's own step timestamps.
+        step = int(state.global_step)
+        self._step_times.append((step, monotonic()))
+        total = state.max_steps or 0
+        progress = f"{step}/{total} ({100 * step / total:.1f}%)" if total else f"step {step}"
         LOG.info(
-            "train-sft step %d: tokens=%s supervised=%s trajectories=%s microbatches=%s max_len=%s",
-            int(state.global_step),
+            "train-sft step %s: tokens=%s supervised=%s trajectories=%s microbatches=%s "
+            "max_len=%s eta=%s",
+            progress,
             tokens,
             extra.get("sft/supervised_tokens", "n/a"),
             extra.get("sft/trajectories", "n/a"),
             extra.get("sft/microbatches", "n/a"),
             extra.get("sft/max_trajectory_length", "n/a"),
+            self._eta(state.max_steps),
         )
+
+    def _eta(self, max_steps: int | None) -> str:
+        """Human ETA from recent step timestamps; 'n/a' before two samples exist."""
+        times = self._step_times[-5:]
+        if max_steps is None or len(times) < 2:
+            return "n/a"
+        step_span = times[-1][0] - times[0][0]
+        seconds = times[-1][1] - times[0][1]
+        if step_span <= 0 or seconds <= 0:
+            return "n/a"
+        remaining = seconds / step_span * max(max_steps - times[-1][0], 0)
+        hours, remainder = divmod(int(remaining), 3600)
+        return f"{hours}h{remainder // 60:02d}m" if hours else f"{remainder // 60}m"
 
     def on_log(self, args: Any, state: Any, control: Any, **kwargs: Any) -> None:
         logs = kwargs.get("logs")

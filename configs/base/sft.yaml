@@ -29,7 +29,7 @@ training:
   warmup_ratio: 0.03
   weight_decay: 0.0
   lr_scheduler_type: cosine
-  logging_steps: 10
+  logging_steps: 1
   save_steps: 100
   seed: 1234
 
