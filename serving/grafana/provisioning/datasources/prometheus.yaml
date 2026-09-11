@@ -1,0 +1,12 @@
+# Grafana reads only Prometheus. Fixed uid so the committed dashboard can
+# reference this datasource without an import-time variable prompt.
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    uid: smolqwen-prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false

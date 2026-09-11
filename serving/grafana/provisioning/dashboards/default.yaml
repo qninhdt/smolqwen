@@ -1,0 +1,14 @@
+# Provision the single committed serving dashboard from disk (read-only).
+apiVersion: 1
+
+providers:
+  - name: smolqwen
+    orgId: 1
+    folder: ""
+    type: file
+    disableDeletion: false
+    allowUiUpdates: false
+    editable: false
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false

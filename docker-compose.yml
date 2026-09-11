@@ -99,3 +99,45 @@ services:
       proxy:
         condition: service_healthy
     profiles: [bench]
+
+  # Minimal observability (opt-in): Prometheus scrapes vLLM's native /metrics
+  # through the authenticated nginx door and Grafana reads only Prometheus.
+  # `docker compose --profile observability up`. Nothing here consumes the GPU.
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    profiles: [observability]
+    volumes:
+      - ./serving/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      # Same bearer key the proxy enforces, mounted from the generated (gitignored)
+      # secret file so it never appears in this config, argv, or the Prometheus UI.
+      - ./artifacts/serving/vllm-api-key:/etc/prometheus/secrets/vllm-api-key:ro
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=15d
+    ports:
+      # Loopback only; the metrics pipeline is never exposed on the host or a tunnel.
+      - 127.0.0.1:9090:9090
+    depends_on:
+      vllm-server:
+        condition: service_healthy
+
+  grafana:
+    image: grafana/grafana:11.4.0
+    profiles: [observability]
+    environment:
+      # No committed password: the admin secret must be supplied at bring-up.
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD must be set}
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./serving/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./serving/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      # Loopback only by default; put a real reverse proxy in front to expose it.
+      - 127.0.0.1:3000:3000
+    depends_on:
+      - prometheus
+
+volumes:
+  grafana-data: {}
