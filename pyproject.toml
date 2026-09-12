@@ -8,7 +8,15 @@ version = "0.1.0"
 description = "Agentic post-training and optimized serving for Qwen3.5-2B"
 readme = "README.md"
 requires-python = ">=3.10,<3.15"
-license = { text = "MIT" }
+license = "MIT"
+authors = [{ name = "qninhdt" }]
+keywords = ["qwen", "post-training", "grpo", "tool-use", "bfcl", "vllm", "fp8"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
 
 # torch is anchored by vllm 0.26.0's `torch==2.11.0` (exact equality, not a floor).
 # Phase 6 colocates vLLM inside the training process, so vllm, torch and the
@@ -22,19 +30,15 @@ dependencies = [
   "trl==1.12.0",
   "peft>=0.20.0",
   "datasets>=4.7.0",
-  "accelerate>=1.4.0",
+  "accelerate==1.14.0",
   "pydantic>=2.9",
   "pyyaml>=6.0",
   "rich>=13.0",
   "huggingface-hub>=1.0",
-  "wandb>=0.29",
+  "wandb==0.29.0",
 ]
 
 [project.optional-dependencies]
-# vLLM is what anchors torch. Kept out of the base set so CPU-only CI and local
-# dev never pull a multi-GB CUDA wheel chain.
-serve = ["vllm==0.26.0"]
-
 # Kernel wheels for the GDN mixer, the causal convolution, and the fused loss
 # head. Those three are mandatory on GPU: falling back materializes the dense
 # [batch, seq, 248320] logits tensor and the unfused GDN recurrence, which does
@@ -62,8 +66,13 @@ colab = [
 [project.scripts]
 smolqwen = "smolqwen.cli:main"
 
+[project.urls]
+Repository = "https://github.com/qninhdt/smolqwen"
+Issues = "https://github.com/qninhdt/smolqwen/issues"
+
 [dependency-groups]
 dev = [
+  "matplotlib>=3.10",
   "ruff>=0.9",
   "mypy>=1.14",
   "pytest>=8.0",
@@ -111,6 +120,9 @@ warn_unreachable = true
 [[tool.mypy.overrides]]
 module = [
   "accelerate.*",
+  # Vendored under third_party/ and added to sys.path at runtime, so it has no
+  # importable stubs during static checking on any checkout.
+  "bfcl_eval.*",
   "causal_conv1d.*",
   "datasets.*",
   "fla.*",

@@ -129,8 +129,5 @@ it is never converted into a low policy reward.
 
 ## Final evaluation
 
-After the full target-GPU run, merge the RL adapter and evaluate the pinned
-SFT+RL revision through the Phase 5 harness. `assert_comparable` must pass on the
-invariant set against Base and SFT manifests. Only then replace the pending cells
-in [`artifacts/evaluation/final_results.md`](../artifacts/evaluation/final_results.md)
-and write the interpretation, including metrics that stayed flat or regressed.
+No final GRPO quality result is reported. A future Base/SFT/GRPO comparison is
+publishable only after `assert_comparable` accepts all three pinned manifests.
