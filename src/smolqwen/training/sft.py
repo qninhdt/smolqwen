@@ -434,6 +434,7 @@ def _sft_config(
         seed=training.seed,
         bf16=runtime.bf16,
         fp16=runtime.fp16,
+        use_cpu=not cuda_available(),
         gradient_checkpointing=optimization.gradient_checkpointing,
         gradient_checkpointing_kwargs={"use_reentrant": False},
         use_liger_kernel=use_liger,

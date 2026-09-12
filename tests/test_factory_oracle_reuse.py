@@ -57,6 +57,7 @@ def test_bound_tool_signature_keeps_every_schema_argument() -> None:
     ]
 
 
+@pytest.mark.dataset
 def test_real_schema_allows_required_properties_after_optional_properties() -> None:
     spec = load_env_specs(VENDORED_METADATA)["env_1_sft"]
     adapter_type = build_factory_env_class(

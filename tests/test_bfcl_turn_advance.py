@@ -53,6 +53,7 @@ def test_bfcl_turn_advances_after_a_response_without_function_calls(tmp_path: Pa
     assert adapter.build_prompt(task, history) == history
 
 
+@pytest.mark.dataset
 def test_miss_function_tools_are_revealed_at_the_holdout_turn(
     tmp_path: Path, monkeypatch: Any
 ) -> None:
@@ -114,6 +115,7 @@ def test_archived_sources_use_the_pinned_commit_without_git_metadata(tmp_path: P
     assert revision == "a" * 40
 
 
+@pytest.mark.dataset
 @pytest.mark.parametrize("task_id", ["multi_turn_base_0", "multi_turn_base_52"])
 def test_ground_truth_positional_arguments_match_named_model_calls(task_id: str) -> None:
     root = Path("third_party/gorilla/berkeley-function-call-leaderboard/bfcl_eval/data")

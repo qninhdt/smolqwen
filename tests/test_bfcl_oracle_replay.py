@@ -6,10 +6,14 @@ import inspect
 import json
 from typing import Any, cast
 
+import pytest
+
 from smolqwen.config import resolve
 from smolqwen.config_models import EvalConfig
 from smolqwen.eval.adapters import create_adapter
 from smolqwen.eval.adapters.bfcl import BfclMultiTurnAdapter
+
+pytestmark = pytest.mark.dataset
 
 
 def _named_arguments(

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
+
 from smolqwen.config_models import EvalConfig, ProfileConfig
 from smolqwen.eval import bfcl_runner
 from smolqwen.eval.bfcl_runner import (
@@ -40,6 +42,7 @@ def _task(task_id: str = "case") -> BfclTask:
     )
 
 
+@pytest.mark.dataset
 def test_loads_multi_turn_base_through_bfcl_itself() -> None:
     tasks, revision = load_bfcl_tasks()
 
