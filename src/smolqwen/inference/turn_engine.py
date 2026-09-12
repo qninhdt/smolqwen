@@ -365,6 +365,17 @@ class TurnEngine:
                 ) from exc
             finished = self._clock()
             self._record_stage(episode, action, started, finished)
+            if (
+                action == "step"
+                and episode.terminal_reason is None
+                and finished - slot.started_at >= self._config.episode_timeout_s
+            ):
+                # A slow step can complete between the cycle timeout check and
+                # the next reap. Consume its result without scheduling another
+                # model turn; otherwise the episode can reach `step_cap` first.
+                self._terminal(slot, "timeout")
+                episode.state = "ready"
+                continue
             if action == "create":
                 self._apply(slot, episode, self._driver.opened(episode, payload), opening=True)
             elif action == "step":
