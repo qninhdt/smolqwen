@@ -19,6 +19,7 @@ from smolqwen.config import (
 from smolqwen.config_models import (
     BUDGET_SEEDED_FIELDS,
     PROFILES,
+    SERVING_PROFILES,
     ConfigError,
     DataConfig,
     GrpoConfig,
@@ -68,10 +69,10 @@ def test_profile_overlays_only_sizing_fields(tmp_path: Path) -> None:
     assert l4.model_dump(exclude={"profile"}) == a100.model_dump(exclude={"profile"})
 
 
-def test_serving_profile_overlay_is_loaded_without_claiming_unmeasured_quantization(
+def test_serving_profile_overlay_loads_the_measured_runtime_profiles(
     tmp_path: Path,
 ) -> None:
-    for profile in PROFILES:
+    for profile in SERVING_PROFILES:
         config = resolve(
             "serve",
             profile=profile,
@@ -79,8 +80,26 @@ def test_serving_profile_overlay_is_loaded_without_claiming_unmeasured_quantizat
             budgets_path=tmp_path / "none.json",
         )
         assert isinstance(config, ServeConfig)
-        assert config.quantization is None
+        assert config.profile.quantization == "fp8"
+        assert config.profile.kv_cache_dtype == "fp8"
         assert config.speculative_num_tokens is None
+
+
+def test_serving_profiles_contain_only_runtime_decision_fields() -> None:
+    expected = {
+        "dtype",
+        "quantization",
+        "kv_cache_dtype",
+        "kv_cache_scale",
+        "max_num_seqs",
+        "max_num_batched_tokens",
+        "max_num_queued_reqs",
+        "max_num_queued_tokens",
+        "gpu_memory_utilization",
+    }
+    for name in SERVING_PROFILES:
+        payload = yaml.safe_load((CONFIG_DIR / "serving" / f"{name}.yaml").read_text())
+        assert set(payload) == expected
 
 
 def test_l4_evaluation_has_its_own_runtime_defaults(tmp_path: Path) -> None:
@@ -98,6 +117,7 @@ def test_l4_evaluation_has_its_own_runtime_defaults(tmp_path: Path) -> None:
     assert evaluation.profile.vllm_kv_fraction == pytest.approx(0.8)
     assert evaluation.max_steps_per_task == 20
     assert evaluation.enable_thinking is False
+    assert isinstance(training, GrpoConfig)
     assert training.profile.generation_concurrency == 32
     assert training.profile.vllm_kv_fraction == pytest.approx(0.4)
 

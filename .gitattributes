@@ -1,0 +1,7 @@
+third_party/** linguist-vendored=true
+artifacts/serving/sweeps/** linguist-generated=true
+artifacts/serving/validation/** linguist-generated=true
+artifacts/serving/sweeps/** -whitespace
+artifacts/serving/validation/*.prom -whitespace
+artifacts/serving/validation/*.log -whitespace
+artifacts/evaluation/*.jsonl -whitespace

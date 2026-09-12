@@ -6,7 +6,7 @@ set -euo pipefail
 python - <<'PY'
 from importlib.metadata import version
 
-expected = "0.26.0"
+expected = "0.29.0"
 actual = version("vllm")
 if actual != expected:
     raise SystemExit(f"vLLM version mismatch: expected {expected}, found {actual}")
@@ -28,5 +28,5 @@ if [[ -n "$cuda_library_path" ]]; then
   export LD_LIBRARY_PATH="${cuda_library_path}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
 fi
 
-profile="${SMOLQWEN_PROFILE:-l4}"
+profile="${SMOLQWEN_PROFILE:-balanced}"
 exec smolqwen serve --profile "$profile" "$@"

@@ -1,0 +1,7 @@
+{
+  "_benchmark_name": "fp8-tok2048-seq128-c128",
+  "max_concurrency": 128,
+  "max_num_batched_tokens": 2048,
+  "max_num_seqs": 128,
+  "precision": "fp8"
+}

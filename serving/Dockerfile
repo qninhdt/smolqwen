@@ -1,4 +1,4 @@
-FROM vllm/vllm-openai:v0.26.0
+FROM vllm/vllm-openai:v0.29.0
 
 USER root
 WORKDIR /opt/smolqwen

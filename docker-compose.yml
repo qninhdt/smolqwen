@@ -5,10 +5,10 @@ services:
     build:
       context: .
       dockerfile: serving/Dockerfile
-    image: smolqwen-vllm:0.26.0
+    image: smolqwen-vllm:0.29.0
     environment:
       VLLM_API_KEY: ${VLLM_API_KEY:?VLLM_API_KEY must be set}
-      SMOLQWEN_PROFILE: ${SMOLQWEN_PROFILE:-l4}
+      SMOLQWEN_PROFILE: ${SMOLQWEN_PROFILE:-balanced}
     volumes:
       - ${MODEL_PATH:-./artifacts/models/qwen3.5-2b-sft-grpo-merged}:/opt/smolqwen/artifacts/models/qwen3.5-2b-sft-grpo-merged:ro
       - ./artifacts/serving:/opt/smolqwen/artifacts/serving
@@ -58,25 +58,34 @@ services:
   # wrapper this replaced only renamed vLLM's result fields into a dataclass; the
   # commands vLLM ships already own execution, resume, and the Pareto front.
   #
-  # `--dataset-name custom` with a workload file is the point: `random` measures
-  # token throughput on synthetic prompts, which says nothing about an agentic
-  # request's prefill shape or its tool-schema overhead. Build the file first with
-  # `smolqwen build-workload`.
+  # BFCL tool-calling traffic is the point: `--dataset-name random` measures token
+  # throughput on synthetic prompts, which says nothing about an agentic request's
+  # prefill shape or its tool-schema overhead. vLLM's built-in BFCL loader resolves
+  # the dataset from the Hub, carries each sample's `tools` schema over the
+  # `openai-chat` backend at `/v1/chat/completions`, and applies the chat template
+  # itself -- so there is no local file and no `--skip-chat-template`.
   bench:
-    image: smolqwen-vllm:0.26.0
+    image: smolqwen-vllm:0.29.0
     entrypoint: ["vllm"]
     command:
       - bench
       - serve
+      - --backend
+      - openai-chat
       - --base-url
       - http://vllm-server:8080
+      - --endpoint
+      - /v1/chat/completions
       - --model
       - smolqwen
       - --dataset-name
-      - custom
+      - hf
       - --dataset-path
-      - /opt/smolqwen/artifacts/serving/bfcl-agentic.jsonl
-      - --skip-chat-template
+      - gorilla-llm/Berkeley-Function-Calling-Leaderboard
+      - --bfcl-categories
+      - simple,multiple,parallel,parallel_multiple
+      - --num-prompts
+      - "200"
       - --max-concurrency
       - "${SMOLQWEN_CONCURRENCY:-4}"
       - --percentile-metrics
@@ -93,7 +102,6 @@ services:
       DO_NOT_TRACK: "1"
     volumes:
       - ${MODEL_PATH:-./artifacts/models/qwen3.5-2b-sft-grpo-merged}:/opt/smolqwen/artifacts/models/qwen3.5-2b-sft-grpo-merged:ro
-      - ./third_party:/opt/smolqwen/third_party:ro
       - ./artifacts/serving:/opt/smolqwen/artifacts/serving
     depends_on:
       proxy:

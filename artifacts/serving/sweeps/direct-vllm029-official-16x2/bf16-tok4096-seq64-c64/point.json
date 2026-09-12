@@ -1,0 +1,7 @@
+{
+  "_benchmark_name": "bf16-tok4096-seq64-c64",
+  "max_concurrency": 64,
+  "max_num_batched_tokens": 4096,
+  "max_num_seqs": 64,
+  "precision": "bf16"
+}

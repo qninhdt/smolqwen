@@ -1,5 +1,6 @@
 .claude
 .codegraph
+plans/
 .mypy_cache
 .pytest_cache
 .ruff_cache
@@ -20,5 +21,28 @@ artifacts/data/*
 !artifacts/data/budgets.json
 !artifacts/data/conversion_report.json
 
-# Generated before exposing the serving proxy. Never commit bearer credentials.
+# Resource-bounded official-Qwen L4 study: retain only its reproducible evidence.
+!artifacts/serving/
+artifacts/serving/*
+!artifacts/serving/workload-manifest.json
+!artifacts/serving/summary.json
+!artifacts/serving/report.md
+!artifacts/serving/throughput-vs-p95-ttft.png
+!artifacts/serving/throughput-vs-p95-tpot.png
+!artifacts/serving/matched-fp8-throughput-uplift.png
+!artifacts/serving/concurrency-scaling.png
+!artifacts/serving/validation/
+!artifacts/serving/validation/**
+!artifacts/serving/sweeps/
+artifacts/serving/sweeps/*
+!artifacts/serving/sweeps/direct-vllm029-official-16x2/
+!artifacts/serving/sweeps/direct-vllm029-official-16x2/**
+
+# Never commit bearer credentials.
 artifacts/serving/vllm-api-key
+
+# One completed Base BFCL run; derived headline values link back to this evidence.
+!artifacts/evaluation/
+artifacts/evaluation/*
+!artifacts/evaluation/qwen-3.5-2b-non_reasoning-base-bfcl_v4_multi_turn_base.jsonl
+!artifacts/evaluation/qwen-3.5-2b-non_reasoning-sft-bfcl_v4_multi_turn_base.jsonl

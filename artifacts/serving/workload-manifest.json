@@ -1,0 +1,27 @@
+{
+  "categories": [
+    "multiple",
+    "parallel",
+    "parallel_multiple",
+    "simple"
+  ],
+  "dataset_file_sha256": {
+    "multiple": "aef168155ebd74b7ac2401198b201343bc7d16d7a3d7e0d4e6d8ee82c6969b2a",
+    "parallel": "fad375d68295776efb63e5aa331dd884f8635e7bb50e05908113c74f14281c3c",
+    "parallel_multiple": "8863ea8433239f55c5f016154cf0830853c89f693c6ea270396a2fa121960579",
+    "simple": "fbc37b2ad252bf9af985582e0e07b456173fe627d957491472ea9cef5fb83158"
+  },
+  "dataset_repo": "gorilla-llm/Berkeley-Function-Calling-Leaderboard",
+  "dataset_revision": "61fc0608cfd831fcfbbaa676ebdfef0ed963eeda",
+  "generation": {
+    "ignore_eos": false,
+    "max_tokens": 256,
+    "temperature": 0.0,
+    "top_p": 1.0
+  },
+  "manifest_hash": "9b26de5440dc986f15c488903f637636d1a5800f93da6671e3dca239fa9769f6",
+  "model": "Qwen/Qwen3.5-2B",
+  "num_prompts": 200,
+  "seed": 1234,
+  "tokenizer_revision": "15852e8c16360a2fea060d615a32b45270f8a8fc"
+}

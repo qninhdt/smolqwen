@@ -1,0 +1,518 @@
++ /content/vllm029/bin/vllm bench sweep serve --serve-cmd 'vllm serve Qwen/Qwen3.5-2B --revision 15852e8c16360a2fea060d615a32b45270f8a8fc --served-model-name smolqwen' --bench-cmd 'vllm bench serve --backend openai-chat --endpoint /v1/chat/completions --model smolqwen --tokenizer Qwen/Qwen3.5-2B --dataset-name hf --dataset-path gorilla-llm/Berkeley-Function-Calling-Leaderboard --bfcl-categories simple,multiple,parallel,parallel_multiple --num-prompts 200 --percentile-metrics ttft,tpot,itl,e2el --metric-percentiles 50,95,99' --after-bench-cmd 'python /content/smolqwen/scripts/capture-vllm-metrics.py /content/smolqwen/artifacts/serving/sweeps/direct-vllm029-official-16x2/fp8-tok8192-seq16-c4/metrics' --serve-params /content/point-serve-params.json --bench-params /content/point-bench-params.json --num-runs 1 --experiment-name fp8-tok8192-seq16-c4 --server-ready-timeout 900 -o /content/smolqwen/artifacts/serving/sweeps/direct-vllm029-official-16x2 --dry-run
+[BEGIN SERVER]
+Server overrides: {'_benchmark_name': 'fp8-tok8192-seq16-c4', 'dtype': 'bfloat16', 'enable_auto_tool_choice': True, 'enable_chunked_prefill': True, 'enable_prefix_caching': True, 'gpu_memory_utilization': 0.9, 'kv_cache_dtype': 'fp8', 'max_model_len': 32768, 'max_num_batched_tokens': 8192, 'max_num_seqs': 16, 'quantization': 'fp8', 'reasoning_parser': 'qwen3', 'tool_call_parser': 'hermes'}
+Server command: ['vllm', 'serve', 'Qwen/Qwen3.5-2B', '--revision', '15852e8c16360a2fea060d615a32b45270f8a8fc', '--served-model-name', 'smolqwen', '--dtype', 'bfloat16', '--enable-auto-tool-choice', '--enable-chunked-prefill', '--enable-prefix-caching', '--gpu-memory-utilization', '0.9', '--kv-cache-dtype', 'fp8', '--max-model-len', '32768', '--max-num-batched-tokens', '8192', '--max-num-seqs', '16', '--quantization', 'fp8', '--reasoning-parser', 'qwen3', '--tool-call-parser', 'hermes']
+[BEGIN BENCHMARK]
+Benchmark overrides: {'_benchmark_name': 'concurrency-4', 'backend': 'openai-chat', 'bfcl_categories': 'simple,multiple,parallel,parallel_multiple', 'dataset_name': 'hf', 'dataset_path': 'gorilla-llm/Berkeley-Function-Calling-Leaderboard', 'endpoint': '/v1/chat/completions', 'max_concurrency': 4, 'metric_percentiles': '50,95,99', 'model': 'smolqwen', 'num_prompts': 200, 'percentile_metrics': 'ttft,tpot,itl,e2el', 'save_detailed': True, 'save_result': True, 'temperature': 0.0, 'tokenizer': 'Qwen/Qwen3.5-2B'}
+Run Number: 0
+Benchmark command: ['vllm', 'bench', 'serve', '--backend', 'openai-chat', '--endpoint', '/v1/chat/completions', '--model', 'smolqwen', '--tokenizer', 'Qwen/Qwen3.5-2B', '--dataset-name', 'hf', '--dataset-path', 'gorilla-llm/Berkeley-Function-Calling-Leaderboard', '--bfcl-categories', 'simple,multiple,parallel,parallel_multiple', '--num-prompts', '200', '--percentile-metrics', 'ttft,tpot,itl,e2el', '--metric-percentiles', '50,95,99', '--max-concurrency', '4', '--save-detailed', '--save-result', '--temperature', '0.0', '--percentile-metrics', 'ttft,tpot,itl,e2el', '--save-result', '--result-dir', '/content/smolqwen/artifacts/serving/sweeps/direct-vllm029-official-16x2/fp8-tok8192-seq16-c4/SERVE--fp8-tok8192-seq16-c4-BENCH--concurrency-4', '--result-filename', 'run=0.json']
+Output file: /content/smolqwen/artifacts/serving/sweeps/direct-vllm029-official-16x2/fp8-tok8192-seq16-c4/SERVE--fp8-tok8192-seq16-c4-BENCH--concurrency-4/run=0.json
+[END BENCHMARK]
+[END SERVER]
+Experiment will be saved at: /content/smolqwen/artifacts/serving/sweeps/direct-vllm029-official-16x2/fp8-tok8192-seq16-c4
++ /content/vllm029/bin/vllm bench sweep serve --serve-cmd 'vllm serve Qwen/Qwen3.5-2B --revision 15852e8c16360a2fea060d615a32b45270f8a8fc --served-model-name smolqwen' --bench-cmd 'vllm bench serve --backend openai-chat --endpoint /v1/chat/completions --model smolqwen --tokenizer Qwen/Qwen3.5-2B --dataset-name hf --dataset-path gorilla-llm/Berkeley-Function-Calling-Leaderboard --bfcl-categories simple,multiple,parallel,parallel_multiple --num-prompts 200 --percentile-metrics ttft,tpot,itl,e2el --metric-percentiles 50,95,99' --after-bench-cmd 'python /content/smolqwen/scripts/capture-vllm-metrics.py /content/smolqwen/artifacts/serving/sweeps/direct-vllm029-official-16x2/fp8-tok8192-seq16-c4/metrics' --serve-params /content/point-serve-params.json --bench-params /content/point-bench-params.json --num-runs 1 --experiment-name fp8-tok8192-seq16-c4 --server-ready-timeout 900 -o /content/smolqwen/artifacts/serving/sweeps/direct-vllm029-official-16x2
+[BEGIN SERVER]
+Server overrides: {'_benchmark_name': 'fp8-tok8192-seq16-c4', 'dtype': 'bfloat16', 'enable_auto_tool_choice': True, 'enable_chunked_prefill': True, 'enable_prefix_caching': True, 'gpu_memory_utilization': 0.9, 'kv_cache_dtype': 'fp8', 'max_model_len': 32768, 'max_num_batched_tokens': 8192, 'max_num_seqs': 16, 'quantization': 'fp8', 'reasoning_parser': 'qwen3', 'tool_call_parser': 'hermes'}
+Server command: ['vllm', 'serve', 'Qwen/Qwen3.5-2B', '--revision', '15852e8c16360a2fea060d615a32b45270f8a8fc', '--served-model-name', 'smolqwen', '--dtype', 'bfloat16', '--enable-auto-tool-choice', '--enable-chunked-prefill', '--enable-prefix-caching', '--gpu-memory-utilization', '0.9', '--kv-cache-dtype', 'fp8', '--max-model-len', '32768', '--max-num-batched-tokens', '8192', '--max-num-seqs', '16', '--quantization', 'fp8', '--reasoning-parser', 'qwen3', '--tool-call-parser', 'hermes']
+[BEGIN BENCHMARK]
+Benchmark overrides: {'_benchmark_name': 'concurrency-4', 'backend': 'openai-chat', 'bfcl_categories': 'simple,multiple,parallel,parallel_multiple', 'dataset_name': 'hf', 'dataset_path': 'gorilla-llm/Berkeley-Function-Calling-Leaderboard', 'endpoint': '/v1/chat/completions', 'max_concurrency': 4, 'metric_percentiles': '50,95,99', 'model': 'smolqwen', 'num_prompts': 200, 'percentile_metrics': 'ttft,tpot,itl,e2el', 'save_detailed': True, 'save_result': True, 'temperature': 0.0, 'tokenizer': 'Qwen/Qwen3.5-2B'}
+Run Number: 0
+Benchmark command: ['vllm', 'bench', 'serve', '--backend', 'openai-chat', '--endpoint', '/v1/chat/completions', '--model', 'smolqwen', '--tokenizer', 'Qwen/Qwen3.5-2B', '--dataset-name', 'hf', '--dataset-path', 'gorilla-llm/Berkeley-Function-Calling-Leaderboard', '--bfcl-categories', 'simple,multiple,parallel,parallel_multiple', '--num-prompts', '200', '--percentile-metrics', 'ttft,tpot,itl,e2el', '--metric-percentiles', '50,95,99', '--max-concurrency', '4', '--save-detailed', '--save-result', '--temperature', '0.0', '--percentile-metrics', 'ttft,tpot,itl,e2el', '--save-result', '--result-dir', '/content/smolqwen/artifacts/serving/sweeps/direct-vllm029-official-16x2/fp8-tok8192-seq16-c4/SERVE--fp8-tok8192-seq16-c4-BENCH--concurrency-4', '--result-filename', 'run=0.json']
+Output file: /content/smolqwen/artifacts/serving/sweeps/direct-vllm029-official-16x2/fp8-tok8192-seq16-c4/SERVE--fp8-tok8192-seq16-c4-BENCH--concurrency-4/run=0.json
+[END BENCHMARK]
+[END SERVER]
+(APIServer pid=8325) Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+(APIServer pid=8325) 
+Parse safetensors files:   0%|          | 0/1 [00:00<?, ?it/s]
+Parse safetensors files: 100%|██████████| 1/1 [00:00<00:00,  1.24it/s]
+Parse safetensors files: 100%|██████████| 1/1 [00:00<00:00,  1.24it/s]
+(APIServer pid=8325) [transformers] The `use_fast` parameter is deprecated and will be removed in a future version. Use `backend="torchvision"` instead of `use_fast=True`, or `backend="pil"` instead of `use_fast=False`.
+(EngineCore pid=8543) 
+Loading safetensors checkpoint shards:   0% Completed | 0/1 [00:00<?, ?it/s]
+(EngineCore pid=8543) 
+Loading safetensors checkpoint shards: 100% Completed | 1/1 [00:01<00:00,  1.25s/it]
+(EngineCore pid=8543) 
+Loading safetensors checkpoint shards: 100% Completed | 1/1 [00:01<00:00,  1.25s/it]
+(EngineCore pid=8543) 
+(EngineCore pid=8543) Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+(EngineCore pid=8543) [transformers] The `use_fast` parameter is deprecated and will be removed in a future version. Use `backend="torchvision"` instead of `use_fast=True`, or `backend="pil"` instead of `use_fast=False`.
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.566000 8543 torch/_inductor/triton_bundler.py:418] Directory /root/.cache/vllm/torch_compile_cache/torch_aot_compile/2b2e02f2f23ad86af395db1902ef3200a353bb6bdfe9b42ff2e3c7e5caf9d1df/inductor_cache/triton/0/tmp.7fd9b3d9-1e76-490c-8d74-567743392da8 is not empty - skipping!
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.566000 8543 torch/_inductor/triton_bundler.py:418] Directory /root/.cache/vllm/torch_compile_cache/torch_aot_compile/2b2e02f2f23ad86af395db1902ef3200a353bb6bdfe9b42ff2e3c7e5caf9d1df/inductor_cache/triton/0/tmp.79bbce16-495e-4b8f-8096-04bcd06c064e is not empty - skipping!
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.566000 8543 torch/_inductor/triton_bundler.py:418] Directory /root/.cache/vllm/torch_compile_cache/torch_aot_compile/2b2e02f2f23ad86af395db1902ef3200a353bb6bdfe9b42ff2e3c7e5caf9d1df/inductor_cache/triton/0/tmp.96dbb2be-f5f5-4c17-8ed5-f5d240faaee8 is not empty - skipping!
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.568000 8543 torch/_inductor/triton_bundler.py:418] Directory /root/.cache/vllm/torch_compile_cache/torch_aot_compile/2b2e02f2f23ad86af395db1902ef3200a353bb6bdfe9b42ff2e3c7e5caf9d1df/inductor_cache/triton/0/tmp.74c8cfcb-3eca-4893-b53f-e35f56283a49 is not empty - skipping!
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.569000 8543 torch/_inductor/triton_bundler.py:418] Directory /root/.cache/vllm/torch_compile_cache/torch_aot_compile/2b2e02f2f23ad86af395db1902ef3200a353bb6bdfe9b42ff2e3c7e5caf9d1df/inductor_cache/triton/0/tmp.55319b09-3104-4998-b77a-fa3e64e0a130 is not empty - skipping!
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.571000 8543 torch/_inductor/triton_bundler.py:418] Directory /root/.cache/vllm/torch_compile_cache/torch_aot_compile/2b2e02f2f23ad86af395db1902ef3200a353bb6bdfe9b42ff2e3c7e5caf9d1df/inductor_cache/triton/0/tmp.38549194-0595-4bbe-a702-0c171f9f460b is not empty - skipping!
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.579000 8543 torch/_inductor/triton_bundler.py:418] Directory /root/.cache/vllm/torch_compile_cache/torch_aot_compile/2b2e02f2f23ad86af395db1902ef3200a353bb6bdfe9b42ff2e3c7e5caf9d1df/inductor_cache/triton/0/tmp.55e385a8-b97d-4ca2-a212-00d3665aaac3 is not empty - skipping!
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.579000 8543 torch/_inductor/triton_bundler.py:418] Directory /root/.cache/vllm/torch_compile_cache/torch_aot_compile/2b2e02f2f23ad86af395db1902ef3200a353bb6bdfe9b42ff2e3c7e5caf9d1df/inductor_cache/triton/0/tmp.441e6f6e-43ce-497b-a387-f96a1c872d31 is not empty - skipping!
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.581000 8543 torch/_inductor/triton_bundler.py:418] Directory /root/.cache/vllm/torch_compile_cache/torch_aot_compile/2b2e02f2f23ad86af395db1902ef3200a353bb6bdfe9b42ff2e3c7e5caf9d1df/inductor_cache/triton/0/tmp.6cb95975-512b-4055-92b7-3c6300f4e818 is not empty - skipping!
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.581000 8543 torch/_inductor/triton_bundler.py:418] Directory /root/.cache/vllm/torch_compile_cache/torch_aot_compile/2b2e02f2f23ad86af395db1902ef3200a353bb6bdfe9b42ff2e3c7e5caf9d1df/inductor_cache/triton/0/tmp.29392677-e238-45a4-a232-558dd342227b is not empty - skipping!
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.581000 8543 torch/_inductor/triton_bundler.py:418] Directory /root/.cache/vllm/torch_compile_cache/torch_aot_compile/2b2e02f2f23ad86af395db1902ef3200a353bb6bdfe9b42ff2e3c7e5caf9d1df/inductor_cache/triton/0/tmp.e7e476e8-72ba-4082-a9b3-6483e817683b is not empty - skipping!
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.583000 8543 torch/_inductor/triton_bundler.py:418] Directory /root/.cache/vllm/torch_compile_cache/torch_aot_compile/2b2e02f2f23ad86af395db1902ef3200a353bb6bdfe9b42ff2e3c7e5caf9d1df/inductor_cache/triton/0/tmp.36b7898c-baf3-4a7b-85ad-3202a08a7ce8 is not empty - skipping!
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.583000 8543 torch/_inductor/triton_bundler.py:418] Directory /root/.cache/vllm/torch_compile_cache/torch_aot_compile/2b2e02f2f23ad86af395db1902ef3200a353bb6bdfe9b42ff2e3c7e5caf9d1df/inductor_cache/triton/0/tmp.57486639-e725-40e0-a009-6b59f9d15faa is not empty - skipping!
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.583000 8543 torch/_inductor/triton_bundler.py:418] Directory /root/.cache/vllm/torch_compile_cache/torch_aot_compile/2b2e02f2f23ad86af395db1902ef3200a353bb6bdfe9b42ff2e3c7e5caf9d1df/inductor_cache/triton/0/tmp.1b674560-3b50-4710-84f1-c36def199e50 is not empty - skipping!
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.584000 8543 torch/_inductor/triton_bundler.py:418] Directory /root/.cache/vllm/torch_compile_cache/torch_aot_compile/2b2e02f2f23ad86af395db1902ef3200a353bb6bdfe9b42ff2e3c7e5caf9d1df/inductor_cache/triton/0/tmp.35519e9f-1d3b-4284-a14a-e603c389843e is not empty - skipping!
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.588000 8543 torch/_inductor/triton_bundler.py:418] Directory /root/.cache/vllm/torch_compile_cache/torch_aot_compile/2b2e02f2f23ad86af395db1902ef3200a353bb6bdfe9b42ff2e3c7e5caf9d1df/inductor_cache/triton/0/tmp.fe47196b-80c4-4133-af25-ce8325c628a6 is not empty - skipping!
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.589000 8543 torch/_inductor/triton_bundler.py:418] Directory /root/.cache/vllm/torch_compile_cache/torch_aot_compile/2b2e02f2f23ad86af395db1902ef3200a353bb6bdfe9b42ff2e3c7e5caf9d1df/inductor_cache/triton/0/tmp.7a73f327-54b8-4fc0-af5d-713c9b713ef4 is not empty - skipping!
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.591000 8543 torch/_inductor/triton_bundler.py:418] Directory /root/.cache/vllm/torch_compile_cache/torch_aot_compile/2b2e02f2f23ad86af395db1902ef3200a353bb6bdfe9b42ff2e3c7e5caf9d1df/inductor_cache/triton/0/tmp.16431b0c-0832-4298-8f9b-ad781baf0cb3 is not empty - skipping!
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.595000 8543 torch/_inductor/triton_bundler.py:418] Directory /root/.cache/vllm/torch_compile_cache/torch_aot_compile/2b2e02f2f23ad86af395db1902ef3200a353bb6bdfe9b42ff2e3c7e5caf9d1df/inductor_cache/triton/0/tmp.ca914774-00a9-451a-815f-c59e268e569b is not empty - skipping!
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.596000 8543 torch/_inductor/triton_bundler.py:418] Directory /root/.cache/vllm/torch_compile_cache/torch_aot_compile/2b2e02f2f23ad86af395db1902ef3200a353bb6bdfe9b42ff2e3c7e5caf9d1df/inductor_cache/triton/0/tmp.7785c118-77e1-4dcd-929d-079a168e6c9b is not empty - skipping!
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.597000 8543 torch/_inductor/triton_bundler.py:418] Directory /root/.cache/vllm/torch_compile_cache/torch_aot_compile/2b2e02f2f23ad86af395db1902ef3200a353bb6bdfe9b42ff2e3c7e5caf9d1df/inductor_cache/triton/0/tmp.cbbf129c-e957-4e65-9d84-c3da597821bc is not empty - skipping!
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.599000 8543 torch/_inductor/triton_bundler.py:418] Directory /root/.cache/vllm/torch_compile_cache/torch_aot_compile/2b2e02f2f23ad86af395db1902ef3200a353bb6bdfe9b42ff2e3c7e5caf9d1df/inductor_cache/triton/0/tmp.0a7f7edc-354c-4df1-bc35-1ed45152e28a is not empty - skipping!
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.602000 8543 torch/_inductor/triton_bundler.py:418] Directory /root/.cache/vllm/torch_compile_cache/torch_aot_compile/2b2e02f2f23ad86af395db1902ef3200a353bb6bdfe9b42ff2e3c7e5caf9d1df/inductor_cache/triton/0/tmp.eb5cb256-5d25-4db5-9be0-83d547de1b81 is not empty - skipping!
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.605000 8543 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_red_fused__to_copy_abs_add_clamp_cutlass_scaled_mm_div_fused_add_rms_norm_max_mul_reciprocal_unsqueeze_1
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.605000 8543 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.605000 8543 torch/_inductor/triton_bundler.py:242]   File "/content/vllm029/lib/python3.13/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.605000 8543 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.605000 8543 torch/_inductor/triton_bundler.py:242]     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.605000 8543 torch/_inductor/triton_bundler.py:242]   File "/content/vllm029/lib/python3.13/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.605000 8543 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.605000 8543 torch/_inductor/triton_bundler.py:242]         "Cubin file saved by TritonBundler not found at %s", cubin_location
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.605000 8543 torch/_inductor/triton_bundler.py:242]     )
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.605000 8543 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/root/.cache/vllm/torch_compile_cache/torch_aot_compile/2b2e02f2f23ad86af395db1902ef3200a353bb6bdfe9b42ff2e3c7e5caf9d1df/inductor_cache/triton/0/7WPJJAHYSRVGVMJQN55HNY6Z7GHF6CFZRZA4MOK7JHAWVXN6PDCQ/triton_red_fused__to_copy_abs_add_clamp_cutlass_scaled_mm_div_fused_add_rms_norm_max_mul_reciprocal_unsqueeze_1.cubin')
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.605000 8543 torch/_inductor/triton_bundler.py:418] Directory /root/.cache/vllm/torch_compile_cache/torch_aot_compile/2b2e02f2f23ad86af395db1902ef3200a353bb6bdfe9b42ff2e3c7e5caf9d1df/inductor_cache/triton/0/tmp.76a936ff-79d5-41f8-89e3-8b6767d82901 is not empty - skipping!
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.607000 8543 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_zeros_1
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.607000 8543 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.607000 8543 torch/_inductor/triton_bundler.py:242]   File "/content/vllm029/lib/python3.13/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.607000 8543 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.607000 8543 torch/_inductor/triton_bundler.py:242]     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.607000 8543 torch/_inductor/triton_bundler.py:242]   File "/content/vllm029/lib/python3.13/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.607000 8543 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.607000 8543 torch/_inductor/triton_bundler.py:242]         "Cubin file saved by TritonBundler not found at %s", cubin_location
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.607000 8543 torch/_inductor/triton_bundler.py:242]     )
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.607000 8543 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/root/.cache/vllm/torch_compile_cache/torch_aot_compile/2b2e02f2f23ad86af395db1902ef3200a353bb6bdfe9b42ff2e3c7e5caf9d1df/inductor_cache/triton/0/BKR6EBMLPALWYH6WPQ5YPS64FH67DJKP4ASYJQ3LC4XX6BTMHTWA/triton_poi_fused_zeros_1.cubin')
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.610000 8543 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_red_fused__to_copy_abs_add_clamp_cutlass_scaled_mm_div_fused_add_rms_norm_max_mul_reciprocal_unsqueeze_1
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.610000 8543 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.610000 8543 torch/_inductor/triton_bundler.py:242]   File "/content/vllm029/lib/python3.13/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.610000 8543 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.610000 8543 torch/_inductor/triton_bundler.py:242]     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.610000 8543 torch/_inductor/triton_bundler.py:242]   File "/content/vllm029/lib/python3.13/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.610000 8543 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.610000 8543 torch/_inductor/triton_bundler.py:242]         "Cubin file saved by TritonBundler not found at %s", cubin_location
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.610000 8543 torch/_inductor/triton_bundler.py:242]     )
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.610000 8543 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/root/.cache/vllm/torch_compile_cache/torch_aot_compile/2b2e02f2f23ad86af395db1902ef3200a353bb6bdfe9b42ff2e3c7e5caf9d1df/inductor_cache/triton/0/7WPJJAHYSRVGVMJQN55HNY6Z7GHF6CFZRZA4MOK7JHAWVXN6PDCQ/triton_red_fused__to_copy_abs_add_clamp_cutlass_scaled_mm_div_fused_add_rms_norm_max_mul_reciprocal_unsqueeze_1.cubin')
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.611000 8543 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_red_fused__to_copy_abs_add_clamp_cutlass_scaled_mm_div_fused_add_rms_norm_max_mul_reciprocal_unsqueeze_1
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.611000 8543 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.611000 8543 torch/_inductor/triton_bundler.py:242]   File "/content/vllm029/lib/python3.13/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.611000 8543 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.611000 8543 torch/_inductor/triton_bundler.py:242]     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.611000 8543 torch/_inductor/triton_bundler.py:242]   File "/content/vllm029/lib/python3.13/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.611000 8543 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.611000 8543 torch/_inductor/triton_bundler.py:242]         "Cubin file saved by TritonBundler not found at %s", cubin_location
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.611000 8543 torch/_inductor/triton_bundler.py:242]     )
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.611000 8543 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/root/.cache/vllm/torch_compile_cache/torch_aot_compile/2b2e02f2f23ad86af395db1902ef3200a353bb6bdfe9b42ff2e3c7e5caf9d1df/inductor_cache/triton/0/7WPJJAHYSRVGVMJQN55HNY6Z7GHF6CFZRZA4MOK7JHAWVXN6PDCQ/triton_red_fused__to_copy_abs_add_clamp_cutlass_scaled_mm_div_fused_add_rms_norm_max_mul_reciprocal_unsqueeze_1.cubin')
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.611000 8543 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_red_fused__to_copy_abs_add_clamp_cutlass_scaled_mm_div_fused_add_rms_norm_max_mul_reciprocal_unsqueeze_1
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.611000 8543 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.611000 8543 torch/_inductor/triton_bundler.py:242]   File "/content/vllm029/lib/python3.13/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.611000 8543 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.611000 8543 torch/_inductor/triton_bundler.py:242]     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.611000 8543 torch/_inductor/triton_bundler.py:242]   File "/content/vllm029/lib/python3.13/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.611000 8543 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.611000 8543 torch/_inductor/triton_bundler.py:242]         "Cubin file saved by TritonBundler not found at %s", cubin_location
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.611000 8543 torch/_inductor/triton_bundler.py:242]     )
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.611000 8543 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/root/.cache/vllm/torch_compile_cache/torch_aot_compile/2b2e02f2f23ad86af395db1902ef3200a353bb6bdfe9b42ff2e3c7e5caf9d1df/inductor_cache/triton/0/7WPJJAHYSRVGVMJQN55HNY6Z7GHF6CFZRZA4MOK7JHAWVXN6PDCQ/triton_red_fused__to_copy_abs_add_clamp_cutlass_scaled_mm_div_fused_add_rms_norm_max_mul_reciprocal_unsqueeze_1.cubin')
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.613000 8543 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_red_fused__to_copy_abs_add_clamp_cutlass_scaled_mm_div_fused_add_rms_norm_max_mul_reciprocal_unsqueeze_3
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.613000 8543 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.613000 8543 torch/_inductor/triton_bundler.py:242]   File "/content/vllm029/lib/python3.13/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.613000 8543 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.613000 8543 torch/_inductor/triton_bundler.py:242]     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.613000 8543 torch/_inductor/triton_bundler.py:242]   File "/content/vllm029/lib/python3.13/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.613000 8543 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.613000 8543 torch/_inductor/triton_bundler.py:242]         "Cubin file saved by TritonBundler not found at %s", cubin_location
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.613000 8543 torch/_inductor/triton_bundler.py:242]     )
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.613000 8543 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/root/.cache/vllm/torch_compile_cache/torch_aot_compile/2b2e02f2f23ad86af395db1902ef3200a353bb6bdfe9b42ff2e3c7e5caf9d1df/inductor_cache/triton/0/ZJMY44RFJLK6O6R2J3XTT4C2IOSQ4KN4XX6A5T6NR7GK2X37GWMA/triton_red_fused__to_copy_abs_add_clamp_cutlass_scaled_mm_div_fused_add_rms_norm_max_mul_reciprocal_unsqueeze_3.cubin')
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.615000 8543 torch/_inductor/triton_bundler.py:418] Directory /root/.cache/vllm/torch_compile_cache/torch_aot_compile/2b2e02f2f23ad86af395db1902ef3200a353bb6bdfe9b42ff2e3c7e5caf9d1df/inductor_cache/triton/0/tmp.cfa5e4c4-02eb-4608-a7d5-c51ca5e34508 is not empty - skipping!
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.619000 8543 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_red_fused__to_copy_abs_add_clamp_cutlass_scaled_mm_div_fused_add_rms_norm_max_mul_reciprocal_unsqueeze_3
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.619000 8543 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.619000 8543 torch/_inductor/triton_bundler.py:242]   File "/content/vllm029/lib/python3.13/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.619000 8543 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.619000 8543 torch/_inductor/triton_bundler.py:242]     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.619000 8543 torch/_inductor/triton_bundler.py:242]   File "/content/vllm029/lib/python3.13/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.619000 8543 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.619000 8543 torch/_inductor/triton_bundler.py:242]         "Cubin file saved by TritonBundler not found at %s", cubin_location
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.619000 8543 torch/_inductor/triton_bundler.py:242]     )
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.619000 8543 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/root/.cache/vllm/torch_compile_cache/torch_aot_compile/2b2e02f2f23ad86af395db1902ef3200a353bb6bdfe9b42ff2e3c7e5caf9d1df/inductor_cache/triton/0/ZJMY44RFJLK6O6R2J3XTT4C2IOSQ4KN4XX6A5T6NR7GK2X37GWMA/triton_red_fused__to_copy_abs_add_clamp_cutlass_scaled_mm_div_fused_add_rms_norm_max_mul_reciprocal_unsqueeze_3.cubin')
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.622000 8543 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_red_fused__to_copy_abs_add_clamp_cutlass_scaled_mm_div_fused_add_rms_norm_max_mul_reciprocal_unsqueeze_1
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.622000 8543 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.622000 8543 torch/_inductor/triton_bundler.py:242]   File "/content/vllm029/lib/python3.13/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.622000 8543 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.622000 8543 torch/_inductor/triton_bundler.py:242]     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.622000 8543 torch/_inductor/triton_bundler.py:242]   File "/content/vllm029/lib/python3.13/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.622000 8543 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.622000 8543 torch/_inductor/triton_bundler.py:242]         "Cubin file saved by TritonBundler not found at %s", cubin_location
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.622000 8543 torch/_inductor/triton_bundler.py:242]     )
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.622000 8543 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/root/.cache/vllm/torch_compile_cache/torch_aot_compile/2b2e02f2f23ad86af395db1902ef3200a353bb6bdfe9b42ff2e3c7e5caf9d1df/inductor_cache/triton/0/7WPJJAHYSRVGVMJQN55HNY6Z7GHF6CFZRZA4MOK7JHAWVXN6PDCQ/triton_red_fused__to_copy_abs_add_clamp_cutlass_scaled_mm_div_fused_add_rms_norm_max_mul_reciprocal_unsqueeze_1.cubin')
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.622000 8543 torch/_inductor/triton_bundler.py:418] Directory /root/.cache/vllm/torch_compile_cache/torch_aot_compile/2b2e02f2f23ad86af395db1902ef3200a353bb6bdfe9b42ff2e3c7e5caf9d1df/inductor_cache/triton/0/tmp.e012348d-b2c1-4d22-ae2f-183e493e7a69 is not empty - skipping!
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.623000 8543 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_red_fused__to_copy_abs_add_clamp_cutlass_scaled_mm_div_fused_add_rms_norm_max_mul_reciprocal_unsqueeze_3
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.623000 8543 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.623000 8543 torch/_inductor/triton_bundler.py:242]   File "/content/vllm029/lib/python3.13/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.623000 8543 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.623000 8543 torch/_inductor/triton_bundler.py:242]     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.623000 8543 torch/_inductor/triton_bundler.py:242]   File "/content/vllm029/lib/python3.13/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.623000 8543 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.623000 8543 torch/_inductor/triton_bundler.py:242]         "Cubin file saved by TritonBundler not found at %s", cubin_location
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.623000 8543 torch/_inductor/triton_bundler.py:242]     )
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.623000 8543 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/root/.cache/vllm/torch_compile_cache/torch_aot_compile/2b2e02f2f23ad86af395db1902ef3200a353bb6bdfe9b42ff2e3c7e5caf9d1df/inductor_cache/triton/0/ZJMY44RFJLK6O6R2J3XTT4C2IOSQ4KN4XX6A5T6NR7GK2X37GWMA/triton_red_fused__to_copy_abs_add_clamp_cutlass_scaled_mm_div_fused_add_rms_norm_max_mul_reciprocal_unsqueeze_3.cubin')
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.626000 8543 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_red_fused__to_copy_abs_add_clamp_cutlass_scaled_mm_div_fused_add_rms_norm_max_mul_reciprocal_unsqueeze_1
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.626000 8543 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.626000 8543 torch/_inductor/triton_bundler.py:242]   File "/content/vllm029/lib/python3.13/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.626000 8543 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.626000 8543 torch/_inductor/triton_bundler.py:242]     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.626000 8543 torch/_inductor/triton_bundler.py:242]   File "/content/vllm029/lib/python3.13/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.626000 8543 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.626000 8543 torch/_inductor/triton_bundler.py:242]         "Cubin file saved by TritonBundler not found at %s", cubin_location
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.626000 8543 torch/_inductor/triton_bundler.py:242]     )
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.626000 8543 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/root/.cache/vllm/torch_compile_cache/torch_aot_compile/2b2e02f2f23ad86af395db1902ef3200a353bb6bdfe9b42ff2e3c7e5caf9d1df/inductor_cache/triton/0/7WPJJAHYSRVGVMJQN55HNY6Z7GHF6CFZRZA4MOK7JHAWVXN6PDCQ/triton_red_fused__to_copy_abs_add_clamp_cutlass_scaled_mm_div_fused_add_rms_norm_max_mul_reciprocal_unsqueeze_1.cubin')
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.647000 8543 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_red_fused__to_copy_abs_add_clamp_cutlass_scaled_mm_div_fused_add_rms_norm_max_mul_reciprocal_unsqueeze_1
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.647000 8543 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.647000 8543 torch/_inductor/triton_bundler.py:242]   File "/content/vllm029/lib/python3.13/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.647000 8543 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.647000 8543 torch/_inductor/triton_bundler.py:242]     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.647000 8543 torch/_inductor/triton_bundler.py:242]   File "/content/vllm029/lib/python3.13/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.647000 8543 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.647000 8543 torch/_inductor/triton_bundler.py:242]         "Cubin file saved by TritonBundler not found at %s", cubin_location
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.647000 8543 torch/_inductor/triton_bundler.py:242]     )
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.647000 8543 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/root/.cache/vllm/torch_compile_cache/torch_aot_compile/2b2e02f2f23ad86af395db1902ef3200a353bb6bdfe9b42ff2e3c7e5caf9d1df/inductor_cache/triton/0/7WPJJAHYSRVGVMJQN55HNY6Z7GHF6CFZRZA4MOK7JHAWVXN6PDCQ/triton_red_fused__to_copy_abs_add_clamp_cutlass_scaled_mm_div_fused_add_rms_norm_max_mul_reciprocal_unsqueeze_1.cubin')
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.686000 8543 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_red_fused__to_copy_abs_add_clamp_cutlass_scaled_mm_div_fused_add_rms_norm_max_mul_reciprocal_unsqueeze_3
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.686000 8543 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.686000 8543 torch/_inductor/triton_bundler.py:242]   File "/content/vllm029/lib/python3.13/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.686000 8543 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.686000 8543 torch/_inductor/triton_bundler.py:242]     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.686000 8543 torch/_inductor/triton_bundler.py:242]   File "/content/vllm029/lib/python3.13/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.686000 8543 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.686000 8543 torch/_inductor/triton_bundler.py:242]         "Cubin file saved by TritonBundler not found at %s", cubin_location
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.686000 8543 torch/_inductor/triton_bundler.py:242]     )
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.686000 8543 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/root/.cache/vllm/torch_compile_cache/torch_aot_compile/2b2e02f2f23ad86af395db1902ef3200a353bb6bdfe9b42ff2e3c7e5caf9d1df/inductor_cache/triton/0/ZJMY44RFJLK6O6R2J3XTT4C2IOSQ4KN4XX6A5T6NR7GK2X37GWMA/triton_red_fused__to_copy_abs_add_clamp_cutlass_scaled_mm_div_fused_add_rms_norm_max_mul_reciprocal_unsqueeze_3.cubin')
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.739000 8543 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_red_fused__to_copy_abs_add_clamp_cutlass_scaled_mm_div_fused_add_rms_norm_max_mul_reciprocal_unsqueeze_3
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.739000 8543 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.739000 8543 torch/_inductor/triton_bundler.py:242]   File "/content/vllm029/lib/python3.13/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.739000 8543 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.739000 8543 torch/_inductor/triton_bundler.py:242]     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.739000 8543 torch/_inductor/triton_bundler.py:242]   File "/content/vllm029/lib/python3.13/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.739000 8543 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.739000 8543 torch/_inductor/triton_bundler.py:242]         "Cubin file saved by TritonBundler not found at %s", cubin_location
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.739000 8543 torch/_inductor/triton_bundler.py:242]     )
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.739000 8543 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/root/.cache/vllm/torch_compile_cache/torch_aot_compile/2b2e02f2f23ad86af395db1902ef3200a353bb6bdfe9b42ff2e3c7e5caf9d1df/inductor_cache/triton/0/ZJMY44RFJLK6O6R2J3XTT4C2IOSQ4KN4XX6A5T6NR7GK2X37GWMA/triton_red_fused__to_copy_abs_add_clamp_cutlass_scaled_mm_div_fused_add_rms_norm_max_mul_reciprocal_unsqueeze_3.cubin')
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.760000 8543 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_red_fused__to_copy_abs_add_clamp_cutlass_scaled_mm_div_fused_add_rms_norm_max_mul_reciprocal_unsqueeze_3
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.760000 8543 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.760000 8543 torch/_inductor/triton_bundler.py:242]   File "/content/vllm029/lib/python3.13/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.760000 8543 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.760000 8543 torch/_inductor/triton_bundler.py:242]     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.760000 8543 torch/_inductor/triton_bundler.py:242]   File "/content/vllm029/lib/python3.13/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.760000 8543 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.760000 8543 torch/_inductor/triton_bundler.py:242]         "Cubin file saved by TritonBundler not found at %s", cubin_location
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.760000 8543 torch/_inductor/triton_bundler.py:242]     )
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.760000 8543 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/root/.cache/vllm/torch_compile_cache/torch_aot_compile/2b2e02f2f23ad86af395db1902ef3200a353bb6bdfe9b42ff2e3c7e5caf9d1df/inductor_cache/triton/0/YE62WEWGZB6PXZIISETI2VEMIYXERZAFFGLOHXO4SEDKEPVSTQBA/triton_red_fused__to_copy_abs_add_clamp_cutlass_scaled_mm_div_fused_add_rms_norm_max_mul_reciprocal_unsqueeze_3.cubin')
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.875000 8543 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_red_fused__to_copy_abs_add_clamp_cutlass_scaled_mm_div_fused_add_rms_norm_max_mul_reciprocal_unsqueeze_1
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.875000 8543 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.875000 8543 torch/_inductor/triton_bundler.py:242]   File "/content/vllm029/lib/python3.13/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.875000 8543 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.875000 8543 torch/_inductor/triton_bundler.py:242]     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.875000 8543 torch/_inductor/triton_bundler.py:242]   File "/content/vllm029/lib/python3.13/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.875000 8543 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.875000 8543 torch/_inductor/triton_bundler.py:242]         "Cubin file saved by TritonBundler not found at %s", cubin_location
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.875000 8543 torch/_inductor/triton_bundler.py:242]     )
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.875000 8543 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/root/.cache/vllm/torch_compile_cache/torch_aot_compile/2b2e02f2f23ad86af395db1902ef3200a353bb6bdfe9b42ff2e3c7e5caf9d1df/inductor_cache/triton/0/7WPJJAHYSRVGVMJQN55HNY6Z7GHF6CFZRZA4MOK7JHAWVXN6PDCQ/triton_red_fused__to_copy_abs_add_clamp_cutlass_scaled_mm_div_fused_add_rms_norm_max_mul_reciprocal_unsqueeze_1.cubin')
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.889000 8543 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_red_fused__to_copy_abs_add_clamp_cutlass_scaled_mm_div_fused_add_rms_norm_max_mul_reciprocal_unsqueeze_1
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.889000 8543 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.889000 8543 torch/_inductor/triton_bundler.py:242]   File "/content/vllm029/lib/python3.13/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.889000 8543 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.889000 8543 torch/_inductor/triton_bundler.py:242]     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.889000 8543 torch/_inductor/triton_bundler.py:242]   File "/content/vllm029/lib/python3.13/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.889000 8543 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.889000 8543 torch/_inductor/triton_bundler.py:242]         "Cubin file saved by TritonBundler not found at %s", cubin_location
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.889000 8543 torch/_inductor/triton_bundler.py:242]     )
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.889000 8543 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/root/.cache/vllm/torch_compile_cache/torch_aot_compile/2b2e02f2f23ad86af395db1902ef3200a353bb6bdfe9b42ff2e3c7e5caf9d1df/inductor_cache/triton/0/7WPJJAHYSRVGVMJQN55HNY6Z7GHF6CFZRZA4MOK7JHAWVXN6PDCQ/triton_red_fused__to_copy_abs_add_clamp_cutlass_scaled_mm_div_fused_add_rms_norm_max_mul_reciprocal_unsqueeze_1.cubin')
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.972000 8543 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_red_fused__to_copy_abs_clamp_cutlass_scaled_mm_div_max_mul_reciprocal_silu_slice_unsqueeze_2
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.972000 8543 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.972000 8543 torch/_inductor/triton_bundler.py:242]   File "/content/vllm029/lib/python3.13/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.972000 8543 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.972000 8543 torch/_inductor/triton_bundler.py:242]     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.972000 8543 torch/_inductor/triton_bundler.py:242]   File "/content/vllm029/lib/python3.13/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.972000 8543 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.972000 8543 torch/_inductor/triton_bundler.py:242]         "Cubin file saved by TritonBundler not found at %s", cubin_location
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.972000 8543 torch/_inductor/triton_bundler.py:242]     )
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.972000 8543 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/root/.cache/vllm/torch_compile_cache/torch_aot_compile/2b2e02f2f23ad86af395db1902ef3200a353bb6bdfe9b42ff2e3c7e5caf9d1df/inductor_cache/triton/0/55P2DGXOFOIXQJEMSUE666CQZQELXOUVH5SZSTUBEH6ETUBW4GIQ/triton_red_fused__to_copy_abs_clamp_cutlass_scaled_mm_div_max_mul_reciprocal_silu_slice_unsqueeze_2.cubin')
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.979000 8543 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_zeros_4
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.979000 8543 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.979000 8543 torch/_inductor/triton_bundler.py:242]   File "/content/vllm029/lib/python3.13/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.979000 8543 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.979000 8543 torch/_inductor/triton_bundler.py:242]     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.979000 8543 torch/_inductor/triton_bundler.py:242]   File "/content/vllm029/lib/python3.13/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.979000 8543 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.979000 8543 torch/_inductor/triton_bundler.py:242]         "Cubin file saved by TritonBundler not found at %s", cubin_location
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.979000 8543 torch/_inductor/triton_bundler.py:242]     )
+(EngineCore pid=8543) [rank0]:W0911 23:06:40.979000 8543 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/root/.cache/vllm/torch_compile_cache/torch_aot_compile/2b2e02f2f23ad86af395db1902ef3200a353bb6bdfe9b42ff2e3c7e5caf9d1df/inductor_cache/triton/0/4P2FHTS2HVNMBUMGFDDOBNCLKIFQRD5SL7ER4OLL25Z2MPQ6GH7A/triton_poi_fused_zeros_4.cubin')
+(EngineCore pid=8543) /content/vllm029/lib/python3.13/site-packages/triton/language/core.py:2284: UserWarning: tl.make_block_ptr is deprecated. Use TensorDescriptor or tl.make_tensor_descriptor instead.
+(EngineCore pid=8543)   warn("tl.make_block_ptr is deprecated. Use TensorDescriptor or tl.make_tensor_descriptor instead.")
+(EngineCore pid=8543) 
+Capturing CUDA graphs (PIECEWISE):   0%|          | 0/7 [00:00<?, ?it/s]
+Capturing CUDA graphs (PIECEWISE):  14%|█▍        | 1/7 [00:00<00:05,  1.06it/s]
+Capturing CUDA graphs (PIECEWISE):  29%|██▊       | 2/7 [00:01<00:03,  1.36it/s]
+Capturing CUDA graphs (PIECEWISE):  43%|████▎     | 3/7 [00:02<00:03,  1.01it/s]
+Capturing CUDA graphs (PIECEWISE):  57%|█████▋    | 4/7 [00:03<00:02,  1.28it/s]
+Capturing CUDA graphs (PIECEWISE):  71%|███████▏  | 5/7 [00:03<00:01,  1.72it/s]
+Capturing CUDA graphs (PIECEWISE): 100%|██████████| 7/7 [00:04<00:00,  1.63it/s]
+Capturing CUDA graphs (PIECEWISE): 100%|██████████| 7/7 [00:04<00:00,  1.46it/s]
+(EngineCore pid=8543) 
+Capturing CUDA graphs (FULL):   0%|          | 0/2 [00:00<?, ?it/s]
+Capturing CUDA graphs (FULL): 100%|██████████| 2/2 [00:00<00:00, 22.86it/s]
+(EngineCore pid=8543) 
+Capturing CUDA graphs (PIECEWISE):   0%|          | 0/7 [00:00<?, ?it/s]
+Capturing CUDA graphs (PIECEWISE):  14%|█▍        | 1/7 [00:00<00:00,  8.37it/s]
+Capturing CUDA graphs (PIECEWISE):  29%|██▊       | 2/7 [00:00<00:00,  8.53it/s]
+Capturing CUDA graphs (PIECEWISE):  57%|█████▋    | 4/7 [00:00<00:00, 12.65it/s]
+Capturing CUDA graphs (PIECEWISE):  86%|████████▌ | 6/7 [00:00<00:00, 14.66it/s]
+Capturing CUDA graphs (PIECEWISE): 100%|██████████| 7/7 [00:00<00:00, 13.64it/s]
+(EngineCore pid=8543) 
+Capturing CUDA graphs (FULL):   0%|          | 0/5 [00:00<?, ?it/s]
+Capturing CUDA graphs (FULL):  60%|██████    | 3/5 [00:00<00:00, 22.03it/s]
+Capturing CUDA graphs (FULL): 100%|██████████| 5/5 [00:00<00:00, 22.27it/s]
+(EngineCore pid=8543) 
+Parse safetensors files:   0%|          | 0/1 [00:00<?, ?it/s]
+Parse safetensors files: 100%|██████████| 1/1 [00:00<00:00,  1.13it/s]
+Parse safetensors files: 100%|██████████| 1/1 [00:00<00:00,  1.13it/s]
+(APIServer pid=8325) [transformers] Qwen3VL video processing does not apply the per-frame pixel cap the reference implementation (qwen-vl-utils) applies, so some videos cost far more tokens than they would there. In v5.22 the capped behavior will become the default and `cap_pixels_per_frame` will be removed. Pass `cap_pixels_per_frame=True` to adopt the reference behavior now, or `False` to keep the current behavior and silence this warning.
+(APIServer pid=8325) INFO:     Started server process [8325]
+(APIServer pid=8325) INFO:     Waiting for application startup.
+(APIServer pid=8325) INFO:     Application startup complete.
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+
+  0%|          | 0/200 [00:00<?, ?it/s]
+  0%|          | 1/200 [00:00<02:21,  1.41it/s]
+  1%|          | 2/200 [00:01<01:50,  1.79it/s]
+  2%|▏         | 3/200 [00:01<01:20,  2.44it/s]
+  2%|▏         | 4/200 [00:01<01:07,  2.91it/s]
+  2%|▎         | 5/200 [00:02<01:31,  2.12it/s]
+  3%|▎         | 6/200 [00:03<02:07,  1.52it/s]
+  4%|▎         | 7/200 [00:04<02:56,  1.09it/s]
+  4%|▍         | 8/200 [00:05<02:45,  1.16it/s]
+  4%|▍         | 9/200 [00:05<02:00,  1.58it/s]
+  5%|▌         | 10/200 [00:07<03:07,  1.01it/s]
+  6%|▌         | 11/200 [00:08<02:55,  1.07it/s]
+  6%|▌         | 12/200 [00:08<02:08,  1.47it/s]
+  6%|▋         | 13/200 [00:09<02:15,  1.38it/s]
+  7%|▋         | 14/200 [00:09<02:02,  1.52it/s]
+  8%|▊         | 15/200 [00:09<01:41,  1.83it/s]
+  8%|▊         | 16/200 [00:10<01:32,  1.99it/s]
+  8%|▊         | 17/200 [00:11<01:49,  1.66it/s]
+  9%|▉         | 18/200 [00:11<01:50,  1.65it/s]
+ 10%|▉         | 19/200 [00:12<01:57,  1.54it/s]
+ 10%|█         | 20/200 [00:13<02:10,  1.38it/s]
+ 10%|█         | 21/200 [00:13<01:51,  1.61it/s]
+ 11%|█         | 22/200 [00:14<02:01,  1.47it/s]
+ 12%|█▏        | 23/200 [00:14<01:36,  1.83it/s]
+ 12%|█▏        | 24/200 [00:15<02:00,  1.47it/s]
+ 12%|█▎        | 25/200 [00:17<03:00,  1.03s/it]
+ 13%|█▎        | 26/200 [00:18<02:24,  1.20it/s]
+ 14%|█▎        | 27/200 [00:18<02:03,  1.40it/s]
+ 14%|█▍        | 28/200 [00:19<02:12,  1.30it/s]
+ 14%|█▍        | 29/200 [00:20<02:11,  1.30it/s]
+ 15%|█▌        | 30/200 [00:21<02:16,  1.24it/s]
+ 16%|█▌        | 31/200 [00:21<01:44,  1.61it/s]
+ 16%|█▌        | 32/200 [00:21<01:38,  1.70it/s]
+ 16%|█▋        | 33/200 [00:22<01:18,  2.12it/s]
+ 17%|█▋        | 34/200 [00:22<01:25,  1.95it/s]
+ 18%|█▊        | 35/200 [00:23<01:17,  2.13it/s]
+ 18%|█▊        | 36/200 [00:23<01:10,  2.33it/s]
+ 18%|█▊        | 37/200 [00:23<01:08,  2.38it/s]
+ 19%|█▉        | 38/200 [00:24<01:26,  1.87it/s]
+ 20%|██        | 40/200 [00:24<00:50,  3.15it/s]
+ 20%|██        | 41/200 [00:25<00:54,  2.90it/s]
+ 21%|██        | 42/200 [00:25<00:46,  3.40it/s]
+ 22%|██▏       | 43/200 [00:25<00:42,  3.71it/s]
+ 22%|██▏       | 44/200 [00:25<00:51,  3.02it/s]
+ 22%|██▎       | 45/200 [00:26<00:45,  3.43it/s]
+ 23%|██▎       | 46/200 [00:26<00:46,  3.34it/s]
+ 24%|██▎       | 47/200 [00:26<00:48,  3.16it/s]
+ 24%|██▍       | 48/200 [00:27<00:54,  2.78it/s]
+ 24%|██▍       | 49/200 [00:27<00:45,  3.35it/s]
+ 25%|██▌       | 50/200 [00:27<00:51,  2.94it/s]
+ 26%|██▌       | 51/200 [00:28<00:41,  3.56it/s]
+ 26%|██▌       | 52/200 [00:28<00:41,  3.55it/s]
+ 26%|██▋       | 53/200 [00:29<01:07,  2.19it/s]
+ 27%|██▋       | 54/200 [00:29<00:53,  2.73it/s]
+ 28%|██▊       | 55/200 [00:30<01:24,  1.71it/s]
+ 28%|██▊       | 56/200 [00:30<01:07,  2.14it/s]
+ 28%|██▊       | 57/200 [00:31<01:07,  2.11it/s]
+ 29%|██▉       | 58/200 [00:31<01:01,  2.30it/s]
+ 30%|███       | 60/200 [00:31<00:38,  3.63it/s]
+ 30%|███       | 61/200 [00:31<00:36,  3.79it/s]
+ 31%|███       | 62/200 [00:32<00:41,  3.35it/s]
+ 32%|███▏      | 64/200 [00:33<00:53,  2.52it/s]
+ 32%|███▎      | 65/200 [00:33<00:44,  3.05it/s]
+ 33%|███▎      | 66/200 [00:34<00:53,  2.51it/s]
+ 34%|███▍      | 68/200 [00:34<00:41,  3.15it/s]
+ 34%|███▍      | 69/200 [00:34<00:42,  3.09it/s]
+ 36%|███▌      | 71/200 [00:34<00:29,  4.33it/s]
+ 36%|███▌      | 72/200 [00:35<00:32,  3.90it/s]
+ 36%|███▋      | 73/200 [00:36<00:49,  2.55it/s]
+ 37%|███▋      | 74/200 [00:36<00:55,  2.29it/s]
+ 38%|███▊      | 75/200 [00:37<01:17,  1.61it/s]
+ 38%|███▊      | 76/200 [00:37<00:59,  2.09it/s]
+ 38%|███▊      | 77/200 [00:38<01:11,  1.73it/s]
+ 39%|███▉      | 78/200 [00:38<00:56,  2.17it/s]
+ 40%|███▉      | 79/200 [00:39<00:45,  2.65it/s]
+ 40%|████      | 80/200 [00:39<00:55,  2.18it/s]
+ 40%|████      | 81/200 [00:40<00:59,  2.01it/s]
+ 41%|████      | 82/200 [00:40<00:50,  2.35it/s]
+ 42%|████▏     | 83/200 [00:41<00:57,  2.02it/s]
+ 42%|████▏     | 84/200 [00:41<00:44,  2.62it/s]
+ 42%|████▎     | 85/200 [00:42<01:19,  1.46it/s]
+ 43%|████▎     | 86/200 [00:43<01:04,  1.78it/s]
+ 44%|████▎     | 87/200 [00:43<00:57,  1.97it/s]
+ 44%|████▍     | 89/200 [00:44<00:48,  2.29it/s]
+ 45%|████▌     | 90/200 [00:44<00:55,  1.99it/s]
+ 46%|████▌     | 91/200 [00:45<00:59,  1.84it/s]
+ 46%|████▌     | 92/200 [00:45<00:52,  2.07it/s]
+ 46%|████▋     | 93/200 [00:46<00:43,  2.44it/s]
+ 47%|████▋     | 94/200 [00:46<00:52,  2.01it/s]
+ 48%|████▊     | 95/200 [00:47<00:54,  1.93it/s]
+ 48%|████▊     | 96/200 [00:47<00:45,  2.29it/s]
+ 48%|████▊     | 97/200 [00:48<00:54,  1.89it/s]
+ 49%|████▉     | 98/200 [00:48<00:55,  1.84it/s]
+ 50%|████▉     | 99/200 [00:49<01:06,  1.53it/s]
+ 50%|█████     | 100/200 [00:49<00:51,  1.95it/s]
+ 50%|█████     | 101/200 [00:51<01:14,  1.33it/s]
+ 51%|█████     | 102/200 [00:51<01:09,  1.41it/s]
+ 52%|█████▏    | 103/200 [00:52<01:04,  1.49it/s]
+ 52%|█████▏    | 104/200 [00:52<00:54,  1.75it/s]
+ 52%|█████▎    | 105/200 [00:53<00:45,  2.09it/s]
+ 53%|█████▎    | 106/200 [00:53<00:40,  2.31it/s]
+ 54%|█████▎    | 107/200 [00:54<00:49,  1.90it/s]
+ 54%|█████▍    | 108/200 [00:54<00:52,  1.76it/s]
+ 55%|█████▍    | 109/200 [00:55<00:45,  1.99it/s]
+ 55%|█████▌    | 110/200 [00:55<00:37,  2.41it/s]
+ 56%|█████▌    | 111/200 [00:55<00:34,  2.55it/s]
+ 56%|█████▋    | 113/200 [00:56<00:32,  2.72it/s]
+ 57%|█████▋    | 114/200 [00:56<00:29,  2.91it/s]
+ 57%|█████▊    | 115/200 [00:57<00:33,  2.53it/s]
+ 58%|█████▊    | 116/200 [00:57<00:27,  3.04it/s]
+ 58%|█████▊    | 117/200 [00:58<00:36,  2.28it/s]
+ 59%|█████▉    | 118/200 [00:58<00:38,  2.11it/s]
+ 60%|█████▉    | 119/200 [00:59<00:45,  1.78it/s]
+ 60%|██████    | 120/200 [01:00<01:02,  1.28it/s]
+ 60%|██████    | 121/200 [01:00<00:46,  1.71it/s]
+ 61%|██████    | 122/200 [01:01<00:55,  1.40it/s]
+ 62%|██████▏   | 123/200 [01:02<00:55,  1.40it/s]
+ 62%|██████▏   | 124/200 [01:03<00:50,  1.51it/s]
+ 62%|██████▎   | 125/200 [01:03<00:49,  1.52it/s]
+ 64%|██████▎   | 127/200 [01:04<00:40,  1.79it/s]
+ 64%|██████▍   | 128/200 [01:04<00:35,  2.04it/s]
+ 64%|██████▍   | 129/200 [01:05<00:36,  1.97it/s]
+ 66%|██████▌   | 132/200 [01:06<00:27,  2.49it/s]
+ 67%|██████▋   | 134/200 [01:06<00:22,  2.97it/s]
+ 68%|██████▊   | 135/200 [01:07<00:23,  2.79it/s]
+ 68%|██████▊   | 136/200 [01:08<00:41,  1.54it/s]
+ 68%|██████▊   | 137/200 [01:09<00:33,  1.90it/s]
+ 69%|██████▉   | 138/200 [01:09<00:35,  1.77it/s]
+ 70%|██████▉   | 139/200 [01:09<00:27,  2.19it/s]
+ 70%|███████   | 140/200 [01:10<00:35,  1.70it/s]
+ 70%|███████   | 141/200 [01:12<00:43,  1.35it/s]
+ 71%|███████   | 142/200 [01:12<00:41,  1.41it/s]
+ 72%|███████▏  | 144/200 [01:13<00:31,  1.78it/s]
+ 72%|███████▎  | 145/200 [01:14<00:44,  1.23it/s]
+ 73%|███████▎  | 146/200 [01:15<00:36,  1.49it/s]
+ 74%|███████▎  | 147/200 [01:15<00:32,  1.65it/s]
+ 74%|███████▍  | 148/200 [01:15<00:24,  2.15it/s]
+ 74%|███████▍  | 149/200 [01:16<00:23,  2.15it/s]
+ 75%|███████▌  | 150/200 [01:16<00:19,  2.59it/s]
+ 76%|███████▌  | 151/200 [01:17<00:22,  2.13it/s]
+ 76%|███████▌  | 152/200 [01:17<00:22,  2.18it/s]
+ 76%|███████▋  | 153/200 [01:18<00:22,  2.11it/s]
+ 77%|███████▋  | 154/200 [01:18<00:17,  2.67it/s]
+ 78%|███████▊  | 155/200 [01:18<00:18,  2.45it/s]
+ 78%|███████▊  | 156/200 [01:18<00:15,  2.85it/s]
+ 78%|███████▊  | 157/200 [01:19<00:13,  3.18it/s]
+ 79%|███████▉  | 158/200 [01:19<00:17,  2.45it/s]
+ 80%|███████▉  | 159/200 [01:20<00:18,  2.16it/s]
+ 80%|████████  | 160/200 [01:20<00:16,  2.50it/s]
+ 80%|████████  | 161/200 [01:21<00:17,  2.26it/s]
+ 82%|████████▏ | 163/200 [01:21<00:15,  2.43it/s]
+ 82%|████████▎ | 165/200 [01:23<00:16,  2.08it/s]
+ 83%|████████▎ | 166/200 [01:24<00:22,  1.49it/s]
+ 84%|████████▎ | 167/200 [01:24<00:17,  1.87it/s]
+ 84%|████████▍ | 168/200 [01:25<00:16,  1.90it/s]
+ 84%|████████▍ | 169/200 [01:25<00:19,  1.55it/s]
+ 85%|████████▌ | 170/200 [01:26<00:18,  1.66it/s]
+ 86%|████████▌ | 171/200 [01:26<00:13,  2.09it/s]
+ 86%|████████▌ | 172/200 [01:27<00:13,  2.05it/s]
+ 86%|████████▋ | 173/200 [01:27<00:11,  2.37it/s]
+ 87%|████████▋ | 174/200 [01:28<00:13,  1.96it/s]
+ 88%|████████▊ | 176/200 [01:28<00:08,  2.79it/s]
+ 88%|████████▊ | 177/200 [01:29<00:09,  2.37it/s]
+ 89%|████████▉ | 178/200 [01:29<00:08,  2.64it/s]
+ 90%|████████▉ | 179/200 [01:29<00:08,  2.47it/s]
+ 90%|█████████ | 180/200 [01:30<00:10,  1.95it/s]
+ 90%|█████████ | 181/200 [01:31<00:12,  1.52it/s]
+ 91%|█████████ | 182/200 [01:32<00:11,  1.57it/s]
+ 92%|█████████▏| 183/200 [01:32<00:08,  2.00it/s]
+ 92%|█████████▏| 184/200 [01:32<00:07,  2.27it/s]
+ 92%|█████████▎| 185/200 [01:33<00:07,  1.91it/s]
+ 93%|█████████▎| 186/200 [01:34<00:11,  1.22it/s]
+ 94%|█████████▍| 188/200 [01:35<00:06,  1.77it/s]
+ 94%|█████████▍| 189/200 [01:35<00:05,  1.97it/s]
+ 95%|█████████▌| 190/200 [01:36<00:06,  1.59it/s]
+ 96%|█████████▌| 191/200 [01:38<00:07,  1.26it/s]
+ 96%|█████████▌| 192/200 [01:38<00:05,  1.44it/s]
+ 96%|█████████▋| 193/200 [01:38<00:03,  1.76it/s]
+ 97%|█████████▋| 194/200 [01:38<00:02,  2.20it/s]
+ 98%|█████████▊| 195/200 [01:39<00:02,  2.17it/s]
+ 98%|█████████▊| 196/200 [01:40<00:02,  1.78it/s]
+ 98%|█████████▊| 197/200 [01:41<00:02,  1.20it/s]
+ 99%|█████████▉| 198/200 [01:42<00:01,  1.30it/s]
+100%|█████████▉| 199/200 [01:43<00:00,  1.09it/s]
+100%|██████████| 200/200 [01:44<00:00,  1.08it/s]
+100%|██████████| 200/200 [01:44<00:00,  1.91it/s]
+Traceback (most recent call last):
+  File "/content/vllm029/lib/python3.13/site-packages/vllm/utils/import_utils.py", line 306, in __getattr__
+    importlib.import_module(name)
+    ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^
+  File "/usr/lib/python3.13/importlib/__init__.py", line 88, in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<frozen importlib._bootstrap>", line 1395, in _gcd_import
+  File "<frozen importlib._bootstrap>", line 1360, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1324, in _find_and_load_unlocked
+ModuleNotFoundError: No module named 'pandas'
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/content/vllm029/lib/python3.13/site-packages/vllm/benchmarks/sweep/serve.py", line 502, in run_ctx
+    yield
+  File "/content/vllm029/lib/python3.13/site-packages/vllm/benchmarks/sweep/serve.py", line 515, in run_main
+    return run_combs(
+        serve_cmd=args.serve_cmd,
+    ...<9 lines>...
+        dry_run=args.dry_run,
+    )
+  File "/content/vllm029/lib/python3.13/site-packages/vllm/benchmarks/sweep/serve.py", line 299, in run_combs
+    combined_df = pd.DataFrame.from_records(all_data)
+                  ^^^^^^^^^^^^
+  File "/content/vllm029/lib/python3.13/site-packages/vllm/utils/import_utils.py", line 311, in __getattr__
+    raise ImportError(msg) from exc
+ImportError: Please install vllm[bench] for bench support
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/content/vllm029/bin/vllm", line 10, in <module>
+    sys.exit(main())
+             ~~~~^^
+  File "/content/vllm029/lib/python3.13/site-packages/vllm/entrypoints/cli/main.py", line 97, in main
+    args.dispatch_function(args)
+    ~~~~~~~~~~~~~~~~~~~~~~^^^^^^
+  File "/content/vllm029/lib/python3.13/site-packages/vllm/benchmarks/sweep/serve.py", line 531, in main
+    run_main(SweepServeArgs.from_cli_args(args))
+    ~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/content/vllm029/lib/python3.13/site-packages/vllm/benchmarks/sweep/serve.py", line 514, in run_main
+    with args.run_ctx(experiment_dir):
+         ~~~~~~~~~~~~^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.13/contextlib.py", line 162, in __exit__
+    self.gen.throw(value)
+    ~~~~~~~~~~~~~~^^^^^^^
+  File "/content/vllm029/lib/python3.13/site-packages/vllm/benchmarks/sweep/serve.py", line 505, in run_ctx
+    raise RuntimeError(
+    ...<2 lines>...
+    ) from exc
+RuntimeError: The script was terminated early. Use `--resume` to continue the script from its last checkpoint.

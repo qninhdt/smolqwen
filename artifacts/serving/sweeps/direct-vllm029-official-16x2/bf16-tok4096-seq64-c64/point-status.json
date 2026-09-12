@@ -1,0 +1,14 @@
+{
+  "error": "RuntimeError: benchmark failed with exit code 1",
+  "finished_at_unix": 1789163337.936971,
+  "point": {
+    "_benchmark_name": "bf16-tok4096-seq64-c64",
+    "max_concurrency": 64,
+    "max_num_batched_tokens": 4096,
+    "max_num_seqs": 64,
+    "precision": "bf16"
+  },
+  "returncode": 1,
+  "started_at_unix": 1789163038.9986935,
+  "status": "failed"
+}

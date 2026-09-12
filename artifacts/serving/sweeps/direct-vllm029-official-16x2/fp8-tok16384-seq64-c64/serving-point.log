@@ -1,0 +1,229 @@
++ /content/vllm029/bin/vllm bench sweep serve --serve-cmd 'vllm serve Qwen/Qwen3.5-2B --revision 15852e8c16360a2fea060d615a32b45270f8a8fc --served-model-name smolqwen' --bench-cmd 'vllm bench serve --backend openai-chat --endpoint /v1/chat/completions --model smolqwen --tokenizer Qwen/Qwen3.5-2B --dataset-name hf --dataset-path gorilla-llm/Berkeley-Function-Calling-Leaderboard --bfcl-categories simple,multiple,parallel,parallel_multiple --num-prompts 200 --percentile-metrics ttft,tpot,itl,e2el --metric-percentiles 50,95,99' --after-bench-cmd 'python /content/smolqwen/scripts/capture-vllm-metrics.py /content/smolqwen/artifacts/serving/sweeps/direct-vllm029-official-16x2/fp8-tok16384-seq64-c64/metrics' --serve-params /content/point-serve-params.json --bench-params /content/point-bench-params.json --num-runs 1 --experiment-name fp8-tok16384-seq64-c64 --server-ready-timeout 900 -o /content/smolqwen/artifacts/serving/sweeps/direct-vllm029-official-16x2 --dry-run
+[BEGIN SERVER]
+Server overrides: {'_benchmark_name': 'fp8-tok16384-seq64-c64', 'dtype': 'bfloat16', 'enable_auto_tool_choice': True, 'enable_chunked_prefill': True, 'enable_prefix_caching': True, 'gpu_memory_utilization': 0.9, 'kv_cache_dtype': 'fp8', 'max_model_len': 32768, 'max_num_batched_tokens': 16384, 'max_num_seqs': 64, 'quantization': 'fp8', 'reasoning_parser': 'qwen3', 'tool_call_parser': 'hermes'}
+Server command: ['vllm', 'serve', 'Qwen/Qwen3.5-2B', '--revision', '15852e8c16360a2fea060d615a32b45270f8a8fc', '--served-model-name', 'smolqwen', '--dtype', 'bfloat16', '--enable-auto-tool-choice', '--enable-chunked-prefill', '--enable-prefix-caching', '--gpu-memory-utilization', '0.9', '--kv-cache-dtype', 'fp8', '--max-model-len', '32768', '--max-num-batched-tokens', '16384', '--max-num-seqs', '64', '--quantization', 'fp8', '--reasoning-parser', 'qwen3', '--tool-call-parser', 'hermes']
+[BEGIN BENCHMARK]
+Benchmark overrides: {'_benchmark_name': 'concurrency-64', 'backend': 'openai-chat', 'bfcl_categories': 'simple,multiple,parallel,parallel_multiple', 'dataset_name': 'hf', 'dataset_path': 'gorilla-llm/Berkeley-Function-Calling-Leaderboard', 'endpoint': '/v1/chat/completions', 'max_concurrency': 64, 'metric_percentiles': '50,95,99', 'model': 'smolqwen', 'num_prompts': 200, 'percentile_metrics': 'ttft,tpot,itl,e2el', 'save_detailed': True, 'save_result': True, 'temperature': 0.0, 'tokenizer': 'Qwen/Qwen3.5-2B'}
+Run Number: 0
+Benchmark command: ['vllm', 'bench', 'serve', '--backend', 'openai-chat', '--endpoint', '/v1/chat/completions', '--model', 'smolqwen', '--tokenizer', 'Qwen/Qwen3.5-2B', '--dataset-name', 'hf', '--dataset-path', 'gorilla-llm/Berkeley-Function-Calling-Leaderboard', '--bfcl-categories', 'simple,multiple,parallel,parallel_multiple', '--num-prompts', '200', '--percentile-metrics', 'ttft,tpot,itl,e2el', '--metric-percentiles', '50,95,99', '--max-concurrency', '64', '--save-detailed', '--save-result', '--temperature', '0.0', '--percentile-metrics', 'ttft,tpot,itl,e2el', '--save-result', '--result-dir', '/content/smolqwen/artifacts/serving/sweeps/direct-vllm029-official-16x2/fp8-tok16384-seq64-c64/SERVE--fp8-tok16384-seq64-c64-BENCH--concurrency-64', '--result-filename', 'run=0.json']
+Output file: /content/smolqwen/artifacts/serving/sweeps/direct-vllm029-official-16x2/fp8-tok16384-seq64-c64/SERVE--fp8-tok16384-seq64-c64-BENCH--concurrency-64/run=0.json
+[END BENCHMARK]
+[END SERVER]
+Experiment will be saved at: /content/smolqwen/artifacts/serving/sweeps/direct-vllm029-official-16x2/fp8-tok16384-seq64-c64
++ /content/vllm029/bin/vllm bench sweep serve --serve-cmd 'vllm serve Qwen/Qwen3.5-2B --revision 15852e8c16360a2fea060d615a32b45270f8a8fc --served-model-name smolqwen' --bench-cmd 'vllm bench serve --backend openai-chat --endpoint /v1/chat/completions --model smolqwen --tokenizer Qwen/Qwen3.5-2B --dataset-name hf --dataset-path gorilla-llm/Berkeley-Function-Calling-Leaderboard --bfcl-categories simple,multiple,parallel,parallel_multiple --num-prompts 200 --percentile-metrics ttft,tpot,itl,e2el --metric-percentiles 50,95,99' --after-bench-cmd 'python /content/smolqwen/scripts/capture-vllm-metrics.py /content/smolqwen/artifacts/serving/sweeps/direct-vllm029-official-16x2/fp8-tok16384-seq64-c64/metrics' --serve-params /content/point-serve-params.json --bench-params /content/point-bench-params.json --num-runs 1 --experiment-name fp8-tok16384-seq64-c64 --server-ready-timeout 900 -o /content/smolqwen/artifacts/serving/sweeps/direct-vllm029-official-16x2
+[BEGIN SERVER]
+Server overrides: {'_benchmark_name': 'fp8-tok16384-seq64-c64', 'dtype': 'bfloat16', 'enable_auto_tool_choice': True, 'enable_chunked_prefill': True, 'enable_prefix_caching': True, 'gpu_memory_utilization': 0.9, 'kv_cache_dtype': 'fp8', 'max_model_len': 32768, 'max_num_batched_tokens': 16384, 'max_num_seqs': 64, 'quantization': 'fp8', 'reasoning_parser': 'qwen3', 'tool_call_parser': 'hermes'}
+Server command: ['vllm', 'serve', 'Qwen/Qwen3.5-2B', '--revision', '15852e8c16360a2fea060d615a32b45270f8a8fc', '--served-model-name', 'smolqwen', '--dtype', 'bfloat16', '--enable-auto-tool-choice', '--enable-chunked-prefill', '--enable-prefix-caching', '--gpu-memory-utilization', '0.9', '--kv-cache-dtype', 'fp8', '--max-model-len', '32768', '--max-num-batched-tokens', '16384', '--max-num-seqs', '64', '--quantization', 'fp8', '--reasoning-parser', 'qwen3', '--tool-call-parser', 'hermes']
+[BEGIN BENCHMARK]
+Benchmark overrides: {'_benchmark_name': 'concurrency-64', 'backend': 'openai-chat', 'bfcl_categories': 'simple,multiple,parallel,parallel_multiple', 'dataset_name': 'hf', 'dataset_path': 'gorilla-llm/Berkeley-Function-Calling-Leaderboard', 'endpoint': '/v1/chat/completions', 'max_concurrency': 64, 'metric_percentiles': '50,95,99', 'model': 'smolqwen', 'num_prompts': 200, 'percentile_metrics': 'ttft,tpot,itl,e2el', 'save_detailed': True, 'save_result': True, 'temperature': 0.0, 'tokenizer': 'Qwen/Qwen3.5-2B'}
+Run Number: 0
+Benchmark command: ['vllm', 'bench', 'serve', '--backend', 'openai-chat', '--endpoint', '/v1/chat/completions', '--model', 'smolqwen', '--tokenizer', 'Qwen/Qwen3.5-2B', '--dataset-name', 'hf', '--dataset-path', 'gorilla-llm/Berkeley-Function-Calling-Leaderboard', '--bfcl-categories', 'simple,multiple,parallel,parallel_multiple', '--num-prompts', '200', '--percentile-metrics', 'ttft,tpot,itl,e2el', '--metric-percentiles', '50,95,99', '--max-concurrency', '64', '--save-detailed', '--save-result', '--temperature', '0.0', '--percentile-metrics', 'ttft,tpot,itl,e2el', '--save-result', '--result-dir', '/content/smolqwen/artifacts/serving/sweeps/direct-vllm029-official-16x2/fp8-tok16384-seq64-c64/SERVE--fp8-tok16384-seq64-c64-BENCH--concurrency-64', '--result-filename', 'run=0.json']
+Output file: /content/smolqwen/artifacts/serving/sweeps/direct-vllm029-official-16x2/fp8-tok16384-seq64-c64/SERVE--fp8-tok16384-seq64-c64-BENCH--concurrency-64/run=0.json
+[END BENCHMARK]
+[END SERVER]
+(APIServer pid=12044) Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+(APIServer pid=12044) 
+Parse safetensors files:   0%|          | 0/1 [00:00<?, ?it/s]
+Parse safetensors files: 100%|██████████| 1/1 [00:00<00:00,  1.21it/s]
+Parse safetensors files: 100%|██████████| 1/1 [00:00<00:00,  1.21it/s]
+(APIServer pid=12044) [transformers] The `use_fast` parameter is deprecated and will be removed in a future version. Use `backend="torchvision"` instead of `use_fast=True`, or `backend="pil"` instead of `use_fast=False`.
+(EngineCore pid=12270) 
+Loading safetensors checkpoint shards:   0% Completed | 0/1 [00:00<?, ?it/s]
+(EngineCore pid=12270) 
+Loading safetensors checkpoint shards: 100% Completed | 1/1 [00:01<00:00,  1.28s/it]
+(EngineCore pid=12270) 
+Loading safetensors checkpoint shards: 100% Completed | 1/1 [00:01<00:00,  1.28s/it]
+(EngineCore pid=12270) 
+(EngineCore pid=12270) Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+(EngineCore pid=12270) [transformers] The `use_fast` parameter is deprecated and will be removed in a future version. Use `backend="torchvision"` instead of `use_fast=True`, or `backend="pil"` instead of `use_fast=False`.
+(EngineCore pid=12270) /content/vllm029/lib/python3.13/site-packages/triton/language/core.py:2284: UserWarning: tl.make_block_ptr is deprecated. Use TensorDescriptor or tl.make_tensor_descriptor instead.
+(EngineCore pid=12270)   warn("tl.make_block_ptr is deprecated. Use TensorDescriptor or tl.make_tensor_descriptor instead.")
+(EngineCore pid=12270) 
+Capturing CUDA graphs (PIECEWISE):   0%|          | 0/19 [00:00<?, ?it/s]
+Capturing CUDA graphs (PIECEWISE):   5%|▌         | 1/19 [00:01<00:18,  1.05s/it]
+Capturing CUDA graphs (PIECEWISE):  11%|█         | 2/19 [00:01<00:14,  1.21it/s]
+Capturing CUDA graphs (PIECEWISE):  16%|█▌        | 3/19 [00:01<00:08,  1.89it/s]
+Capturing CUDA graphs (PIECEWISE):  21%|██        | 4/19 [00:02<00:05,  2.59it/s]
+Capturing CUDA graphs (PIECEWISE):  26%|██▋       | 5/19 [00:02<00:04,  3.29it/s]
+Capturing CUDA graphs (PIECEWISE):  32%|███▏      | 6/19 [00:02<00:03,  4.00it/s]
+Capturing CUDA graphs (PIECEWISE):  37%|███▋      | 7/19 [00:02<00:02,  4.62it/s]
+Capturing CUDA graphs (PIECEWISE):  42%|████▏     | 8/19 [00:02<00:02,  5.35it/s]
+Capturing CUDA graphs (PIECEWISE):  47%|████▋     | 9/19 [00:03<00:05,  1.86it/s]
+Capturing CUDA graphs (PIECEWISE):  53%|█████▎    | 10/19 [00:04<00:04,  2.20it/s]
+Capturing CUDA graphs (PIECEWISE):  63%|██████▎   | 12/19 [00:04<00:01,  3.73it/s]
+Capturing CUDA graphs (PIECEWISE):  74%|███████▎  | 14/19 [00:04<00:00,  5.46it/s]
+Capturing CUDA graphs (PIECEWISE):  84%|████████▍ | 16/19 [00:04<00:00,  5.68it/s]
+Capturing CUDA graphs (PIECEWISE):  89%|████████▉ | 17/19 [00:05<00:00,  5.27it/s]
+Capturing CUDA graphs (PIECEWISE): 100%|██████████| 19/19 [00:06<00:00,  2.77it/s]
+Capturing CUDA graphs (PIECEWISE): 100%|██████████| 19/19 [00:06<00:00,  3.01it/s]
+(EngineCore pid=12270) 
+Capturing CUDA graphs (FULL):   0%|          | 0/2 [00:00<?, ?it/s]
+Capturing CUDA graphs (FULL): 100%|██████████| 2/2 [00:00<00:00, 21.61it/s]
+(EngineCore pid=12270) 
+Capturing CUDA graphs (PIECEWISE):   0%|          | 0/19 [00:00<?, ?it/s]
+Capturing CUDA graphs (PIECEWISE):   5%|▌         | 1/19 [00:00<00:03,  4.77it/s]
+Capturing CUDA graphs (PIECEWISE):  11%|█         | 2/19 [00:00<00:03,  5.00it/s]
+Capturing CUDA graphs (PIECEWISE):  16%|█▌        | 3/19 [00:00<00:03,  5.19it/s]
+Capturing CUDA graphs (PIECEWISE):  21%|██        | 4/19 [00:00<00:02,  5.48it/s]
+Capturing CUDA graphs (PIECEWISE):  26%|██▋       | 5/19 [00:00<00:02,  5.80it/s]
+Capturing CUDA graphs (PIECEWISE):  32%|███▏      | 6/19 [00:01<00:02,  6.14it/s]
+Capturing CUDA graphs (PIECEWISE):  37%|███▋      | 7/19 [00:01<00:01,  6.43it/s]
+Capturing CUDA graphs (PIECEWISE):  42%|████▏     | 8/19 [00:01<00:01,  6.89it/s]
+Capturing CUDA graphs (PIECEWISE):  53%|█████▎    | 10/19 [00:01<00:00,  9.71it/s]
+Capturing CUDA graphs (PIECEWISE):  63%|██████▎   | 12/19 [00:01<00:00, 11.95it/s]
+Capturing CUDA graphs (PIECEWISE):  74%|███████▎  | 14/19 [00:01<00:00, 13.65it/s]
+Capturing CUDA graphs (PIECEWISE):  84%|████████▍ | 16/19 [00:01<00:00, 14.90it/s]
+Capturing CUDA graphs (PIECEWISE):  95%|█████████▍| 18/19 [00:01<00:00, 15.82it/s]
+Capturing CUDA graphs (PIECEWISE): 100%|██████████| 19/19 [00:01<00:00,  9.88it/s]
+(EngineCore pid=12270) 
+Capturing CUDA graphs (FULL):   0%|          | 0/11 [00:00<?, ?it/s]
+Capturing CUDA graphs (FULL):  27%|██▋       | 3/11 [00:00<00:00, 22.03it/s]
+Capturing CUDA graphs (FULL):  55%|█████▍    | 6/11 [00:00<00:00, 22.05it/s]
+Capturing CUDA graphs (FULL):  82%|████████▏ | 9/11 [00:00<00:00, 21.87it/s]
+Capturing CUDA graphs (FULL): 100%|██████████| 11/11 [00:00<00:00, 22.08it/s]
+(EngineCore pid=12270) 
+Parse safetensors files:   0%|          | 0/1 [00:00<?, ?it/s]
+Parse safetensors files: 100%|██████████| 1/1 [00:00<00:00,  1.28it/s]
+Parse safetensors files: 100%|██████████| 1/1 [00:00<00:00,  1.28it/s]
+(APIServer pid=12044) [transformers] Qwen3VL video processing does not apply the per-frame pixel cap the reference implementation (qwen-vl-utils) applies, so some videos cost far more tokens than they would there. In v5.22 the capped behavior will become the default and `cap_pixels_per_frame` will be removed. Pass `cap_pixels_per_frame=True` to adopt the reference behavior now, or `False` to keep the current behavior and silence this warning.
+(APIServer pid=12044) INFO:     Started server process [12044]
+(APIServer pid=12044) INFO:     Waiting for application startup.
+(APIServer pid=12044) INFO:     Application startup complete.
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+
+  0%|          | 0/200 [00:00<?, ?it/s]
+  0%|          | 1/200 [00:02<08:49,  2.66s/it]
+  1%|          | 2/200 [00:02<03:50,  1.16s/it]
+  2%|▏         | 4/200 [00:02<01:36,  2.04it/s]
+  4%|▍         | 8/200 [00:03<00:38,  5.04it/s]
+  7%|▋         | 14/200 [00:03<00:17, 10.73it/s]
+  9%|▉         | 18/200 [00:03<00:13, 13.12it/s]
+ 10%|█         | 21/200 [00:03<00:12, 14.35it/s]
+ 13%|█▎        | 26/200 [00:03<00:12, 13.77it/s]
+ 14%|█▍        | 29/200 [00:04<00:13, 12.62it/s]
+ 16%|█▌        | 31/200 [00:04<00:13, 12.60it/s]
+ 17%|█▋        | 34/200 [00:04<00:14, 11.45it/s]
+ 18%|█▊        | 36/200 [00:05<00:17,  9.47it/s]
+ 20%|█▉        | 39/200 [00:05<00:16,  9.58it/s]
+ 21%|██        | 42/200 [00:05<00:13, 12.00it/s]
+ 22%|██▎       | 45/200 [00:05<00:10, 14.58it/s]
+ 24%|██▎       | 47/200 [00:05<00:12, 12.65it/s]
+ 24%|██▍       | 49/200 [00:05<00:11, 13.68it/s]
+ 26%|██▌       | 51/200 [00:06<00:17,  8.35it/s]
+ 26%|██▋       | 53/200 [00:06<00:15,  9.68it/s]
+ 28%|██▊       | 55/200 [00:06<00:14, 10.05it/s]
+ 28%|██▊       | 57/200 [00:06<00:15,  9.40it/s]
+ 30%|███       | 60/200 [00:07<00:17,  8.23it/s]
+ 31%|███       | 62/200 [00:07<00:17,  8.05it/s]
+ 32%|███▎      | 65/200 [00:07<00:12, 10.52it/s]
+ 34%|███▎      | 67/200 [00:07<00:11, 11.33it/s]
+ 34%|███▍      | 69/200 [00:08<00:10, 12.27it/s]
+ 36%|███▌      | 71/200 [00:08<00:09, 12.93it/s]
+ 38%|███▊      | 77/200 [00:08<00:06, 17.88it/s]
+ 40%|███▉      | 79/200 [00:08<00:12,  9.59it/s]
+ 40%|████      | 81/200 [00:09<00:11, 10.69it/s]
+ 42%|████▏     | 84/200 [00:09<00:09, 12.32it/s]
+ 43%|████▎     | 86/200 [00:09<00:13,  8.66it/s]
+ 44%|████▍     | 88/200 [00:09<00:12,  9.18it/s]
+ 45%|████▌     | 90/200 [00:10<00:10, 10.56it/s]
+ 46%|████▌     | 92/200 [00:10<00:08, 12.08it/s]
+ 47%|████▋     | 94/200 [00:10<00:08, 12.15it/s]
+ 48%|████▊     | 96/200 [00:10<00:11,  9.36it/s]
+ 50%|█████     | 101/200 [00:10<00:06, 14.49it/s]
+ 52%|█████▏    | 103/200 [00:10<00:06, 15.32it/s]
+ 52%|█████▎    | 105/200 [00:11<00:07, 12.49it/s]
+ 54%|█████▎    | 107/200 [00:11<00:07, 12.79it/s]
+ 55%|█████▍    | 109/200 [00:11<00:06, 13.37it/s]
+ 56%|█████▌    | 112/200 [00:11<00:05, 16.08it/s]
+ 57%|█████▋    | 114/200 [00:11<00:08, 10.57it/s]
+ 58%|█████▊    | 117/200 [00:12<00:06, 12.83it/s]
+ 61%|██████    | 122/200 [00:12<00:04, 18.16it/s]
+ 62%|██████▎   | 125/200 [00:12<00:04, 15.38it/s]
+ 64%|██████▎   | 127/200 [00:12<00:06, 10.52it/s]
+ 64%|██████▍   | 129/200 [00:13<00:07,  9.83it/s]
+ 66%|██████▌   | 131/200 [00:13<00:06, 11.24it/s]
+ 66%|██████▋   | 133/200 [00:13<00:07,  8.61it/s]
+ 68%|██████▊   | 135/200 [00:13<00:07,  8.87it/s]
+ 68%|██████▊   | 137/200 [00:13<00:06, 10.29it/s]
+ 70%|██████▉   | 139/200 [00:14<00:06,  8.93it/s]
+ 71%|███████   | 142/200 [00:14<00:04, 12.03it/s]
+ 72%|███████▏  | 144/200 [00:14<00:04, 12.16it/s]
+ 74%|███████▍  | 149/200 [00:14<00:03, 15.42it/s]
+ 76%|███████▌  | 151/200 [00:14<00:03, 14.23it/s]
+ 76%|███████▋  | 153/200 [00:15<00:03, 13.30it/s]
+ 78%|███████▊  | 155/200 [00:15<00:03, 12.44it/s]
+ 79%|███████▉  | 158/200 [00:15<00:02, 14.75it/s]
+ 80%|████████  | 161/200 [00:15<00:02, 17.15it/s]
+ 82%|████████▏ | 163/200 [00:15<00:02, 17.21it/s]
+ 83%|████████▎ | 166/200 [00:15<00:02, 16.74it/s]
+ 84%|████████▍ | 168/200 [00:16<00:02, 12.09it/s]
+ 85%|████████▌ | 170/200 [00:16<00:02, 10.06it/s]
+ 86%|████████▌ | 172/200 [00:16<00:03,  7.22it/s]
+ 87%|████████▋ | 174/200 [00:17<00:03,  7.76it/s]
+ 88%|████████▊ | 176/200 [00:17<00:02,  8.86it/s]
+ 89%|████████▉ | 178/200 [00:17<00:02,  8.20it/s]
+ 90%|█████████ | 181/200 [00:17<00:01,  9.66it/s]
+ 92%|█████████▏| 183/200 [00:18<00:02,  8.49it/s]
+ 93%|█████████▎| 186/200 [00:18<00:01,  9.76it/s]
+ 94%|█████████▍| 188/200 [00:18<00:01,  9.98it/s]
+ 95%|█████████▌| 190/200 [00:18<00:01,  7.35it/s]
+ 97%|█████████▋| 194/200 [00:19<00:00,  9.46it/s]
+ 98%|█████████▊| 196/200 [00:20<00:00,  5.75it/s]
+ 98%|█████████▊| 197/200 [00:20<00:00,  5.37it/s]
+ 99%|█████████▉| 198/200 [00:20<00:00,  4.49it/s]
+100%|█████████▉| 199/200 [00:20<00:00,  4.85it/s]
+100%|██████████| 200/200 [00:21<00:00,  2.91it/s]
+100%|██████████| 200/200 [00:21<00:00,  9.23it/s]
+Traceback (most recent call last):
+  File "/content/vllm029/lib/python3.13/site-packages/vllm/utils/import_utils.py", line 306, in __getattr__
+    importlib.import_module(name)
+    ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^
+  File "/usr/lib/python3.13/importlib/__init__.py", line 88, in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<frozen importlib._bootstrap>", line 1395, in _gcd_import
+  File "<frozen importlib._bootstrap>", line 1360, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1324, in _find_and_load_unlocked
+ModuleNotFoundError: No module named 'pandas'
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/content/vllm029/lib/python3.13/site-packages/vllm/benchmarks/sweep/serve.py", line 502, in run_ctx
+    yield
+  File "/content/vllm029/lib/python3.13/site-packages/vllm/benchmarks/sweep/serve.py", line 515, in run_main
+    return run_combs(
+        serve_cmd=args.serve_cmd,
+    ...<9 lines>...
+        dry_run=args.dry_run,
+    )
+  File "/content/vllm029/lib/python3.13/site-packages/vllm/benchmarks/sweep/serve.py", line 299, in run_combs
+    combined_df = pd.DataFrame.from_records(all_data)
+                  ^^^^^^^^^^^^
+  File "/content/vllm029/lib/python3.13/site-packages/vllm/utils/import_utils.py", line 311, in __getattr__
+    raise ImportError(msg) from exc
+ImportError: Please install vllm[bench] for bench support
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/content/vllm029/bin/vllm", line 10, in <module>
+    sys.exit(main())
+             ~~~~^^
+  File "/content/vllm029/lib/python3.13/site-packages/vllm/entrypoints/cli/main.py", line 97, in main
+    args.dispatch_function(args)
+    ~~~~~~~~~~~~~~~~~~~~~~^^^^^^
+  File "/content/vllm029/lib/python3.13/site-packages/vllm/benchmarks/sweep/serve.py", line 531, in main
+    run_main(SweepServeArgs.from_cli_args(args))
+    ~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/content/vllm029/lib/python3.13/site-packages/vllm/benchmarks/sweep/serve.py", line 514, in run_main
+    with args.run_ctx(experiment_dir):
+         ~~~~~~~~~~~~^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.13/contextlib.py", line 162, in __exit__
+    self.gen.throw(value)
+    ~~~~~~~~~~~~~~^^^^^^^
+  File "/content/vllm029/lib/python3.13/site-packages/vllm/benchmarks/sweep/serve.py", line 505, in run_ctx
+    raise RuntimeError(
+    ...<2 lines>...
+    ) from exc
+RuntimeError: The script was terminated early. Use `--resume` to continue the script from its last checkpoint.

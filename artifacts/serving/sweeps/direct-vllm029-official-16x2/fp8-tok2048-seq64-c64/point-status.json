@@ -1,0 +1,14 @@
+{
+  "error": "RuntimeError: benchmark failed with exit code 1",
+  "finished_at_unix": 1789170106.9655263,
+  "point": {
+    "_benchmark_name": "fp8-tok2048-seq64-c64",
+    "max_concurrency": 64,
+    "max_num_batched_tokens": 2048,
+    "max_num_seqs": 64,
+    "precision": "fp8"
+  },
+  "returncode": 1,
+  "started_at_unix": 1789169772.2187994,
+  "status": "failed"
+}
