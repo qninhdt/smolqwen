@@ -19,6 +19,7 @@ from pydantic.fields import FieldInfo
 from smolqwen.config_models import (
     BUDGET_SEEDED_FIELDS,
     PROFILES,
+    SERVING_PROFILES,
     STAGE_MODELS,
     STAGES,
     ConfigError,
@@ -216,21 +217,27 @@ def resolve(
 
     directory = config_dir or DEFAULT_CONFIG_DIR
     base_path = config_path or (directory / "base" / f"{stage}.yaml")
-    budget_overlay = load_budgets(budgets_path) if "profile" in model.model_fields else {}
+    budget_overlay = (
+        load_budgets(budgets_path) if "profile" in model.model_fields and stage != "serve" else {}
+    )
     merged: dict[str, Any] = deep_merge(budget_overlay, _load_yaml(base_path))
 
     if profile is not None:
-        if profile not in PROFILES:
-            raise ConfigError(f"unknown profile '{profile}'; expected one of {', '.join(PROFILES)}")
+        allowed_profiles = SERVING_PROFILES if stage == "serve" else PROFILES
+        if profile not in allowed_profiles:
+            raise ConfigError(
+                f"unknown profile '{profile}'; expected one of {', '.join(allowed_profiles)}"
+            )
         if "profile" not in model.model_fields:
             raise ConfigError(f"stage '{stage}' does not accept a GPU profile")
-        profile_payload = _load_yaml(directory / "profiles" / f"{profile}.yaml")
+        profile_directory = "serving" if stage == "serve" else "profiles"
+        profile_payload = _load_yaml(directory / profile_directory / f"{profile}.yaml")
         # A profile YAML holds sizing fields at its top level; nest them under the
         # stage model's `profile` section so a profile cannot reach a semantic key.
         merged = deep_merge(merged, {"profile": profile_payload})
-        # Stage overlays keep evaluation/serving runtime choices out of the shared
-        # training profile. Only stages with a committed overlay opt into one.
-        stage_profile_dir = {"eval": "evaluation", "serve": "serving"}.get(stage)
+        # Evaluation keeps its runtime choices out of the shared training profile;
+        # serving profiles are already nested above.
+        stage_profile_dir = {"eval": "evaluation"}.get(stage)
         if stage_profile_dir is not None:
             stage_profile = directory / stage_profile_dir / f"{profile}.yaml"
             if stage_profile.is_file():

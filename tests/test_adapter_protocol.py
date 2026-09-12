@@ -18,7 +18,6 @@ def test_adapter_modules_are_discovered_without_a_runner_switch() -> None:
 
 def test_eval_config_accepts_options_for_an_unregistered_adapter() -> None:
     config = EvalConfig(
-        adapters=("future_benchmark",),
         adapter_options={"future_benchmark": {"dataset": "fixture", "revision": "abc"}},
     )
     assert config.adapter_options["future_benchmark"] == {

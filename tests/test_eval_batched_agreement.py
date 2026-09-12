@@ -104,7 +104,7 @@ def scripted_backend(tokenizer: OfflineTokenizer) -> ScriptedPolicyBackend:
 
 
 def config(**overrides: Any) -> EvalConfig:
-    payload: dict[str, Any] = {"adapters": ("fixture",), "max_steps_per_task": 8}
+    payload: dict[str, Any] = {"max_steps_per_task": 8}
     payload.update(overrides)
     return EvalConfig(**payload)
 

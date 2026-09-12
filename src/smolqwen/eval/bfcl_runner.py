@@ -34,9 +34,14 @@ BFCL_ROOT = (
     / "gorilla"
     / "berkeley-function-call-leaderboard"
 )
-MULTI_TURN_CATEGORIES = frozenset({
-    "multi_turn_base", "multi_turn_miss_func", "multi_turn_miss_param", "multi_turn_long_context",
-})
+MULTI_TURN_CATEGORIES = frozenset(
+    {
+        "multi_turn_base",
+        "multi_turn_miss_func",
+        "multi_turn_miss_param",
+        "multi_turn_long_context",
+    }
+)
 DEFAULT_CATEGORIES: list[str] = ["multi_turn_base"]
 HOLDOUT_PROMPT = "I have updated some more functions you can choose from. What about now?"
 LENGTH_MARGIN = 8
@@ -157,13 +162,9 @@ def evaluate_bfcl(
             record_sink(record)
 
     if multi:
-        task_metrics.extend(
-            _evaluate_multi_turn(config, tokenizer, generate, multi, _sink)
-        )
+        task_metrics.extend(_evaluate_multi_turn(config, tokenizer, generate, multi, _sink))
     if single:
-        task_metrics.extend(
-            _evaluate_single_turn(config, tokenizer, generate, single, _sink)
-        )
+        task_metrics.extend(_evaluate_single_turn(config, tokenizer, generate, single, _sink))
 
     metrics = aggregate(task_metrics)
     categories = sorted({t.category for t in tasks})
@@ -177,8 +178,11 @@ def evaluate_bfcl(
             "task_ids_hash": hash_json([task.task_id for task in tasks]),
             "tool_schema_hash": hash_json([task.entry["function"] for task in tasks]),
             "system_prompt": None,
-            "checker": "multi_turn_checker + ast_checker" if (multi and single)
-            else "ast_checker" if single else "multi_turn_checker",
+            "checker": "multi_turn_checker + ast_checker"
+            if (multi and single)
+            else "ast_checker"
+            if single
+            else "multi_turn_checker",
         },
     )
 
@@ -277,7 +281,9 @@ def _evaluate_single_turn(
             for task in batch:
                 messages = _question_messages(task.entry, 0)
                 prompt_ids = _render_prompt_ids(
-                    tokenizer, messages, [_tool_schema(doc) for doc in task.entry["function"]],
+                    tokenizer,
+                    messages,
+                    [_tool_schema(doc) for doc in task.entry["function"]],
                     config.enable_thinking,
                 )
                 remaining = config.profile.max_seq_length - len(prompt_ids) - LENGTH_MARGIN
@@ -295,9 +301,7 @@ def _evaluate_single_turn(
             for task in batch:
                 completion = by_id[task.task_id]
                 calls = _parse_calls(completion.text, tools=task.entry["function"])
-                model_output = [
-                    {call.name: dict(call.arguments)} for call in calls
-                ]
+                model_output = [{call.name: dict(call.arguments)} for call in calls]
                 result = _ast_check(
                     list(task.entry["function"]),
                     model_output,
@@ -307,12 +311,16 @@ def _evaluate_single_turn(
                     "smolqwen",
                 )
                 valid = bool(result.get("valid"))
+                # Single-shot AST grading: exactly one generation step and no tool
+                # execution, so there is no runtime invalid-call signal to count.
                 metric = TaskMetrics(
                     category=task.category,
                     score=float(valid),
-                    exact_success=valid,
+                    invalid_calls=0,
+                    steps=1,
                     generated_tokens=completion.generated_tokens,
                     truncated=completion.truncated,
+                    exact_success=valid,
                     diagnostics={"completion_rate": 1.0},
                 )
                 task_metrics.append(metric)
@@ -440,9 +448,7 @@ def _score_episode(episode: _Episode, run_key: str) -> tuple[TaskMetrics, Trajec
     return metric, record
 
 
-def _parse_calls(
-    text: str, *, tools: Sequence[Mapping[str, Any]] = ()
-) -> list[ToolCall]:
+def _parse_calls(text: str, *, tools: Sequence[Mapping[str, Any]] = ()) -> list[ToolCall]:
     calls = parse_tool_calls(text, tools=tools)
     if calls:
         return calls

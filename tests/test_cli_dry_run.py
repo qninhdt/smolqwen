@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import logging
 import sys
-from pathlib import Path
 
 import pytest
 
@@ -13,9 +12,15 @@ from smolqwen.cli import SUBCOMMAND_STAGES, build_parser, main
 from smolqwen.console import LOG_LEVEL_ENV, resolve_level
 
 
+def _profile_args(command: str) -> list[str]:
+    if command == "prepare-sft":
+        return []
+    return ["--profile", "balanced" if command == "serve" else "l4"]
+
+
 def test_every_stage_subcommand_dry_runs(capsys: pytest.CaptureFixture[str]) -> None:
     for command in SUBCOMMAND_STAGES:
-        profile = [] if command == "prepare-sft" else ["--profile", "l4"]
+        profile = _profile_args(command)
         exit_code = main([command, *profile, "--dry-run"])
         assert exit_code == 0, f"{command} failed to dry-run"
         payload = json.loads(capsys.readouterr().out)
@@ -36,7 +41,7 @@ def test_verbose_logging_keeps_the_dry_run_stdout_parseable(
     another program parses, so the purity is asserted at the loudest level.
     """
     for command in SUBCOMMAND_STAGES:
-        profile = [] if command == "prepare-sft" else ["--profile", "l4"]
+        profile = _profile_args(command)
         assert main([command, *profile, "--dry-run", "--verbose"]) == 0
         captured = capsys.readouterr()
         assert isinstance(json.loads(captured.out), dict), command
@@ -133,6 +138,14 @@ def test_unknown_profile_exits_nonzero(capsys: pytest.CaptureFixture[str]) -> No
         main(["train-sft", "--profile", "h100", "--dry-run"])
 
 
+def test_serving_profile_namespace_is_separate_from_hardware_profiles() -> None:
+    parser = build_parser()
+    assert parser.parse_args(["serve", "--profile", "balanced"]).profile == "balanced"
+    assert parser.parse_args(["train-sft", "--profile", "l4"]).profile == "l4"
+    with pytest.raises(SystemExit):
+        parser.parse_args(["serve", "--profile", "l4"])
+
+
 def test_probe_subcommand_needs_no_config(capsys: pytest.CaptureFixture[str]) -> None:
     # probe runs on a fresh VM before anything is configured, so it must not
     # resolve a stage config at all.
@@ -173,7 +186,6 @@ def test_prepare_sft_parser_accepts_only_positive_worker_count() -> None:
 def test_serving_reports_a_missing_key_without_a_traceback(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
-    tmp_path: Path,
 ) -> None:
     """The assertion that survived the benchmark wrapper's deletion.
 
@@ -181,8 +193,7 @@ def test_serving_reports_a_missing_key_without_a_traceback(
     still exit 2 with the variable named rather than raising through argparse.
     """
     monkeypatch.delenv("VLLM_API_KEY", raising=False)
-    override = f"output_dir={tmp_path}"
-    assert main(["serve", "--profile", "l4", "--override", override]) == 2
+    assert main(["serve", "--profile", "balanced"]) == 2
     captured = capsys.readouterr()
     assert "VLLM_API_KEY" in captured.err
     # `serve --print-command` writes argv to stdout, so a failing `serve` must not

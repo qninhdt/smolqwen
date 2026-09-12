@@ -31,8 +31,6 @@ from typing import Any
 import pytest
 
 from smolqwen.cli import SUBCOMMAND_STAGES, main
-from smolqwen.config import resolve
-from smolqwen.config_models import SftConfig
 from smolqwen.console import LOG_STREAM_ENV, configure_logging, logger, progress_task
 
 SRC = Path(__file__).resolve().parents[1] / "src" / "smolqwen"
@@ -40,7 +38,7 @@ SRC = Path(__file__).resolve().parents[1] / "src" / "smolqwen"
 # module path relative to `src/smolqwen` -> the callables whose results reach
 # stdout, sorted. "f-string" is a printed literal rather than a call.
 EMITTERS: dict[str, tuple[str, ...]] = {
-    "cli.py": ("f-string", "format_probe", "json.dumps", "resolved_summary"),
+    "cli.py": ("f-string", "format_probe", "resolved_summary"),
     "env/selftest.py": ("json.dumps",),
     "eval/runner.py": ("json.dumps",),
     "rollout/bench.py": ("json.dumps",),
@@ -122,7 +120,11 @@ def test_dry_run_summary_is_parseable_json_on_stdout_for_every_stage(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     for command in SUBCOMMAND_STAGES:
-        profile = [] if command == "prepare-sft" else ["--profile", "l4"]
+        profile = (
+            []
+            if command == "prepare-sft"
+            else ["--profile", "balanced" if command == "serve" else "l4"]
+        )
         assert main([command, *profile, "--dry-run"]) == 0
         captured = capsys.readouterr()
         # Parsed, not matched: a stray line on stdout breaks `json.loads` the same
@@ -134,44 +136,12 @@ def test_serve_print_command_stays_shell_parseable_on_stdout(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """`docs/serving.md` captures this argv in a shell; no test guarded it before."""
-    assert main(["serve", "--profile", "l4", "--print-command"]) == 0
+    assert main(["serve", "--profile", "balanced", "--print-command"]) == 0
     captured = capsys.readouterr()
     argv = shlex.split(captured.out)
     assert argv[:2] == ["vllm", "serve"]
     assert "--api-key" not in argv
     assert captured.err == ""
-
-
-def test_build_workload_paths_are_json_on_stdout(
-    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """The tokenizer and BFCL fixtures need the Hub; the emitter does not."""
-    from smolqwen import tokenizer as tokenizer_module
-    from smolqwen.eval import workload
-
-    requested: list[tuple[Any, Any]] = []
-
-    def fake_tokenizer(model_id: Any, *, revision: Any = None, **_: Any) -> object:
-        requested.append((model_id, revision))
-        return object()
-
-    monkeypatch.setattr(tokenizer_module, "load_tokenizer", fake_tokenizer)
-    monkeypatch.setattr(
-        workload,
-        "build_bfcl_agentic_workload",
-        lambda *_a, **_k: (tmp_path / "traffic.jsonl", tmp_path / "composition.json"),
-    )
-    assert main(["build-workload", "--profile", "l4", "--output", str(tmp_path / "t.jsonl")]) == 0
-    payload = json.loads(capsys.readouterr().out)
-    assert set(payload) == {"workload", "composition"}
-
-    # The template comes from the pinned base model. `EvalConfig.http_model` is the
-    # name a server answers to (`--served-model-name smolqwen`), never a repo id, so
-    # loading a tokenizer from it failed outright on the shipped config -- and the
-    # emitter's own test did not see it because the tokenizer was stubbed.
-    sft = resolve("sft", "l4")
-    assert isinstance(sft, SftConfig)
-    assert requested == [(sft.model_id, sft.model_revision)]
 
 
 def test_merge_report_json_stays_on_stdout(

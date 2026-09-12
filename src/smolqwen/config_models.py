@@ -15,10 +15,11 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 STAGES = ("data", "sft", "grpo", "eval", "serve")
 PROFILES = ("t4", "l4", "a100")
+SERVING_PROFILES = ("latency", "balanced", "throughput")
 
 # budgets.json key -> the profile field it seeds. SFT max sequence length is not
 # here: old per-turn profile artifacts must never resize full-trajectory SFT.
@@ -172,9 +173,8 @@ class BenchEvalConfig(StrictModel):
     Every field has a default, so adding this block does not invalidate an existing
     YAML: `extra="forbid"` rejects unknown *keys*, not new model fields.
 
-    `adapter` names the benchmark directly and is not read from
-    `EvalConfig.adapters`. That list is the standalone `evaluate` command's set; a
-    boundary cadence and a benchmark choice are separate decisions.
+    `adapter` names the in-training benchmark directly; standalone `evaluate`
+    always uses its BFCL runner.
 
     `task_limit` x eval frequency is the boundary's cost. The measured per-boundary
     cost is logged (`bench_wall_s`), so the setting is checkable rather than
@@ -309,7 +309,6 @@ class DecodingConfig(StrictModel):
 class EvalConfig(StrictModel):
     """Phase 5: the benchmark adapter layer and the headline table."""
 
-    adapters: Sequence[str] = ()
     # BFCL categories to evaluate (e.g. simple_python, parallel, multi_turn_base).
     # Empty means the runner's default (multi_turn_base).
     categories: Sequence[str] = ()
@@ -322,8 +321,6 @@ class EvalConfig(StrictModel):
     # benchmark validates its own entry in its adapter module, so adding one
     # does not require another field here or another branch in the runner.
     adapter_options: Mapping[str, Mapping[str, object]] = Field(default_factory=dict)
-    http_model: str = "smolqwen"
-    http_timeout_s: float = Field(default=60.0, gt=0.0)
     max_steps_per_task: int = Field(default=20, ge=1)
     decoding: DecodingConfig = DecodingConfig()
     output_dir: str = "artifacts/evaluation"
@@ -331,38 +328,55 @@ class EvalConfig(StrictModel):
     tracking: TrackingConfig = TrackingConfig()
 
 
-class ServeConfig(StrictModel):
-    """Phase 8: the OpenAI-compatible endpoint and its measurement."""
+class ServingProfileConfig(StrictModel):
+    """Measured BF16/FP8 vLLM operating-point settings, separate from hardware sizing.
 
-    model_path: str = "artifacts/models/qwen3.5-2b-sft-grpo-merged"
-    model_revision: str | None = None
+    The narrow literals are deliberate: this plan benchmarks only BF16 and the
+    upstream FP8 family, not an unmeasured AWQ/GPTQ serving contract.
+    """
+
+    dtype: Literal["auto", "float16", "bfloat16"] = "bfloat16"
+    quantization: Literal["fp8"] | None = None
+    # vLLM 0.29 resolves ``auto`` from the model; fp8 uses its documented default
+    # scale unless a quantized checkpoint carries calibrated KV metadata.
+    kv_cache_dtype: Literal["auto", "fp8", "fp8_e4m3", "fp8_e5m2"] = "auto"
+    kv_cache_scale: Literal["default", "checkpoint"] = "default"
+    max_num_seqs: int = Field(default=64, ge=1)
+    max_num_batched_tokens: int = Field(default=8192, ge=1)
+    max_num_queued_reqs: int | None = Field(default=None, ge=0)
+    max_num_queued_tokens: int | None = Field(default=None, ge=0)
+    gpu_memory_utilization: float = Field(default=0.90, gt=0.0, le=1.0)
+
+    @model_validator(mode="after")
+    def validate_runtime_pairings(self) -> ServingProfileConfig:
+        if self.quantization == "fp8" and self.dtype == "float16":
+            raise ValueError("FP8 serving weights require auto or bfloat16 activations")
+        if self.kv_cache_scale == "checkpoint" and self.kv_cache_dtype == "auto":
+            raise ValueError("checkpoint KV scales require an explicit quantized KV dtype")
+        if (self.max_num_queued_reqs is None) != (self.max_num_queued_tokens is None):
+            raise ValueError("max_num_queued_reqs and max_num_queued_tokens must be set together")
+        if self.max_num_batched_tokens < self.max_num_seqs:
+            raise ValueError("max_num_batched_tokens must be at least max_num_seqs")
+        return self
+
+
+class ServeConfig(StrictModel):
+    """The authenticated OpenAI-compatible vLLM endpoint."""
+
+    model_path: str = "Qwen/Qwen3.5-2B"
+    model_revision: str | None = "15852e8c16360a2fea060d615a32b45270f8a8fc"
     served_model_name: str = "smolqwen"
-    dtype: str = "bfloat16"
     max_model_len: int = Field(default=32768, ge=512)
     # vLLM binds to loopback; the key-checking proxy is the only exposed service,
     # because `--api-key` challenges GUARDED_PREFIX paths only.
     host: str = "127.0.0.1"
     port: int = Field(default=8000, ge=1, le=65535)
-    proxy_port: int = Field(default=8080, ge=1, le=65535)
     reasoning_parser: str = "qwen3"
     tool_call_parser: str = "hermes"
-    quantization: str | None = None
     speculative_num_tokens: int | None = None
     enable_prefix_caching: bool = True
-    max_num_seqs: int = Field(default=64, ge=1)
-    max_num_batched_tokens: int = Field(default=8192, ge=1)
     enable_chunked_prefill: bool = True
-    gpu_memory_utilization: float = Field(default=0.90, gt=0.0, le=1.0)
-    benchmark_num_prompts: int = Field(default=100, ge=1)
-    benchmark_input_len: int = Field(default=1024, ge=1)
-    benchmark_output_len: int = Field(default=256, ge=1)
-    benchmark_percentiles: Sequence[int] = (50, 95, 99)
-    readiness_timeout_s: float = Field(default=600.0, gt=0.0)
-    readiness_poll_interval_s: float = Field(default=2.0, gt=0.0)
-    sweep_num_runs: int = Field(default=3, ge=1)
-    output_dir: str = "artifacts/serving"
-    profile: ProfileConfig = ProfileConfig()
-    tracking: TrackingConfig = TrackingConfig()
+    profile: ServingProfileConfig = ServingProfileConfig()
 
 
 STAGE_MODELS: Mapping[str, type[StrictModel]] = {

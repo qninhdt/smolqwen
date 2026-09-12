@@ -45,11 +45,6 @@ import time
 from pathlib import Path
 from typing import Any
 
-try:
-    from colab_logging import run_streaming
-except ModuleNotFoundError:  # imported from the repository root in tests
-    from scripts.colab_logging import run_streaming
-
 ROOT = Path("/content/smolqwen")
 PYTHON = ROOT / ".venv" / "bin" / "python"
 CLI = ROOT / ".venv" / "bin" / "smolqwen"
@@ -65,6 +60,19 @@ SELECTION = ARTIFACTS / "gpu-validation-sft" / "selection.json"
 MERGED_OUTPUT = ARTIFACTS / "gpu-validation-sft" / "selected-merged"
 GRPO_OUTPUT = ARTIFACTS / "gpu-validation-grpo" / "production"
 PROFILE_CHOICES = ("auto", "t4", "l4", "a100")
+run_streaming: Any
+
+
+def _load_logging() -> None:
+    """Load the helper after a Colab source tree is available."""
+    global run_streaming
+    try:
+        from colab_logging import run_streaming as stream
+    except ModuleNotFoundError:  # imported from the repository root in tests
+        sys.path.insert(0, str(ROOT / "scripts"))
+        from colab_logging import run_streaming as stream
+    run_streaming = stream
+
 
 # Every phase, in the order a failure invalidates the least.  `required` phases
 # stop the run; the rest are recorded and the matrix continues, because a
@@ -158,6 +166,7 @@ def _runtime_environment() -> dict[str, str]:
 
 def _run_command(command: list[str], *, timeout: int) -> str:
     """Run one phase command, streaming output and quiet heartbeats."""
+    _load_logging()
     result = run_streaming(
         command,
         name=Path(command[0]).name,
@@ -187,6 +196,7 @@ def _run_child(
     device: dict[str, Any],
 ) -> str:
     print(f"\n=== {name} ===", flush=True)
+    _load_logging()
     started = time.monotonic()
     try:
         result = run_streaming(
@@ -711,8 +721,6 @@ def _evaluate_checkpoint(
         profile_name,
         "--config",
         str(_small_eval_config()),
-        "--adapter",
-        "bfcl_multi_turn",
         "--checkpoint",
         str(checkpoint),
         "--revision",
@@ -913,6 +921,7 @@ def _phase_grpo(requested_profile: str) -> int:
 
 def _phase_non_tty() -> int:
     """Exercise the plain-line fallback with stdout connected to a pipe."""
+    _load_logging()
     result = run_streaming(
         [str(CLI), "probe", "--no-write"],
         name="non-tty probe",

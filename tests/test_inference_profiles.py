@@ -18,7 +18,13 @@ from pathlib import Path
 import pytest
 
 from smolqwen.config import resolve
-from smolqwen.config_models import EvalConfig, GrpoConfig, ProfileConfig, ServeConfig
+from smolqwen.config_models import (
+    EvalConfig,
+    GrpoConfig,
+    ProfileConfig,
+    ServeConfig,
+    ServingProfileConfig,
+)
 from smolqwen.inference.profiles import EvalProfile, RolloutProfile, ServeProfile
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -145,7 +151,10 @@ def test_serve_argv_is_unchanged_by_the_move() -> None:
 
     for config in (
         ServeConfig(),
-        ServeConfig(speculative_num_tokens=1, quantization="fp8"),
+        ServeConfig(
+            speculative_num_tokens=1,
+            profile=ServingProfileConfig(quantization="fp8", kv_cache_dtype="fp8"),
+        ),
         ServeConfig(enable_prefix_caching=False, enable_chunked_prefill=False),
         ServeConfig(model_revision="b" * 40),
     ):

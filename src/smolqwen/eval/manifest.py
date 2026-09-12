@@ -44,12 +44,8 @@ REDACTED_HOST = "redacted"
 def redact_endpoint(endpoint: object) -> object:
     """Reduce an endpoint to scheme, host *shape*, port and path. Never routable.
 
-    The Colab serving path is a public `trycloudflare.com` hostname
-    (`scripts/run_colab_serve.sh:53`), so a report that records it verbatim
-    publishes a routable ingress to a GPU box the moment the report is uploaded.
-    Nothing strips userinfo either, so a credentialed URL would be stored whole.
-    The repo's posture elsewhere is the opposite -- `run_colab_serve.sh` prints the
-    key *file path*, never the key.
+    A public hostname recorded verbatim can publish a routable ingress to a GPU
+    box, and a credentialed URL can expose userinfo. Both are stripped here.
 
     Loopback and private addresses survive intact: they are not reachable from
     outside the host, and "this was measured against the local proxy on 8080" is

@@ -82,7 +82,9 @@ import sys
 from smolqwen.cli import SUBCOMMAND_STAGES, main
 
 for command in SUBCOMMAND_STAGES:
-    profile = [] if command == "prepare-sft" else ["--profile", "l4"]
+    profile = []
+    if command != "prepare-sft":
+        profile = ["--profile", "balanced" if command == "serve" else "l4"]
     assert main([command, *profile, "--dry-run", "--quiet"]) == 0, command
 print(json.dumps(sorted(name for name in {heavy!r} if name in sys.modules)))
 """

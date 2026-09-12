@@ -70,7 +70,17 @@ def test_disabled_vllm_correction_reuses_sampler_logprobs_as_old_policy() -> Non
         def _generate(self, prompts: object) -> tuple[object, ...]:
             return (None, None, None, None, [[-0.1, float("nan")], [-0.2]], None)
 
-        def _get_per_token_logps_and_entropies(self, *_args: object, **_kwargs: object) -> None:
+        def _get_per_token_logps_and_entropies(
+            self,
+            model: Any,
+            input_ids: Any,
+            attention_mask: Any,
+            logits_to_keep: int,
+            batch_size: int | None = None,
+            compute_entropy: bool = False,
+            compute_aux_loss: bool = False,
+            **kwargs: Any,
+        ) -> tuple[Any, Any, Any]:
             raise AssertionError("the dense old-policy forward should be skipped")
 
     class Trainer(ScenarioGRPOTrainerMixin, Base):
@@ -154,10 +164,11 @@ def test_the_bench_eval_engine_cannot_be_asked_for_more_context_than_it_has(
     # And the rest of the sizing is this run's, not the defaults.
     assert engine.generation_concurrency == config.profile.generation_concurrency
     assert engine.max_env_steps == config.profile.max_env_steps
-    # The adapter selection and decoding still come from the eval stage, which is
-    # what makes one number mean one thing in training and in `evaluate`.
-    assert resolved.adapters, "the eval stage config should still name its adapters"
-    assert resolved.decoding == resolve("eval").decoding
+    # Decoding still comes from the eval stage, which is what makes one number
+    # mean one thing in training and in `evaluate`.
+    eval_stage = resolve("eval")
+    assert isinstance(eval_stage, EvalConfig)
+    assert resolved.decoding == eval_stage.decoding
 
 
 def test_the_bench_eval_config_leaves_the_run_s_own_profile_untouched() -> None:

@@ -10,7 +10,6 @@ dependencies.
 from __future__ import annotations
 
 import argparse
-import json
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import TypeVar
@@ -18,9 +17,9 @@ from typing import TypeVar
 from smolqwen.config import resolve, resolved_summary
 from smolqwen.config_models import (
     PROFILES,
+    SERVING_PROFILES,
     ConfigError,
     DataConfig,
-    EvalConfig,
     GrpoConfig,
     ServeConfig,
     SftConfig,
@@ -38,7 +37,6 @@ SUBCOMMAND_STAGES: dict[str, str] = {
     "rollout-bench": "grpo",
     "train-grpo": "grpo",
     "evaluate": "eval",
-    "build-workload": "eval",
     "serve": "serve",
 }
 
@@ -143,7 +141,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_common(selftest)
     selftest.add_argument("--scenario-id", default=None)
-    selftest.add_argument("--limit", type=int, default=1)
 
     bench_rollout = subparsers.add_parser(
         "rollout-bench", help="verify rollout equivalence and emit rollout diagnostics"
@@ -184,19 +181,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     serve = subparsers.add_parser("serve", help="launch the vLLM endpoint")
-    _add_common(serve)
+    _add_common(serve, include_profile=False)
+    serve.add_argument(
+        "--profile",
+        choices=SERVING_PROFILES,
+        default="balanced",
+        help="measured serving operating profile (default: balanced)",
+    )
     serve.add_argument("--print-command", action="store_true", help="print argv and exit")
-
-    workload = subparsers.add_parser(
-        "build-workload", help="write BFCL-shaped benchmark traffic for vllm bench serve"
-    )
-    _add_common(workload)
-    workload.add_argument(
-        "--output",
-        type=Path,
-        default=Path("artifacts/serving/bfcl-agentic.jsonl"),
-        help="where to write the rendered prompts",
-    )
 
     return parser
 
@@ -309,38 +301,6 @@ def _cmd_serve(args: argparse.Namespace, config: StrictModel) -> int:
         return 2
 
 
-def _cmd_build_workload(args: argparse.Namespace, config: StrictModel) -> int:
-    """Render BFCL-shaped traffic for `vllm bench serve --dataset-name custom`.
-
-    Kept because it is the only thing that makes a serving benchmark measure *this*
-    workload: `--dataset-name random` measures token throughput on synthetic prompts,
-    which says nothing about an agentic request's prefill shape or tool-schema
-    overhead. The upstream commands own execution; this owns the traffic.
-
-    The template comes from the **pinned base model**, not from
-    `EvalConfig.http_model`. That field is the name a server answers to
-    (`--served-model-name smolqwen`), never a repo id, so loading a tokenizer from
-    it fails outright on the shipped config. The merged checkpoint a benchmark
-    serves carries the base tokenizer verbatim (`merge.py` saves it from the pinned
-    base revision), so rendering against the base is rendering against what the
-    server will see.
-    """
-    from smolqwen.eval.workload import build_bfcl_agentic_workload
-    from smolqwen.tokenizer import load_tokenizer
-
-    evaluation = _as(config, EvalConfig)
-    with phase("build-workload: resolve training tokenizer config"):
-        training = _as(resolve("sft", profile=args.profile, budgets_path=args.budgets), SftConfig)
-    with phase("build-workload: load tokenizer"):
-        tokenizer = load_tokenizer(training.model_id, revision=training.model_revision)
-    with phase("build-workload: render BFCL requests"):
-        workload, composition = build_bfcl_agentic_workload(
-            evaluation, tokenizer=tokenizer, output_path=args.output
-        )
-    print(json.dumps({"workload": str(workload), "composition": str(composition)}, sort_keys=True))
-    return 0
-
-
 DISPATCH: dict[str, Callable[[argparse.Namespace, StrictModel], int]] = {
     "prepare-sft": _cmd_prepare_sft,
     "train-sft": _cmd_train_sft,
@@ -350,7 +310,6 @@ DISPATCH: dict[str, Callable[[argparse.Namespace, StrictModel], int]] = {
     "rollout-bench": _cmd_rollout_bench,
     "train-grpo": _cmd_train_grpo,
     "serve": _cmd_serve,
-    "build-workload": _cmd_build_workload,
 }
 
 

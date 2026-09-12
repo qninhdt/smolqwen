@@ -1,4 +1,4 @@
-"""Backend-neutral parsing for HTTP-normalized tool calls and completion markers."""
+"""Parsing for normalized tool calls and completion markers."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ NormalizedCall = tuple[str, dict[str, Any]]
 
 
 def parse_normalized_json_calls(text: str) -> list[NormalizedCall]:
-    """Parse HttpPolicy's final-line JSON call representation."""
+    """Parse the runner's final-line JSON call representation."""
 
     candidate = text.strip().rsplit("\n", 1)[-1].strip()
     if not candidate.startswith(("[", "{")):

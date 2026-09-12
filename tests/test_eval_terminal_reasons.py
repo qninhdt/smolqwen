@@ -131,7 +131,6 @@ def test_the_batched_path_warns_when_no_episode_generated_anything(
     # The offline tokenizer is per-character, so the window is set from the measured
     # render rather than a guessed token count.
     config = EvalConfig(
-        adapters=("fixture",),
         max_steps_per_task=4,
         profile=EvalConfig().profile.model_copy(update={"max_seq_length": rendered // 2}),
     )

@@ -386,9 +386,7 @@ class BfclMultiTurnAdapter:
         return tuple(turns)
 
     @staticmethod
-    def _parse_model_calls(
-        completion: str, tools: Sequence[Mapping[str, Any]] = ()
-    ) -> list[Call]:
+    def _parse_model_calls(completion: str, tools: Sequence[Mapping[str, Any]] = ()) -> list[Call]:
         xml_calls = parse_tool_calls(completion, tools=tools)
         if xml_calls:
             return [(call.name, (), dict(call.arguments)) for call in xml_calls]

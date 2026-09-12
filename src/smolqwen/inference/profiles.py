@@ -1,14 +1,12 @@
-"""Per-task vLLM sizing, derived from the resolved `ProfileConfig`.
+"""vLLM profiles derived from resolved stage configuration.
 
-These profiles do not declare sizing of their own. `max_model_len`,
-`gpu_memory_utilization` and the batch width already exist as
-`ProfileConfig.max_seq_length` (`config_models.py:54`), `vllm_kv_fraction`
-(`:61`) and `generation_concurrency` (`:59`), and every stage config embeds a
-`ProfileConfig`. Declaring them again would put them outside the overlay chain --
-`config.py:245` resolves a profile YAML only into the `profile` subtree -- so
-`--profile l4` would silently stop sizing evaluation while `runner.py:42` kept
-recording `max_seq_length` into the manifest's **invariant** set, certifying
-comparability between runs that truncated differently.
+Evaluation and rollout profiles do not declare sizing of their own:
+`max_model_len`, `gpu_memory_utilization` and batch width come from the resolved
+`ProfileConfig`. Serving uses its separate closed `ServingProfileConfig`, so
+`latency`, `balanced`, and `throughput` cannot leak hardware/training fields into
+the serving command. Declaring either set again outside the overlay chain would
+make a profile silently stop sizing its stage while manifests still record the
+old value.
 
 So: read the resolved profile, add only genuinely new knobs.
 """
@@ -184,7 +182,7 @@ def turn_engine_config(config: GrpoConfig, **overrides: Any) -> TurnEngineConfig
 
 @dataclass(frozen=True)
 class ServeProfile:
-    """The `vllm serve` argv, moved here so one package owns every vLLM surface.
+    """The `vllm serve` argv for one measured operating profile.
 
     `command()` is `serving/server.py:19` verbatim, including both
     `--enable-*`/`--no-enable-*` pairs -- vLLM's defaults for prefix caching and
@@ -198,6 +196,12 @@ class ServeProfile:
 
     def command(self) -> list[str]:
         config = self.config
+        profile = config.profile
+        if profile.kv_cache_scale != "default":
+            raise ValueError(
+                "checkpoint KV scales require the Phase 3 quantized checkpoint; "
+                "vLLM 0.29 has no independent --kv-cache-scale flag"
+            )
         command = [
             "vllm",
             "serve",
@@ -211,18 +215,20 @@ class ServeProfile:
             "--max-model-len",
             str(config.max_model_len),
             "--dtype",
-            config.dtype,
+            profile.dtype,
+            "--kv-cache-dtype",
+            profile.kv_cache_dtype,
             "--reasoning-parser",
             config.reasoning_parser,
             "--enable-auto-tool-choice",
             "--tool-call-parser",
             config.tool_call_parser,
             "--max-num-seqs",
-            str(config.max_num_seqs),
+            str(profile.max_num_seqs),
             "--max-num-batched-tokens",
-            str(config.max_num_batched_tokens),
+            str(profile.max_num_batched_tokens),
             "--gpu-memory-utilization",
-            str(config.gpu_memory_utilization),
+            str(profile.gpu_memory_utilization),
         ]
         command.append(
             "--enable-prefix-caching"
@@ -236,8 +242,17 @@ class ServeProfile:
         )
         if config.model_revision:
             command.extend(["--revision", config.model_revision])
-        if config.quantization:
-            command.extend(["--quantization", config.quantization])
+        if profile.max_num_queued_reqs is not None:
+            command.extend(
+                [
+                    "--max-num-queued-reqs",
+                    str(profile.max_num_queued_reqs),
+                    "--max-num-queued-tokens",
+                    str(profile.max_num_queued_tokens),
+                ]
+            )
+        if profile.quantization:
+            command.extend(["--quantization", profile.quantization])
         if config.speculative_num_tokens is not None:
             command.extend(
                 [

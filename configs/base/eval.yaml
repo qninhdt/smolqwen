@@ -2,9 +2,6 @@
 # here that appears in the manifest's INVARIANT set must be identical across the
 # Base, SFT and SFT+RL runs, or assert_comparable refuses to put them in one table.
 
-adapters:
-  - bfcl_multi_turn
-
 # BFCL categories for the direct runner (`smolqwen evaluate`). Overridable with
 # `--categories simple_python,parallel,...`. The adapter path (in-training
 # bench_eval) reads its own categories from adapter_options below.
@@ -21,9 +18,6 @@ adapter_options:
       - multi_turn_base
     data_dir: third_party/gorilla/berkeley-function-call-leaderboard/bfcl_eval/data
     benchmark_commit: 6ea57973c7a6097fd7c5915698c54c17c5b1b6c8
-http_model: smolqwen
-http_timeout_s: 60.0
-
 max_steps_per_task: 64
 
 decoding:

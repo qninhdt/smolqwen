@@ -113,7 +113,7 @@ def make_runner(
     tokenizer = OfflineTokenizer(token_size=1)
     version_log = versions if versions is not None else []
     return BenchEvalRunner(
-        eval_config=EvalConfig(adapters=("fixture",), max_steps_per_task=6),
+        eval_config=EvalConfig(max_steps_per_task=6),
         bench_config=bench or BenchEvalConfig(enabled=True, task_limit=4),
         engine_source=lambda: scripted_backend(tokenizer),
         tokenizer_source=lambda: tokenizer,

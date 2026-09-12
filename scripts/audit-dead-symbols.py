@@ -37,7 +37,7 @@ PACKAGE = REPO_ROOT / "src" / "smolqwen"
 # intends to delete would otherwise keep that symbol alive forever.
 SURFACE_SUFFIXES = frozenset({".py", ".yaml", ".yml", ".md", ".ipynb", ".toml", ".json", ".sh"})
 SURFACE_NAMES = frozenset({"Makefile", "Dockerfile", "docker-compose.yml"})
-EXCLUDED_PREFIXES = ("plans/", "third_party/")
+EXCLUDED_PREFIXES = ("artifacts/", "plans/", "third_party/")
 
 # Invoked by protocol rather than by name from this repo, so a reference count is
 # the wrong question -- the answer is always zero and the symbol is always live.
@@ -73,6 +73,7 @@ FRAMEWORK_INVOKED = frozenset(
         "create_optimizer",
         "create_scheduler",
         "model_config",
+        "validate_runtime_pairings",
         "MemoryWorkerExtension",
         "ADAPTER_NAME",
         "ADAPTER_ROLE",

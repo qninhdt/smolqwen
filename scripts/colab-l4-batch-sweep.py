@@ -28,16 +28,12 @@ import json
 import re
 import shutil
 import subprocess
+import sys
 import tarfile
 import time
 import traceback
 from pathlib import Path
 from typing import Any
-
-try:
-    from colab_logging import run_streaming
-except ModuleNotFoundError:  # imported from the repository root in tests
-    from scripts.colab_logging import run_streaming
 
 ROOT = Path("/content/smolqwen")
 ARCHIVE = Path("/content/smolqwen-l4-batch-src.tgz")
@@ -69,6 +65,18 @@ GRPO_TRAIN_ENVELOPES = {
 }
 
 PROBE_MARKER = "PROBE_RESULT="
+run_streaming: Any
+
+
+def _load_logging() -> None:
+    """Load the helper after ``_prepare`` has unpacked the source tree."""
+    global run_streaming
+    try:
+        from colab_logging import run_streaming as stream
+    except ModuleNotFoundError:  # imported from the repository root in tests
+        sys.path.insert(0, str(ROOT / "scripts"))
+        from colab_logging import run_streaming as stream
+    run_streaming = stream
 
 
 def _device_info(torch: Any) -> dict[str, Any]:
@@ -768,6 +776,7 @@ def main() -> int:
             parser.error("--child requires --phase and --batch")
         return 0 if _child_base(args.phase, args.batch).get("status") in {"passed", "oom"} else 2
     _prepare()
+    _load_logging()
     install = run_streaming(
         ["uv", "sync", "--locked", "--no-dev", "--extra", "colab"],
         name="install colab dependencies",

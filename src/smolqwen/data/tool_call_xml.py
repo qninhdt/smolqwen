@@ -50,9 +50,7 @@ def _render_argument(value: Any) -> str:
     return str(value)
 
 
-def parse_tool_calls(
-    text: str, *, tools: Sequence[Mapping[str, Any]] = ()
-) -> list[ToolCall]:
+def parse_tool_calls(text: str, *, tools: Sequence[Mapping[str, Any]] = ()) -> list[ToolCall]:
     """Parse zero or more `<tool_call>...</tool_call>` blocks from `text`.
 
     The model may concatenate several tool calls in one turn; the tour loop emits

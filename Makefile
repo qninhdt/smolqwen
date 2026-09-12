@@ -31,11 +31,15 @@ fmt:
 # thirty minutes into a run.
 smoke:
 	uv run smolqwen prepare-sft --dry-run > /dev/null
-	@for stage in train-sft evaluate serve build-workload; do \
+	@for stage in train-sft evaluate; do \
 		for profile in t4 l4 a100; do \
 			uv run smolqwen $$stage --profile $$profile --dry-run > /dev/null \
 				|| exit 1; \
 		done; \
+	done
+	@for profile in latency balanced throughput; do \
+		uv run smolqwen serve --profile $$profile --dry-run > /dev/null \
+			|| exit 1; \
 	done
 	uv run smolqwen probe --no-write > /dev/null
 	@echo "smoke ok"

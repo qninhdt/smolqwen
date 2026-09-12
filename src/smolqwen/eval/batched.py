@@ -23,13 +23,11 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
 from typing import Any
 
 from smolqwen.config_models import EvalConfig
-from smolqwen.console import logger, phase, progress_task
+from smolqwen.console import logger, progress_task
 from smolqwen.eval.adapters.base import AdapterResult, BenchmarkAdapter, EvalTask
-from smolqwen.eval.checkpoints import ResolvedCheckpoint
 from smolqwen.eval.driver import AdapterDriver, TaskBinding
 from smolqwen.eval.metrics import TaskMetrics
 from smolqwen.eval.trajectories import TrajectoryRecord
@@ -39,47 +37,6 @@ from smolqwen.inference.profiles import EvalProfile
 from smolqwen.inference.turn_engine import TurnEngine, TurnEngineConfig
 
 LOG = logger(__name__)
-
-# The adapter name the engine registers a PEFT directory under. One slot, because
-# `evaluate` scores one checkpoint per invocation.
-ADAPTER_SLOT = "eval-adapter"
-
-
-@dataclass(frozen=True)
-class Generation:
-    """The generation backend selected for this evaluation run."""
-
-    backend: Any | None
-    path: str
-    engine: Any | None = None
-
-    def shutdown(self) -> None:
-        if self.engine is not None:
-            self.engine.shutdown()
-
-
-def generation_for(config: EvalConfig, resolved: ResolvedCheckpoint) -> Generation:
-    """Use HTTP for a served endpoint and require in-process vLLM otherwise."""
-    if resolved.source == "endpoint" or resolved.path is None:
-        return Generation(backend=None, path="http")
-
-    from smolqwen.inference.engine import OfflineEngineBackend, offline_engine_for_eval
-
-    adapters = {ADAPTER_SLOT: resolved.adapter_path} if resolved.adapter_path else None
-    with phase(f"evaluate: build vLLM engine ({resolved.path})"):
-        engine = offline_engine_for_eval(
-            resolved.path,
-            EvalProfile.from_config(config),
-            revision=resolved.revision,
-            adapter=adapters,
-        )
-    path = "vllm+lora" if adapters else "vllm"
-    LOG.info("generating through in-process vLLM (%s), dtype %s", path, engine.profile.dtype)
-    return Generation(
-        backend=OfflineEngineBackend(engine, adapter=ADAPTER_SLOT if adapters else None),
-        path=path,
-        engine=engine,
-    )
 
 
 def pool_capacity_of(adapter: BenchmarkAdapter) -> int | None:

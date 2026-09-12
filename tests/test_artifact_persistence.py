@@ -1,19 +1,4 @@
-"""What survives VM loss, and what must never leave the machine in a report.
-
-`artifacts.py:1-5` states the premise -- "Colab VMs are reclaimed without warning,
-so an adapter that only exists locally does not exist" -- and applies it to
-checkpoint artifacts.
-
-Two properties are asserted here, and the second is the one with teeth:
-
-- Each producing command logs its artifact, and every path still works with no
-  `WANDB_API_KEY` and no `HF_TOKEN` -- the degradation `tracking.py:1-8` promises.
-- **No artifact contains a routable ingress or any userinfo.** The Colab serving
-  path is a public `trycloudflare.com` hostname (`scripts/run_colab_serve.sh:53`),
-  so a report recording it verbatim publishes a route to a GPU box the moment the
-  report is uploaded. `test_auth_all_paths.py:78-79` enforces the same posture for
-  the API key.
-"""
+"""Artifact persistence and endpoint-redaction contracts."""
 
 from __future__ import annotations
 

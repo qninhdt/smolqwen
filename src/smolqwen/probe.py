@@ -23,8 +23,8 @@ LOG = logger(__name__)
 KERNEL_LIBRARIES = ("flash_attn", "causal_conv1d", "fla", "liger_kernel")
 PACKAGES = ("torch", "transformers", "trl", "peft", "datasets", "accelerate", "vllm")
 
-# FP8 is native from sm89 (L4, H100). sm80 (A100) has no FP8 path, which is why
-# the two serving profiles differ in quantization strategy rather than batch size.
+# FP8 is native from sm89 (L4, H100). sm80 (A100) has no FP8 path; the serving
+# operating profiles are still selected independently on the target L4.
 FP8_MIN_CAPABILITY = (8, 9)
 
 
